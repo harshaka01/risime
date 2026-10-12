@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.38"
+const val PROTOCOL_VERSION = "1.39"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -44,6 +44,8 @@ data class User(
     @SerialName("vouched_by") val vouchedBy: VouchedBy? = null,
     /** §21.4 (v1.20): false while the phone was self-asserted at open sign-up and isn't SMS-verified; absent = true. */
     @SerialName("phone_confirmed") val phoneConfirmed: Boolean = true,
+    /** §36.1 (v1.39): true only for the users in the server's `RISI_DEV_USERS`; absent = false. */
+    @SerialName("risi_dev") val risiDev: Boolean = false,
 )
 
 /** §21.3 (v1.20) `POST /auth/signup`. */
@@ -325,7 +327,12 @@ data class Signal(val kind: String, val data: JsonObject) {
     fun callRisi(): CallRisiSignal? =
         if (kind == KIND_CALL_RISI) runCatching { ProtocolJson.decodeFromJsonElement<CallRisiSignal>(data) }.getOrNull() else null
 
+    /** §36.3 (v1.39) the call-transcription session on every transition (ephemeral). */
+    fun callTranscribe(): CallTranscribeSession? =
+        if (kind == KIND_CALL_TRANSCRIBE) runCatching { ProtocolJson.decodeFromJsonElement<CallTranscribeSession>(data) }.getOrNull() else null
+
     companion object {
+        const val KIND_CALL_TRANSCRIBE = "call_transcribe"
         const val KIND_CALL_RISI = "call_risi"
         const val KIND_PRESENCE = "presence"
         const val KIND_TYPING = "typing"
@@ -368,7 +375,12 @@ data class AuthConfig(
     @SerialName("risi_notes") val risiNotes: String? = null,
     /** §31.1 (v1.31): "on" while `RISI_GCAL` and `RISI_EVENTS` are on; absent = off. */
     @SerialName("google_calendar") val googleCalendar: String? = null,
+    /** §36.1 (v1.39): the call-transcription fast path; "on" | "off"; absent = off (the kill switch). */
+    @SerialName("call_transcribe") val callTranscribe: String? = null,
 ) {
+    /** §36.1: the server takes `call:transcribe` pushes and chunk uploads; only then the app advertises `call_transcribe`. */
+    val callTranscribeOn: Boolean get() = callTranscribe == "on"
+
     /** §31.1: the Google Calendar link on the server; only then does the app advertise `google_calendar` (with `risi_events`). */
     val googleCalendarOn: Boolean get() = googleCalendar == "on"
 
@@ -712,6 +724,9 @@ data class DeviceMls(
 
         /** v1.35 §34 Phase 2: `confirm_update`, the native `clarify` card and Risi's items (only with `risi_tools`). */
         const val CAP_RISI_ITEMS = CAPABILITY_RISI_ITEMS
+
+        /** v1.39 §36.1: the call-transcription fast path (with `calls`), only while `/auth/config` says `call_transcribe: on`. */
+        const val CAP_CALL_TRANSCRIBE = CAPABILITY_CALL_TRANSCRIBE
     }
 }
 

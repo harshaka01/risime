@@ -305,7 +305,64 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + mapOf(
+    /** v1.39 §36 the call-transcription fast path (net/Protocol139.kt). */
+    private val transcribeV139: Map<String, (String) -> Any> by lazy {
+        fun push(s: String, action: String) = ProtocolJson.parseToJsonElement(s).jsonObject.let { o ->
+            CallTranscribePush.parse(o)!!.also { require(it.action == action && it.conversationId.startsWith("grp:") && it.toJson() == o) { "re-encodes exactly" } }
+        }
+        mapOf(
+            "auth_config_v139.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.callTranscribeOn) } },
+            "device_put_call_transcribe.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(CAPABILITY_CALL_TRANSCRIBE in it.mls!!.capabilities!!) } },
+            "call_offer_official_payload.json" to { s ->
+                (callEnv(s) as ai.risicloud.risime.calls.CallEnvelope.Offer).also {
+                    require(it.official && it.tab == CALL_TAB_OFFICIAL)
+                    require(ai.risicloud.risime.calls.CallEnvelope.toJson(it) == ProtocolJson.parseToJsonElement(s)) // re-encodes exactly
+                }
+            },
+            "call_transcribe_request.json" to { s -> push(s, CallTranscribeActions.REQUEST).also { require(it.sessionId == null) } },
+            "call_transcribe_allow.json" to { s -> push(s, CallTranscribeActions.ALLOW).also { require(it.sessionId != null) } },
+            "call_transcribe_decline.json" to { s -> push(s, CallTranscribeActions.DECLINE).also { require(it.reason == null) } },
+            "call_transcribe_stop.json" to { s -> push(s, CallTranscribeActions.STOP).also { require(it.reason == CallTranscribeStates.REASON_STOPPED && !it.discard) } },
+            "call_transcribe_reply.json" to { s ->
+                ProtocolJson.decodeFromString<CallTranscribeReply>(s).session!!.also {
+                    require(it.state == CallTranscribeStates.REQUESTED && it.expiresAt != null && it.consentOf(it.requestedBy!!) == CallTranscribeConsent.ALLOWED && it.participants.count { p -> p.consent == CallTranscribeConsent.PENDING } == 1)
+                    require(it.chunk.maxBytes == 262144 && it.chunk.minMs == 5000 && it.chunk.maxMs == 20000 && !it.final)
+                }
+            },
+            "signal_call_transcribe.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).callTranscribe()!!.also { require(it.state == CallTranscribeStates.ON && it.startedAt != null && it.participants.all { p -> p.consent == CallTranscribeConsent.ALLOWED }) } },
+            "call_transcribe_chunk_reply.json" to { s -> ProtocolJson.decodeFromString<CallTranscribeChunkReply>(s).also { require(it.seq == 3 && it.accepted && !it.duplicate) } },
+            "error_not_consented.json" to { s -> apiError(s, CallTranscribeErrors.NOT_CONSENTED) },
+            "error_not_official.json" to { s -> apiError(s, CallTranscribeErrors.NOT_OFFICIAL) },
+            "error_transcribe_off.json" to { s -> apiError(s, CallTranscribeErrors.TRANSCRIBE_OFF) },
+            "envelope_risi_call_transcript.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds139.CALL_TRANSCRIPT) }
+                RisiTranscriptKinds.transcript(s)!!.also { require(it.turn == 1 && it.speaker != null && it.language == "en" && it.text.isNotEmpty() && it.start != null && it.model == it.madeBy!!.model) }
+            },
+            "envelope_risi_call_transcript_compare.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == RisiKinds139.CALL_TRANSCRIPT_COMPARE) }
+                RisiTranscriptKinds.compare(s)!!.also {
+                    require(it.seq == 4 && it.results.size == 3 && it.ordered.first().model == it.chosen && it.results[1].error == "timeout" && it.results[1].text == null && it.languageDetected == "si")
+                }
+            },
+            "envelope_risi_call_transcribe_on.json" to { s ->
+                RisiTranscriptKinds.consentLine(s)!!.also { require(it.state == CallTranscribeStates.ON && it.consents.size == 2 && it.by == null && it.startedAt != null && !it.discard) }
+            },
+            "envelope_risi_call_transcribe_stopped.json" to { s ->
+                RisiTranscriptKinds.consentLine(s)!!.also { require(it.state == CallTranscribeStates.STOPPED && it.by != null && it.reason == "stopped" && it.endedAt != null) }
+            },
+            "envelope_risi_discussion_card_transcribed.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also {
+                    require(it.kind == RisiKinds127.DISCUSSION_CARD && it.lang == "en" && it.source == "call" && it.madeBy!!.also.all { a -> a.task == RisiMadeByAlso.TASK_TRANSCRIBE })
+                    require(RisiTranscriptKinds.transcript(s) == null && RisiTranscriptKinds.consentLine(s) == null)
+                }
+            },
+            "me_reply_risi_dev.json" to { s -> ProtocolJson.decodeFromString<MeReply>(s).also { require(it.user.risiDev) } },
+            "me_risi_dev_put.json" to { s -> ProtocolJson.decodeFromString<RisiDevSettings>(s).also { require(it.transcribeCompare && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) } },
+            "me_risi_dev_reply.json" to { s -> ProtocolJson.decodeFromString<RisiDevSettings>(s).also { require(it.transcribeCompare) } },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

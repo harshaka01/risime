@@ -208,6 +208,8 @@ data class RisiMeta(
     @SerialName("by_request_id") val byRequestId: String? = null,
     /** v1.35 §34.5 `answer.clarify`: the name question (Phase 2 renders it natively; a tap sends the matching `ask`). */
     val clarify: RisiNameClarify? = null,
+    /** v1.39 §36.7: the reader-language hint of a transcribed `discussion_summary` / `discussion_card` ("si" | "ta" | "en"); no rendering rule. */
+    val lang: String? = null,
 ) {
     /** The §27 summary this row belongs to: `summary_id`, else a note's `note_id` (§30.3: the same id). */
     val summaryKey: String? get() = summaryId ?: noteId

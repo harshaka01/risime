@@ -117,8 +117,11 @@ object CallEnvelope {
         val features: List<String> = emptyList(),
         /** §23.3 the caller's one re-offer that adds `m=video` to a voice session. */
         val renegotiate: Boolean = false,
+        /** v1.39 §36.1: `"official"` on a call placed from a 1:1's Official tab (first offer only); null = Private. */
+        val tab: String? = null,
     ) : Env {
         override val type get() = OFFER
+        val official: Boolean get() = tab == ai.risicloud.risime.net.CALL_TAB_OFFICIAL
     }
 
     /** §20.3 a group call's ring: no SDP (the media goes through LiveKit), sent by the starter once it is in the room. */
@@ -209,6 +212,7 @@ object CallEnvelope {
                 if (env.restart || env.renegotiate) put("to_device", env.toDevice)
                 if (env.features.isNotEmpty() && !env.restart && !env.renegotiate) put("features", buildJsonArray { env.features.forEach { add(JsonPrimitive(it)) } })
                 put("sent_at", env.sentAt)
+                if (env.tab != null && !env.restart && !env.renegotiate) put("tab", env.tab)
             }
             is SfuOffer -> {
                 put("mode", MODE_SFU)
@@ -337,7 +341,8 @@ object CallEnvelope {
                 val twoLines = media == MEDIA_VIDEO || renegotiate || (restart && SdpRules.mLineCount(sdp) == 2)
                 SdpRules.validate(sdp, SdpRules.Role.OFFER, video = twoLines)?.let { return drop("sdp: $it") }
                 val feats = features() ?: return drop("features")
-                Offer(callId, sdp, sentAt, restart, if (restart || renegotiate) to else null, media!!, feats, renegotiate)
+                // v1.39 §36.1: the optional `tab` (anything but a short string is ignored = Private).
+                Offer(callId, sdp, sentAt, restart, if (restart || renegotiate) to else null, media!!, feats, renegotiate, str("tab")?.takeIf { it.length <= 32 })
             }
             RINGING -> Ringing(callId)
             ANSWER -> {
