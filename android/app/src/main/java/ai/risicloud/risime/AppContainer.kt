@@ -934,6 +934,16 @@ class AppContainer(
                 is ApiResult.NetworkError -> r
             }
     }
+    /**
+     * Debug builds only (device gate scripts/e2ee-clarity-test): this phone delays adding a new device to a 1:1 by the
+     * milliseconds in files/debug-dm-add-delay-ms (the window in which a message must wait for encryption). Release: 0,
+     * the branch and the file name are compiled out (checkNoGcalSeamInRelease rejects the name).
+     */
+    private fun debugDmAddDelayMs(conversationId: String): Long {
+        if (!BuildConfig.DEBUG || !conversationId.startsWith("dm:")) return 0L
+        return runCatching { java.io.File(appContext.filesDir, "debug-dm-add-delay-ms").readText().trim().toLong() }.getOrDefault(0L).coerceIn(0L, 120_000L)
+    }
+
     /** §10.3 `mls_membership` seen (any conversation): open chats that aren't E2EE re-check readiness (P0-1). */
     val mlsMembershipSeen = kotlinx.coroutines.flow.MutableSharedFlow<ai.risicloud.risime.net.MlsMembershipEvent>(extraBufferCapacity = 16)
     /** One own MLS commit per conversation at a time across the group outbox and the DM executors (no staged commit outlives its attempt). */
@@ -946,12 +956,14 @@ class AppContainer(
             deviceId = { runCatching { sessionStore.deviceId() }.getOrNull() },
             onMembership = { a ->
                 mlsMembershipSeen.tryEmit(a.event)
+                // Item 3: a new device of this DM: hold new messages until it is in the group (it couldn't read them).
+                engine.onMembershipAnnounced(a.event.conversationId, a.event.deviceId, a.event.change)
                 // §17.8: a device that left my device set loses its history approval.
                 if (a.event.change == "removed" && BuildConfig.HISTORY_SHARE_ENABLED) scope.launch(Dispatchers.IO) {
                     if (a.event.userId.equals(sessionStore.current()?.user?.id, true)) runCatching { history.onOwnDeviceRemoved(a.event.deviceId) }
                 }
                 scope.launch {
-                    delay(a.delayMs)
+                    delay(a.delayMs + debugDmAddDelayMs(a.event.conversationId))
                     val r = membershipExecutor.execute(a)
                     Log.i("RisiMe", "mls_membership ${a.event.change}: $r")
                 }
@@ -959,6 +971,7 @@ class AppContainer(
             onDmOp = { o ->
                 // v1.16: named to re-add a DM member's device (after this event's transaction).
                 scope.launch(Dispatchers.IO) {
+                    delay(debugDmAddDelayMs(o.conversationId))
                     val r = runCatching { membershipExecutor.executeOp(o) }.getOrElse { MembershipOutcome.Failed(it.message ?: "error") }
                     Log.i("RisiMe", "mls_dm_op: $r")
                 }
@@ -1955,6 +1968,8 @@ class AppContainer(
         onRisiCalendarChanged = { cursor -> syncRisiCalendar(cursor) },
         // §31.3: content-free for the server's purposes; the Settings section refreshes (a no-op unless this device advertises google_calendar).
         onGoogleCalendarLink = { d -> onGoogleCalendarLink(d) },
+        // Chat-list clarity item 3: while MLS applies to this app, a 1:1 message never goes in plaintext on its own.
+        plaintextHold = { runCatching { mlsCore.coreExpected() }.getOrDefault(false) },
     )
 
 
@@ -2067,6 +2082,11 @@ class AppContainer(
             scope.launch {
                 @OptIn(kotlinx.coroutines.FlowPreview::class)
                 mlsChanged.debounce(1_500).collect { runCatching { profilePhotos.reconcile() }.onFailure { Log.w("RisiMe", "photos: ${it.message}") } }
+            }
+            // Chat-list clarity item 3: a Welcome or commit (a new chat's group, a peer's new phone added) sends what waited for it.
+            scope.launch {
+                @OptIn(kotlinx.coroutines.FlowPreview::class)
+                mlsChanged.debounce(500).collect { runCatching { engine.flushOutbox() } }
             }
             scope.launch {
                 realtime.state.collect { st ->

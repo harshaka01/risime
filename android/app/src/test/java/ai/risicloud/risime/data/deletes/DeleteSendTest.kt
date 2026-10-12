@@ -130,6 +130,8 @@ class DeleteSendTest {
 
     @Test fun pendingNeverPushedIsCancelledPushedIsDeletedAfterSending() = runTest {
         val e = engine()
+        mls.groups[dm] = GroupRef(dm, 1, 1) // an e2ee DM (chat-list clarity: a DM never goes in plaintext on its own)
+        realtime.encryptedReplies = { m -> PushResult.Ok(ai.risicloud.risime.net.MsgSendReply(tu(base, 7), dm, iso(base))) }
         messages.insert(MessageEntity("p0", null, dm, me, bob, "never pushed", null, base, "PENDING", true))
         messages.insert(MessageEntity("p1", null, dm, me, bob, "reply lost", null, base + 1, "PENDING", true, sendAttempts = 1))
         realtime.connected = false
@@ -141,14 +143,15 @@ class DeleteSendTest {
         realtime.connected = true
         e.flushOutbox()
         advanceUntilIdle()
-        assertEquals(listOf("p1"), realtime.sent.map { it.clientMsgId })
-        assertEquals(listOf("mid-p1"), realtime.sentDeletes.single().targets)
+        assertEquals(listOf("p1"), realtime.sentEncrypted.map { it.clientMsgId })
+        assertEquals(listOf(tu(base, 7)), realtime.sentDeletes.single().targets)
         assertTrue(messages.rows["p1"]!!.deleted)
     }
 
     @Test fun sendAttemptsAreCountedBeforeEveryPush() = runTest {
         val e = engine()
-        realtime.sendReplies = { PushResult.Unavailable }
+        mls.groups[dm] = GroupRef(dm, 1, 1)
+        realtime.encryptedReplies = { PushResult.Unavailable }
         e.sendText(bob, "hi")
         advanceUntilIdle()
         assertEquals(1, messages.rows.values.single().sendAttempts)

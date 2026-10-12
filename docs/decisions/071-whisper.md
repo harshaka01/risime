@@ -262,3 +262,34 @@ Logs carry metrics only (model, route reason, language, seconds).
 `qwen3_asr.py`). Rollback: set `image:` back to `risime/whisper:ct2-4.8.2-fw-1.2.1` (still on
 disk) with the old `server.py`, or keep the new image with `WHISPER_COMPUTE_TYPE=float16` and
 `CT2_CUDA_ALLOCATOR=cub_caching` in `.env` to restore the old numbers.
+
+## Amendment 2026-10-12 (b): force Sinhala script (Harsha, PROTOCOL v1.40)
+Whisper decoders sometimes answer Sinhala speech in Latin letters (romanised) or in another script.
+- **Prompt + language:** a chunk routed to `si` (detected with p ≥ 0.5, or `language=si`) runs
+  with `language=si` and a short neutral Sinhala-script initial prompt (`WHISPER_SI_PROMPT`,
+  default "මෙය සිංහල කතාබහකි." = "This is a Sinhala conversation."). A caller's own `prompt`
+  replaces it. An explicitly named model with `language=si` gets the same prompt and check, but
+  is never swapped.
+- **Check:** `romanised` = the text has letters but no character in U+0D80–U+0DFF (so Tamil or
+  Bengali script counts too); `script: {expected: "sinh", sinhala_chars, latin_chars, ok}` with
+  `ok = !romanised` (no letters is ok; code-mixed Sinhala with English words is ok).
+- **One retry** (`model=auto` only): the first of `SI_RETRY_ORDER` = `whisper-large-v3-sinhala`,
+  `whisper-small-sinhala` that is not the model that just ran, is served and fits memory
+  (`NoMemory` → the next). So small → large-v3-sinhala (int8, ~2.2 GB, unloaded right after);
+  large-v3-sinhala → small; large-v3 (memory fallback) → large-v3-sinhala, else small. When
+  large-v3-sinhala doesn't fit after small, there is no other Sinhala model: no retry, reported
+  `romanised: true`. The retry's answer replaces the first unless it is empty. `verbose_json` adds
+  `script`, `script_ok`, `romanised` (of the final text), `retried_with` and `first_model`; `json`
+  is unchanged.
+- **Compare:** when the chunk is `si`, every model runs with `language=si` and the prompt (no
+  retry: compare shows each model as it is) and each result gains `script` and `romanised`.
+- **Smoke** (`scripts/asr-smoke`): the si clip through `auto` must be Sinhala script (39 Sinhala /
+  0 Latin chars, no retry); compare on it fails if a Sinhala-tuned model is romanised; the retry
+  order is exercised in the container with a fake runner whose first output is forced Latin (no
+  live test hook exists in the service).
+- Measured on the si clip (compare, all with `language=si` + prompt): large-v3-sinhala CER 0 %,
+  small 3 %, large-v3 now in Sinhala script (was the wrong script) but CER 90 %, turbo Sinhala
+  script but garbage (CER 179 %), tamil-asr-qwen3 Tamil script (`romanised: true`).
+- Image `risime/whisper:ct2-4.8.2-fw-1.2.1-asr3` (only `server.py` changed). Rollback: `image:`
+  back to `…-asr2` (kept on disk) with the previous `server.py`; the app server treats the new
+  fields as optional.

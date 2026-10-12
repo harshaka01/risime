@@ -106,7 +106,7 @@ interface MessageDao {
     suspend fun lastInConversation(conversationId: String): MessageEntity?
 
     @Query(
-        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind, deleted_by, deleted_by_admin, delete_state, CASE WHEN kind = 'file' THEN system_json ELSE NULL END AS system_json FROM messages m " +
+        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind, deleted_by, deleted_by_admin, delete_state, CASE WHEN kind = 'file' THEN system_json ELSE NULL END AS system_json, e2ee, from_device FROM messages m " +
             "WHERE local_ts = (SELECT MAX(local_ts) FROM messages WHERE conversation_id = m.conversation_id) " +
             "GROUP BY conversation_id",
     )
@@ -122,6 +122,14 @@ interface MessageDao {
     /** Push: unread incoming messages (notifications are built from these, never from the payload). */
     @Query("SELECT * FROM messages WHERE outgoing = 0 AND status != 'READ' ORDER BY local_ts ASC")
     suspend fun unreadIncoming(): List<MessageEntity>
+
+    /** v17: how a message travelled (or the user's explicit "Send without encryption"). */
+    @Query("UPDATE messages SET e2ee = :e2ee WHERE client_msg_id = :clientMsgId")
+    suspend fun setE2ee(clientMsgId: String, e2ee: String?)
+
+    /** v17 "Send without encryption" on my unsent message: allowed for this one row, back into the outbox. */
+    @Query("UPDATE messages SET e2ee = 'plain_ok', status = 'PENDING', fail_reason = NULL WHERE client_msg_id = :clientMsgId AND outgoing = 1 AND status IN ('PENDING', 'FAILED') AND message_id IS NULL")
+    suspend fun allowPlaintext(clientMsgId: String): Int
 
     /** FAILED → PENDING (local only; the outbox resends with the same client_msg_id). */
     @Query("UPDATE messages SET status = 'PENDING', fail_reason = NULL WHERE client_msg_id = :clientMsgId AND status = 'FAILED'")

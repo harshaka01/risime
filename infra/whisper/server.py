@@ -15,6 +15,15 @@ large-v3) is loaded at start and never unloaded.
        runs every candidate sequentially (one model resident at a time beyond the pool) and
        returns model, text, language, processing_s for each
 
+Sinhala script (amendment 2026-10-12, PROTOCOL v1.40): a chunk routed to si (detected, or
+language=si) runs with language=si and a short Sinhala-script initial prompt (WHISPER_SI_PROMPT).
+If the text has letters but no Sinhala character (U+0D80-U+0DFF), it is retried once with another
+Sinhala-tuned model, in SI_RETRY_ORDER (whisper-large-v3-sinhala, else whisper-small-sinhala when
+the first was large-v3-sinhala or large-v3 does not fit memory); verbose_json then carries
+script {expected, sinhala_chars, latin_chars, ok}, script_ok, romanised (the final text) and
+retried_with. Compare runs every model with language=si and the prompt when the chunk is si and
+adds script + romanised per result.
+
 Privacy: audio is decoded in memory (never written to disk), no transcript text or prompt is
 logged, the access log is off. Runs offline with local model directories.
 """
@@ -28,6 +37,7 @@ import logging
 import os
 import threading
 import time
+import unicodedata
 
 import numpy as np
 import uvicorn
@@ -54,6 +64,12 @@ ROUTE = {"si": "whisper-small-sinhala", "ta": "tamil-asr-qwen3", "en": DEFAULT}
 ROUTE_LANGS = tuple(ROUTE)
 # Below this (renormalised over si/ta/en) the chunk goes to the default model, which detects itself.
 MIN_ROUTE_P = float(os.environ.get("WHISPER_ROUTE_MIN_P", "0.5"))
+# Short, neutral Sinhala sentence ("This is a Sinhala conversation."): steers Whisper decoders to
+# Sinhala script instead of a romanised (Latin) transcript. Not logged.
+SI_PROMPT = os.environ.get("WHISPER_SI_PROMPT", "මෙය සිංහල කතාබහකි.")
+# Retry order for a romanised Sinhala result: the first entry that is not the model that just ran,
+# is served, and fits memory (NoMemory -> the next one). One retry at most.
+SI_RETRY_ORDER = ("whisper-large-v3-sinhala", "whisper-small-sinhala")
 
 # name -> spec. est_mb: measured resident memory (GPU unified + host MemAvailable drop, with
 # CT2_CUDA_ALLOCATOR=cuda_malloc_async), see decision 071. idle_s: unload after this long unused
@@ -330,6 +346,57 @@ def run(name, audio, language=None, prompt=None, temperature=0.0, vad_filter=Tru
     return out
 
 
+def script_check(text):
+    """Sinhala-script check of a transcript. Returns (script dict, romanised). romanised: the text
+    has letters but no Sinhala character (U+0D80-U+0DFF); ok is its negation (no letters is ok)."""
+    sinhala = latin = letters = 0
+    for c in text or "":
+        if "\u0d80" <= c <= "\u0dff":
+            sinhala += 1
+        elif c.isalpha():
+            letters += 1
+            if c.isascii() or unicodedata.name(c, "").startswith("LATIN"):
+                latin += 1
+    romanised = sinhala == 0 and letters > 0
+    return ({"expected": "sinh", "sinhala_chars": sinhala, "latin_chars": latin,
+             "ok": not romanised}, romanised)
+
+
+def run_si(name, audio, prompt=None, temperature=0.0, vad_filter=True, runner=None):
+    """A Sinhala chunk on `name` with language=si and the Sinhala prompt; one retry on another
+    Sinhala model when the text comes back romanised. `runner` is for tests (defaults to run)."""
+    runner = runner or run
+    p = prompt or SI_PROMPT
+    res = runner(name, audio, language="si", prompt=p, temperature=temperature,
+                 vad_filter=vad_filter)
+    script, romanised = script_check(res["text"])
+    if romanised:
+        for alt in SI_RETRY_ORDER:
+            if alt == name or alt not in SPECS:
+                continue
+            try:
+                res2 = runner(alt, audio, language="si", prompt=p, temperature=temperature,
+                              vad_filter=vad_filter, unload_after=SPECS[alt]["role"] == "compare")
+            except NoMemory:
+                continue
+            except Exception:  # a failed retry keeps the first answer
+                log.exception("sinhala retry on %s failed", alt)
+                res["retried_with"] = alt
+                break
+            script2, romanised2 = script_check(res2["text"])
+            if res2["text"].strip() or not res["text"].strip():
+                res2.update(first_model=name, processing_s=round(res["processing_s"] +
+                                                                 res2["processing_s"], 3))
+                res, script, romanised = res2, script2, romanised2
+            res["retried_with"] = alt
+            break
+        log.info("sinhala script: %s romanised, retried_with=%s, still romanised=%s", name,
+                 res.get("retried_with"), romanised)
+    res.update(script=script, script_ok=not romanised, romanised=romanised)
+    res.setdefault("retried_with", None)
+    return res
+
+
 @app.get("/health")
 def health():
     loaded, _ = pool.status()
@@ -395,18 +462,35 @@ def transcriptions(request: Request,
                     else DEFAULT
                 if target not in SPECS:
                     target, routing["fallback"] = DEFAULT, "model_missing"
+                si = lang == "si" and routing["reason"] != "low_confidence"
                 try:
-                    res = run(target, audio, language=lang if target == DEFAULT and
-                              routing["reason"] != "low_confidence" else None,
-                              prompt=prompt, temperature=temperature, vad_filter=vad_filter)
+                    if si:
+                        res = run_si(target, audio, prompt=prompt, temperature=temperature,
+                                     vad_filter=vad_filter)
+                    else:
+                        res = run(target, audio, language=lang if target == DEFAULT and
+                                  routing["reason"] != "low_confidence" else None,
+                                  prompt=prompt, temperature=temperature, vad_filter=vad_filter)
                 except NoMemory:
                     routing["fallback"] = "memory"
-                    res = run(DEFAULT, audio, language=lang, prompt=prompt,
-                              temperature=temperature, vad_filter=vad_filter)
+                    if si:
+                        res = run_si(DEFAULT, audio, prompt=prompt, temperature=temperature,
+                                     vad_filter=vad_filter)
+                    else:
+                        res = run(DEFAULT, audio, language=lang, prompt=prompt,
+                                  temperature=temperature, vad_filter=vad_filter)
         else:
             try:
-                res = run(name, audio, language=language, prompt=prompt,
-                          temperature=temperature, vad_filter=vad_filter)
+                if language == "si" or SPECS[name]["lang"] == "si":
+                    # Prompt + script check; an explicitly named model is never swapped.
+                    res = run(name, audio, language="si", prompt=prompt or SI_PROMPT,
+                              temperature=temperature, vad_filter=vad_filter)
+                    script, romanised = script_check(res["text"])
+                    res.update(script=script, script_ok=not romanised, romanised=romanised,
+                               retried_with=None)
+                else:
+                    res = run(name, audio, language=language, prompt=prompt,
+                              temperature=temperature, vad_filter=vad_filter)
             except NoMemory as e:
                 return err(503, f"not enough memory to load {name}: {e}")
     finally:
@@ -429,6 +513,11 @@ def transcriptions(request: Request,
             "text": res["text"], "model": res["model"], "processing_s": round(total, 3),
             "model_processing_s": res["processing_s"], "load_s": res["load_s"],
             "segments": res["segments"]}
+    if "script" in res:
+        body.update(script=res["script"], script_ok=res["script_ok"], romanised=res["romanised"],
+                    retried_with=res["retried_with"])
+        if "first_model" in res:
+            body["first_model"] = res["first_model"]
     if routing is not None:
         body["routing"] = routing
     return body
@@ -460,14 +549,23 @@ def compare(request: Request,
             det = detect(audio)
             routed = ROUTE.get(det["language"], DEFAULT) if det["probability"] >= MIN_ROUTE_P \
                 else DEFAULT
+            # Sinhala chunk: every model gets language=si and the Sinhala prompt, and each
+            # result its script check (no retry here: compare shows each model as it is).
+            si = language == "si" or (language is None and det["language"] == "si" and
+                                      det["probability"] >= MIN_ROUTE_P)
             results = []
             for n in names:
                 try:
-                    r = run(n, audio, language=language, prompt=prompt,
+                    r = run(n, audio, language="si" if si else language,
+                            prompt=(prompt or SI_PROMPT) if si else prompt,
                             unload_after=SPECS[n]["role"] == "compare")
-                    results.append({"model": n, "text": r["text"], "language": r.get("language"),
-                                    "processing_s": r["processing_s"], "load_s": r["load_s"],
-                                    "routed": n == routed})
+                    item = {"model": n, "text": r["text"], "language": r.get("language"),
+                            "processing_s": r["processing_s"], "load_s": r["load_s"],
+                            "routed": n == routed}
+                    if si:
+                        script, romanised = script_check(r["text"])
+                        item.update(script=script, romanised=romanised)
+                    results.append(item)
                 except NoMemory as e:
                     results.append({"model": n, "error": f"not enough memory: {e}"})
                 except Exception as e:  # one broken candidate must not hide the others

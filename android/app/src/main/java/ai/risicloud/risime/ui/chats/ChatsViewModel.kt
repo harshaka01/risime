@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -46,6 +48,8 @@ data class ChatRow(
     val officialConversationId: String? = null,
     /** §25.2 the user's Risi chat (its conversation, or the "Risi" entry before it exists: [conversationId] null). */
     val risi: Boolean = false,
+    /** Item 1: this phone holds the chat's MLS group (an older last message with no recorded state is shown 🔒). */
+    val e2ee: Boolean = false,
 ) {
     /** Open the chat: friends, and former friends with history (read-only); every group; the Risi chat. */
     val openable: Boolean get() = group || risi || (userId != null && (friend || last != null))
@@ -259,6 +263,13 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
         c.presence.groupTyping,
     ) { groups, members, lasts, unread, typing -> buildGroupRows(meId, groups, members, lasts, unread, typing) }
 
+    /** Item 1: the 1:1 chats this phone holds an MLS group for (read off the main thread, on every list change). */
+    private val e2eeDms = c.db.messages().lastMessages().map { lasts ->
+        val engine = c.mlsEngine ?: return@map emptySet<String>()
+        lasts.map { it.conversationId }.filter { it.startsWith("dm:") }
+            .filter { conv -> runCatching { engine.group(conv) != null }.getOrDefault(false) }.toSet()
+    }.flowOn(kotlinx.coroutines.Dispatchers.IO)
+
     private val allRows: StateFlow<List<ChatRow>> = combine(
         combine(
             c.contacts.contacts,
@@ -275,6 +286,8 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
         combine(c.chatTabs.uiOn, c.risiTools.on) { tabsOn, risiOn -> tabsOn to (tabsOn && risiOn) },
     ) { rows, states, tabs, (pending, pendingRisi), (tabsOn, risiOn) ->
         applyRisiRows(mergeTabRows(hideDeletedChats(rows, states, meId), tabs, pending, meId, tabsOn, pendingRisi), tabs, risiOn, pendingRisi)
+    }.combine(e2eeDms.onStart { emit(emptySet()) }) { rows, dms ->
+        rows.map { r -> r.conversationOf(meId)?.takeIf { it in dms }?.let { r.copy(e2ee = true) } ?: r }
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

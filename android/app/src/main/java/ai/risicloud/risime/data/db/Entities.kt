@@ -66,8 +66,17 @@ data class MessageEntity(
     @ColumnInfo(name = "read_at") val readAt: Long? = null,
     /** v16 (§33.0): the envelope carried the reserved `view_once` key: never selectable, copied, forwarded, quoted, searched. */
     @ColumnInfo(name = "view_once") val viewOnce: Boolean? = null,
+    /**
+     * v17 (decision 048, chat-list clarity): how this message travelled. [E2EE_YES] through MLS, [E2EE_PLAIN] without
+     * end-to-end encryption (bubble and list show "⚠ Not encrypted"), [E2EE_PLAIN_OK] my pending message the user
+     * explicitly allowed to go without encryption ("Send without encryption"); null = a row from before v17 (unknown).
+     */
+    @ColumnInfo(name = "e2ee") val e2ee: String? = null,
 ) {
     val system: Boolean get() = kind == KIND_SYSTEM
+
+    /** Sent or received without end-to-end encryption (shown with ⚠ Not encrypted). */
+    val notEncrypted: Boolean get() = e2ee == E2EE_PLAIN
     val image: Boolean get() = kind == KIND_IMAGE
 
     /** v1.34 §33.13 a `file` message ([systemJson] = [ai.risicloud.risime.data.media.FileMeta]; [body] = the caption). */
@@ -85,6 +94,10 @@ data class MessageEntity(
     val showsAsDeleted: Boolean get() = deleted || deleteState != null
 
     companion object {
+        const val E2EE_YES = "e2ee"
+        const val E2EE_PLAIN = "plain"
+        const val E2EE_PLAIN_OK = "plain_ok"
+
         const val KIND_TEXT = "text"
         const val KIND_SYSTEM = "system"
 
@@ -167,6 +180,10 @@ data class LastMessage(
     @ColumnInfo(name = "delete_state") val deleteState: String? = null,
     /** v1.34 §33.13: a file's name for "📄 <name>". */
     @ColumnInfo(name = "system_json") val systemJson: String? = null,
+    /** v17: [MessageEntity.e2ee] of the last message (the list's 🔒 / ● / ⚠ marker). */
+    @ColumnInfo(name = "e2ee") val e2ee: String? = null,
+    /** v9: the sending device (an incoming row with one came through MLS). */
+    @ColumnInfo(name = "from_device") val fromDevice: String? = null,
 )
 
 /** Chats-list badge: unread incoming messages in one conversation. */

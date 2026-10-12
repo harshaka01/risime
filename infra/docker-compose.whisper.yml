@@ -16,7 +16,7 @@ services:
   whisper:
     build:
       context: whisper
-    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr2
+    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr3
     restart: unless-stopped
     ports:
       - "127.0.0.1:8200:8000"

@@ -130,6 +130,12 @@ class ChatEngine(
     private val onRisiCalendarChanged: ((cursor: String?) -> Unit)? = null,
     /** §31.3 `google_calendar_link` (cursor-ordered, content-light): the Google section refreshes (null = an app without `google_calendar`: skipped, the cursor still advances). Must not block. */
     private val onGoogleCalendarLink: ((ai.risicloud.risime.net.GoogleCalendarLinkData) -> Unit)? = null,
+    /**
+     * Chat-list clarity item 3: true when end-to-end encryption applies to this app even though [mlsEngine] isn't open
+     * (the core is still opening): a 1:1 message then waits too, never plaintext on its own. Default false: an app
+     * without MLS sends as before (its rows are marked "⚠ Not encrypted").
+     */
+    private val plaintextHold: () -> Boolean = { false },
 ) : RealtimeListener, ai.risicloud.risime.data.history.SendLanes {
     /** §15.4–§15.6 applied inside each event's transaction. */
     private val applier = deletes?.let { ai.risicloud.risime.data.deletes.DeleteApplier(it, messages, images, clock, log) }
@@ -148,6 +154,65 @@ class ChatEngine(
 
     private val outboxLock = Mutex()
     private val ackLock = Mutex()
+
+    /** Item 3: `mls_membership` "added" devices per DM until they are in the group (messages wait for them). */
+    val pendingDeviceAdds = ai.risicloud.risime.data.mls.PendingDeviceAdds(clock)
+
+    /** Item 3: when each held message started waiting for encryption (in memory; a restart starts the wait again). */
+    private val holdSince = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Item 3: the last repair kick per held DM (the upgrader is asked at most every [HOLD_REPAIR_EVERY_MS]). */
+    private val holdKicked = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Item 3: one pending re-look at a time (every send also flushes; they must not each start a chain). */
+    private val holdRecheck = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Item 3: re-looks per held message during its first wait (at most [MAX_HOLD_PASSES]). */
+    private val holdPasses = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** Rows whose push in this pass went out as plaintext (marked "plain" when the server accepts them). */
+    private val sentPlain = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Item 3: a `mls_membership` for a DM ([deviceId] is not this phone): hold new messages until it is in the group. */
+    fun onMembershipAnnounced(conversationId: String, deviceId: String, change: String) {
+        if (isGroupConversation(conversationId)) return
+        if (change == "added") pendingDeviceAdds.added(conversationId, deviceId) else pendingDeviceAdds.removed(conversationId, deviceId)
+    }
+
+    /** Item 3: the hold decision for this outgoing row; null = not a held kind (groups, calls, controls) or no E2EE at all. */
+    private fun holdStep(m: MessageEntity): ai.risicloud.risime.data.mls.EncryptionHold.Step? {
+        if (isGroupConversation(m.conversationId) || m.call || m.risiCtl) return null
+        val engine = mlsEngine()
+        if (engine == null && !plaintextHold()) return null
+        val group = engine?.group(m.conversationId)
+        // A photo/file never goes in plaintext and has no "Send without encryption": without a group it keeps its
+        // own rule (Not sent — this chat isn't end-to-end encrypted yet); it only waits for a peer's new phone.
+        if (group == null && m.media) return null
+        val pending = group != null && pendingDeviceAdds.pending(m.conversationId, runCatching { engine.members(m.conversationId) }.getOrDefault(emptyList()))
+        val now = clock()
+        val since = holdSince.getOrPut(m.clientMsgId) { now }
+        val step = ai.risicloud.risime.data.mls.EncryptionHold.decide(group != null, pending, m.e2ee == MessageEntity.E2EE_PLAIN_OK, since, now)
+        if (step == ai.risicloud.risime.data.mls.EncryptionHold.Step.HOLD || step == ai.risicloud.risime.data.mls.EncryptionHold.Step.HOLD_LONG) {
+            // No group here: ask the upgrader (create a new chat's group, or get this phone re-added) now and then.
+            val last = holdKicked[m.conversationId]
+            if (group == null && engine != null && (last == null || now - last >= HOLD_REPAIR_EVERY_MS)) {
+                holdKicked[m.conversationId] = now
+                onDmNeedsRepair(m.conversationId)
+            }
+        }
+        return step
+    }
+
+    /**
+     * Item 3 "Send without encryption" (the user's explicit tap, this message only): it may now go in plaintext if
+     * there is still no group to encrypt to. Returns false if the row can't take it (already sent, not mine).
+     */
+    suspend fun sendWithoutEncryption(clientMsgId: String): Boolean = withContext(io) {
+        if (messages.allowPlaintext(clientMsgId) == 0) return@withContext false
+        log("send without encryption: allowed for one message")
+        scope.launch { flushOutbox() }
+        true
+    }
 
     /**
      * §15.7 (android R6) / §16.4 (crypto R2, android R8): one serial encrypt-and-push lane per
@@ -218,7 +283,7 @@ class ChatEngine(
                 // Unknown kinds and undecodable data are skipped but still advance the cursor.
                 val incoming = if (!groupsEnabled() && isGroupEvent(e)) false else when (e.kind) {
                     Event.KIND_MESSAGE -> runCatching { e.messageData() }.getOrNull()?.let { md ->
-                        if (md.encrypted) applyMls(me, e) else md.body?.let { applyMessage(me, md, it) } ?: false
+                        if (md.encrypted) applyMls(me, e) else md.body?.let { applyMessage(me, md, it, e2ee = MessageEntity.E2EE_PLAIN) } ?: false
                     } ?: false
                     Event.KIND_REACTION -> {
                         runCatching { e.reaction() }.getOrNull()?.let { r ->
@@ -914,6 +979,8 @@ class ChatEngine(
         systemJson: String? = null,
         /** §33.4 / §33.9 / §33.0: `forwarded`, `reply_to`, `view_once` of the envelope. */
         extras: ai.risicloud.risime.net.EnvelopeExtras = ai.risicloud.risime.net.EnvelopeExtras.NONE,
+        /** Item 1/3: how it travelled (a plaintext `message` event: [MessageEntity.E2EE_PLAIN]). */
+        e2ee: String = MessageEntity.E2EE_YES,
         /** In the same transaction, right after the new row (§14.7: the image's media row). */
         onInserted: suspend (MessageEntity) -> Unit = {},
     ): Boolean {
@@ -978,6 +1045,7 @@ class ChatEngine(
             replyToMessageId = extras.replyTo?.messageId,
             replyToFrom = extras.replyTo?.from,
             viewOnce = if (extras.viewOnce) true else null,
+            e2ee = e2ee,
         )
         if (messages.insert(row) == -1L) return false
         deletes?.unhide(row.conversationId) // §15.7 Delete chat: a new message brings the chat back
@@ -1080,7 +1148,7 @@ class ChatEngine(
             return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { ai.risicloud.risime.data.mls.MlsPayload.text(m.body, extras) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
         return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { ai.risicloud.risime.data.mls.MlsPayload.text(m.body) }) {
-            realtime().sendMessage(MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs)))
+            realtime().sendMessage(MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs))).also { if (it is PushResult.Ok) sentPlain += m.clientMsgId }
         }
     }
 
@@ -1486,13 +1554,33 @@ class ChatEngine(
     private suspend fun flushMessages(): Unit = outboxLock.withLock {
         val waiting = HashSet<String>()
         var retry = false
+        var holdShort = false
         for (m in messages.pendingOutbox()) {
             if (m.conversationId in waiting) continue
             // §18.5 (android A2): a dirty group gets this device's photo before its next own message.
             if (isGroupConversation(m.conversationId)) profilePhotos?.let { runCatching { it.beforeOwnMessage(m.conversationId) } }
+            // Item 3: a 1:1 message waits for encryption ("Waiting for encryption…"), never plaintext on its own; it was
+            // never pushed, so it doesn't count as an attempt. ENCRYPT / SEND_PLAIN (the user's explicit choice) go on.
+            val held = when (runCatching { holdStep(m) }.getOrNull()) {
+                ai.risicloud.risime.data.mls.EncryptionHold.Step.HOLD -> E2EE_WAITING
+                ai.risicloud.risime.data.mls.EncryptionHold.Step.HOLD_LONG -> E2EE_WAITING_LONG
+                else -> null
+            }
+            if (held != null) {
+                // Stays PENDING; the reason is the bubble's label, kept across restarts.
+                if (m.failReason != held) messages.updateStatus(m.clientMsgId, MessageStatus.PENDING.name, null, null, held)
+                waiting += m.conversationId
+                // The 2 s re-look runs only through the first wait (bounded: a frozen clock can't make it endless).
+                if (held == E2EE_WAITING && (holdPasses.merge(m.clientMsgId, 1, Int::plus) ?: 0) <= MAX_HOLD_PASSES) holdShort = true
+                continue
+            }
             deletes?.countAttempt(m.clientMsgId) // android R2: from now on it may be on the server
             when (val r = send(m)) {
                 is PushResult.Ok -> {
+                    holdSince.remove(m.clientMsgId)
+                    holdPasses.remove(m.clientMsgId)
+                    // Item 1/3: how it went (⚠ Not encrypted on the bubble and in the list for a plaintext one).
+                    messages.setE2ee(m.clientMsgId, if (sentPlain.remove(m.clientMsgId)) MessageEntity.E2EE_PLAIN else MessageEntity.E2EE_YES)
                     val cur = messages.byClientMsgId(m.clientMsgId) ?: continue
                     val next = MessageStatus.valueOf(cur.status).advance(MessageStatus.SENT)
                     messages.updateStatus(m.clientMsgId, next.name, r.value.messageId, r.value.serverTs, null)
@@ -1520,6 +1608,13 @@ class ChatEngine(
         }
         if (retry) scope.launch {
             delay(rateLimitRetryMs)
+            flushOutbox()
+        }
+        // Item 3: while a message is in its first 30 s of waiting, look again every RECHECK_MS (the 30 s mark changes its
+        // label; a Welcome or commit also flushes, as do onLive and every new send — no endless timer after that).
+        if (holdShort && !retry && holdRecheck.compareAndSet(false, true)) scope.launch {
+            delay(ai.risicloud.risime.data.mls.EncryptionHold.RECHECK_MS)
+            holdRecheck.set(false)
             flushOutbox()
         }
     }
@@ -1572,6 +1667,18 @@ class ChatEngine(
         /** A message encryption couldn't send for [OUTBOX_GIVE_UP_MS] fails visibly with this reason. */
         const val E2EE_NOT_READY = "e2ee_not_ready"
         const val OUTBOX_GIVE_UP_MS = 30_000L
+
+        /** Local only (item 3): a 1:1 message waiting for encryption; stays PENDING ("Waiting for encryption…"). */
+        const val E2EE_WAITING = "e2ee_waiting"
+
+        /** Local only (item 3): still waiting after [ai.risicloud.risime.data.mls.EncryptionHold.HOLD_MS]: the bubble offers "Send without encryption". */
+        const val E2EE_WAITING_LONG = "e2ee_waiting_long"
+
+        /** Item 3: how often a held DM asks the upgrader again (create the group / re-add this phone). */
+        const val HOLD_REPAIR_EVERY_MS = 5_000L
+
+        /** Item 3: the 2 s re-looks per held message (≈ the 30 s wait, with slack). */
+        const val MAX_HOLD_PASSES = 20
 
         /** Local only: an image row without a stored envelope (deleted meanwhile). */
         const val IMAGE_UNAVAILABLE = "image_unavailable"
