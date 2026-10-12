@@ -27,6 +27,12 @@ Manifest (JSONL, one clip per line):
                          (release gates run next to the eval; default 4096)
          Results are appended (resumable: a (model, clip) pair already in --out is skipped).
          A 503 (no memory to load the model) waits and retries for up to --wait-s seconds.
+  detect --manifest M --out D.jsonl [--langs/--sets/--limit/--chunk-s]
+         per chunk, the service's language detection only (POST /v1/audio/detect, no
+         transcription): si/ta/en probabilities and large-v3's own top language (2026-10-13)
+  routing --manifest M --detections D.jsonl [--hint si] [--en-min-p 0.8,0.9,0.95]
+         how often each set's chunks route to si/ta/en with no hint, and what prior/force
+         would route with the hint (offline, same rule as the service's decide())
   score  --manifest M --results R [--langs ...] [--markdown] [--by kind]
   check  --manifest M     (paths exist, fields present, ids unique)
 
@@ -300,6 +306,87 @@ def cmd_run(a):
             print(f"{model}: {n} clips run", file=sys.stderr)
 
 
+def select(a):
+    clips = [c for c in load_manifest(a.manifest)
+             if (not a.langs or c["lang"] in a.langs or base_lang(c["lang"]) in a.langs)
+             and (not a.sets or c.get("set") in a.sets)]
+    return clips[:a.limit] if a.limit else clips
+
+
+def cmd_detect(a):
+    done = set()
+    if os.path.exists(a.out):
+        with open(a.out) as f:
+            done = {json.loads(line)["id"] for line in f if line.strip()}
+    key = os.environ["WHISPER_API_KEY"]
+    with open(a.out, "a") as out:
+        for c in select(a):
+            if c["id"] in done:
+                continue
+            dets = []
+            for piece in chunks(c["audio"], a.chunk_s):
+                mem_guard(a)
+                try:
+                    d = post(a.url, key, "/v1/audio/detect", {"file": piece, "hint_mode": "off"})
+                except Exception as e:
+                    d = {"error": f"{type(e).__name__}: {e}"}
+                dets.append({k: d.get(k) for k in ("reason", "detected", "probability", "probs",
+                                                    "raw_probs", "whisper_top", "whisper_top_p",
+                                                    "error")})
+            out.write(json.dumps({"id": c["id"], "lang": c["lang"], "set": c.get("set"),
+                                  "chunks": dets}) + "\n")
+            out.flush()
+
+
+MIN_ROUTE_P = 0.5
+
+
+def decide(d, hints, mode, en_min_p):
+    """Same rule as infra/whisper/server.py decide()."""
+    if d.get("reason") == "no_speech" or d.get("error"):
+        return "none"
+    probs, raw = d.get("probs") or {}, d.get("raw_probs") or d.get("probs") or {}
+    if mode == "off" or not hints:
+        return d["detected"] if d["probability"] >= MIN_ROUTE_P else "low"
+    local = [h for h in hints if h != "en"]
+    if not local:
+        return "en"
+    best = max(local, key=lambda h: probs.get(h, 0.0))
+    if mode == "force":
+        return best
+    allowed = {h: raw.get(h, 0.0) for h in set(hints) | {"en"}}
+    tot = sum(allowed.values())
+    return "en" if tot > 0 and allowed["en"] / tot >= en_min_p else best
+
+
+def cmd_routing(a):
+    rows = [json.loads(line) for line in open(a.detections) if line.strip()]
+    if a.sets:
+        rows = [r for r in rows if r.get("set") in a.sets]
+    hints = [h for h in (a.hint or "").split(",") if h]
+    modes = [("off", None)] + ([("force", None)] + [("prior", p) for p in a.en_min_p]
+                               if hints else [])
+    by = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
+    tops = collections.defaultdict(collections.Counter)
+    for r in rows:
+        g = f'{r["lang"]}/{r.get("set")}'
+        for d in r["chunks"]:
+            if d.get("whisper_top"):
+                tops[g][d["whisper_top"]] += 1
+            for mode, p in modes:
+                by[g][(mode, p)][decide(d, hints, mode, p or 0)] += 1
+    print(f"hint: {a.hint or '-'}; per set: chunks routed to si / ta / en / low-confidence "
+          "(-> large-v3) / no speech")
+    for g in sorted(by):
+        n = sum(by[g][("off", None)].values())
+        top = ", ".join(f"{k} {v}" for k, v in tops[g].most_common(4))
+        print(f"{g}  ({n} chunks; large-v3's own top language: {top})")
+        for (mode, p), c in by[g].items():
+            label = mode + (f" en>={p}" if p else "")
+            print(f"   {label:14s} " + "  ".join(f"{k} {c[k]:3d} ({100 * c[k] / n:4.0f}%)"
+                                                 for k in ("si", "ta", "en", "low", "none")))
+
+
 def score(clips, results, langs=None, by=None, include_trained=False):
     """-> {(model, group): stats}"""
     meta = {c["id"]: c for c in clips}
@@ -456,6 +543,23 @@ def main():
                    help="score in-training clips too (excl then counts them; for reference only)")
     s.add_argument("--markdown", action="store_true")
     s.add_argument("--json", action="store_true")
+    d = sub.add_parser("detect")
+    d.add_argument("--manifest", required=True)
+    d.add_argument("--out", required=True)
+    d.add_argument("--langs", type=lambda s: s.split(","))
+    d.add_argument("--sets", type=lambda s: s.split(","))
+    d.add_argument("--limit", type=int)
+    d.add_argument("--chunk-s", type=float, default=15.0)
+    d.add_argument("--url", default=os.environ.get("WHISPER_URL", "http://127.0.0.1:8200"))
+    d.add_argument("--min-avail-mb", type=int, default=int(os.environ.get("ASR_EVAL_MIN_AVAIL_MB",
+                                                                         "4096")))
+    g = sub.add_parser("routing")
+    g.add_argument("--manifest", required=True)
+    g.add_argument("--detections", required=True)
+    g.add_argument("--hint")
+    g.add_argument("--sets", type=lambda s: s.split(","))
+    g.add_argument("--en-min-p", type=lambda s: [float(x) for x in s.split(",")],
+                   default=[0.8, 0.9, 0.95])
     c = sub.add_parser("check")
     c.add_argument("--manifest", required=True)
     a = p.parse_args()
@@ -463,6 +567,10 @@ def main():
         cmd_run(a)
     elif a.cmd == "score":
         cmd_score(a)
+    elif a.cmd == "detect":
+        cmd_detect(a)
+    elif a.cmd == "routing":
+        cmd_routing(a)
     else:
         sys.exit(cmd_check(a))
 
