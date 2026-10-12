@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# ASR eval against the running speech service (decision 071 amendment c). See scripts/asr-eval.py.
+#   scripts/asr-eval check --manifest ~/risime-eval-data/manifests/si-heldout.jsonl
+#   scripts/asr-eval run   --manifest M --models whisper-small-sinhala,auto --out R.jsonl
+#   scripts/asr-eval score --manifest M --results R.jsonl [--markdown]
+# Audio stays in ~/risime-eval-data (outside git); the key is read from .env and never printed.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+env_file="$root/.env"
+[[ -f "$env_file" ]] || env_file="$HOME/development/risime/.env"
+WHISPER_API_KEY="${WHISPER_API_KEY:-$(grep -E '^WHISPER_API_KEY=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2-)}"
+export WHISPER_API_KEY
+exec python3 -I "$root/scripts/asr-eval.py" "$@"
