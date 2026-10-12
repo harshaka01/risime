@@ -43,7 +43,7 @@ class OmniCTC:
         out, prev = [], -1
         for i in ids:
             i = int(i)
-            if i != prev and i != 0:
+            if i != prev and i > 3:  # 0 <s> (blank), 1 <pad>, 2 </s>, 3 <unk>
                 out.append(self.tokens.get(i, ""))
             prev = i
         text = "".join(out).replace("|", " ")

@@ -6,6 +6,17 @@ Rule (CLAUDE.md golden rule 10, Harsha 2026-10-10): a download over 2 GB needs H
 | When (UTC) | What | Size | Source | Approved by | Result |
 |---|---|---|---|---|---|
 | 2026-10-09/10 | Risi model-eval candidates (LLMs + ASR) in ~/risime-eval-models | ~160 GB | Hugging Face | Harsha (model eval request) | complete; kept (all models and quants); verification below |
+| 2026-10-12 16:18–16:20 | ASR eval: FLEURS `en_us` test audio + tsv (20 clips kept in ~/risime-eval-data/fleurs-en) | 290 MB | huggingface.co/datasets/google/fleurs | ≤ 2 GB, allowed (Harsha's ASR-eval request 2026-10-12) | complete |
+| 2026-10-12 16:23–16:31 | ASR eval: OpenSLR SLR30 Sinhala `si_lk.tar.gz` + lines (36 clips kept in ~/risime-eval-data/slr30-si) | 700 MB | openslr.org/30 | ≤ 2 GB, allowed (same) | complete |
+| 2026-10-12 16:29–16:30 | ASR eval: `facebook/omnilingual-asr-corpus` `sin_Sinh` test parquet (held-out Sinhala, spontaneous) | 179 MB | Hugging Face | ≤ 2 GB, allowed (same) | complete |
+| 2026-10-12 16:30–16:35 | `Nerdstorm/Qwen3-ASR-0.6B-Sinhala-8bit` (MLX) → ~/risime-eval-models/qwen3-asr-0.6b-sinhala-8bit | 1.01 GB | Hugging Face | ≤ 2 GB, allowed (same) | complete |
+| 2026-10-12 16:34–16:49 | `SPEAK-ASR/faster-whisper-medium-si-exp10-fp16` (CT2) | 1.53 GB | Hugging Face | ≤ 2 GB, allowed (same) | complete (first attempt cut by an HTTP/2 reset at 1.09 GB, resumed) |
+| 2026-10-12 16:49–16:52 | `mohankumars26/whisper-tamil-medium-ct2` (CT2 int8 of vasista22/whisper-tamil-medium) | 0.78 GB | Hugging Face | ≤ 2 GB, allowed (same) | complete |
+| 2026-10-12 16:52–16:56 | `vasista22/whisper-tamil-small` (`pytorch_model.bin` only, no flax) | 0.97 GB | Hugging Face | ≤ 2 GB, allowed (same) | complete |
+| 2026-10-12 16:56–17:00 | `janiduchamika/whisper-small-sinhala-general-185k` (top-level files, no checkpoint/optimizer) | 0.97 GB | Hugging Face | ≤ 2 GB, allowed (same) | complete |
+| 2026-10-12 17:00–17:04 | `OpenVoiceOS/omnilingual-asr-ctc-1b-onnx` (`model.int8.onnx` + tokens only, not the 3.9 GB fp32) | 1.03 GB | Hugging Face | ≤ 2 GB, allowed (same) | complete |
+
+All 2026-10-12 items: `curl --limit-rate 10M`, one at a time, log in `~/risime-eval-data/dl/downloads-2026-10-12.log`; total ~6.7 GB in 9 separate downloads, each ≤ 2 GB. The > 2 GB candidates were **not** downloaded; they are listed for Harsha's OK in docs/RISI-MODELS.md ("ASR eval 2026-10-12", download list). Also installed: `pyarrow` (pip, ~40 MB) in a throwaway venv in the session scratchpad, to read the parquet.
 
 ## Verification of ~/risime-eval-models
 (shard count, sha256 and size of each file against the Hugging Face metadata; filled in by the model-eval run)
