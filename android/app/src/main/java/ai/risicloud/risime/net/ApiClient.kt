@@ -57,6 +57,10 @@ class ApiClient(
     /** §6.1: which sign-in modes the server offers. A pre-v1.3 server answers 404. */
     suspend fun authConfig(): ApiResult<AuthConfig> = call<Unit, AuthConfig>("GET", "auth/config", null, auth = false)
 
+    /** The sign-in screen's server check (P0 2026-10-12): `GET /auth/config` on [client] (its own timeouts and DNS). */
+    suspend fun authConfig(client: OkHttpClient): ApiResult<AuthConfig> =
+        executeOnce("GET", "auth/config", null, false, serializer<AuthConfig>(), emptyMap(), client)
+
     /** §21.3 (v1.20): create an account for the signed-in Keycloak identity (bearer token, not mapped first). */
     suspend fun signup(req: SignupRequest): ApiResult<MeReply> = call("POST", "auth/signup", req)
 
@@ -463,6 +467,7 @@ class ApiClient(
         auth: Boolean,
         resSerializer: KSerializer<R>,
         headers: Map<String, String>,
+        client: OkHttpClient = http,
     ): ApiResult<R> {
         val url = serverUrl().trimEnd('/').toHttpUrl().newBuilder()
             .addPathSegments("api/v1/${path.substringBefore('?')}")
@@ -476,7 +481,7 @@ class ApiClient(
         headers.forEach { (k, v) -> builder.header(k, v) }
         return withContext(Dispatchers.IO) {
             try {
-                http.newCall(builder.build()).execute().use { res ->
+                client.newCall(builder.build()).execute().use { res ->
                     if (res.isSuccessful && resSerializer === BYTES) {
                         @Suppress("UNCHECKED_CAST")
                         ApiResult.Ok(res.body.bytes() as R)

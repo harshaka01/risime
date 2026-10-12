@@ -41,6 +41,8 @@ data class LoginUiState(
     val choice: SignInChoice? = null,
     /** Debug with both modes: the dev OTP form is behind "Developer sign-in (OTP)". */
     val devFormOpen: Boolean = false,
+    /** Failed server-check attempts so far while it is still retrying (0: first attempt). */
+    val checkRetries: Int = 0,
 ) {
     val canVerify: Boolean get() = !busy && !codeLocked && code.length == 6
     val canSend: Boolean get() = !busy && resendInSec == 0
@@ -67,6 +69,13 @@ class LoginViewModel(private val c: AppContainer, private val clock: () -> Long 
                     loadChoice(o)
                 }
         }
+        // P0 2026-10-12: a network coming up (Wi-Fi joined, airplane mode off, the default network validated)
+        // re-checks a server we couldn't reach, without a tap on Retry.
+        viewModelScope.launch {
+            c.networkOnline.collect { online ->
+                if (online && _state.value.choice is SignInChoice.Unreachable) retryChoice()
+            }
+        }
         // This ViewModel outlives a login; start clean when the user comes back after logout.
         viewModelScope.launch {
             c.sessionStore.session.collect { s ->
@@ -75,15 +84,27 @@ class LoginViewModel(private val c: AppContainer, private val clock: () -> Long 
         }
     }
 
+    /**
+     * P0 2026-10-12 (bug B): retried with backoff while "Checking the server…" shows; a failure names its cause in
+     * one line ("This phone is offline", DNS, timeout, TLS, HTTP <code>).
+     */
     private suspend fun loadChoice(override: String?) {
         val o = runCatching { AuthOverride.valueOf(override ?: "AUTO") }.getOrDefault(AuthOverride.AUTO)
-        val choice = signInChoice(c.api.authConfig(), BuildConfig.DEBUG, o)
-        _state.update { it.copy(choice = choice) }
+        _state.update { it.copy(checkRetries = 0) }
+        val outcome = c.checkServer { n, _ -> _state.update { it.copy(checkRetries = n) } }
+        val choice = when (val ch = signInChoice(outcome.result, BuildConfig.DEBUG, o)) {
+            is SignInChoice.Unreachable -> ch.copy(cause = outcome.failure?.line)
+            else -> ch
+        }
+        _state.update { it.copy(choice = choice, checkRetries = 0) }
     }
+
+    private var checkJob: kotlinx.coroutines.Job? = null
 
     fun retryChoice() {
         _state.update { it.copy(choice = null) }
-        viewModelScope.launch { loadChoice(c.sessionStore.authOverride.first()) }
+        checkJob?.cancel()
+        checkJob = viewModelScope.launch { loadChoice(c.sessionStore.authOverride.first()) }
     }
 
     /** Validate and store an edited server URL, then re-check its sign-in modes. */

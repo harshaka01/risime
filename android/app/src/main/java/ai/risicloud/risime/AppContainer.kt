@@ -129,6 +129,40 @@ class AppContainer(
         .readTimeout(20, TimeUnit.SECONDS)
         .build()
 
+    private val connectivity: android.net.ConnectivityManager? = context.getSystemService(android.net.ConnectivityManager::class.java)
+
+    /**
+     * True while the phone has a default network with internet (P0 2026-10-12): the sign-in check names
+     * "This phone is offline" from it and retries when a network comes up. Fed by the default-network callback.
+     */
+    val networkOnline = MutableStateFlow(hasInternet())
+
+    private fun hasInternet(): Boolean = runCatching {
+        val cm = connectivity ?: return true
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork ?: return false) ?: return false
+        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }.getOrDefault(true)
+
+    /** The sign-in check's clients: a bounded call (10 s); retries resolve the host afresh (no stale cached IP). */
+    private val checkHttp = http.newBuilder().callTimeout(10, TimeUnit.SECONDS).build()
+    private val checkHttpFresh = checkHttp.newBuilder().dns(ai.risicloud.risime.net.FreshDns(connectivity)).build()
+
+    /**
+     * The sign-in screen's `GET /auth/config` with retry and backoff (P0 2026-10-12, bug B): attempt 1 as usual,
+     * later attempts with a fresh DNS lookup. [onRetry] hears each failed attempt that will be retried.
+     */
+    suspend fun checkServer(
+        onRetry: (Int, ai.risicloud.risime.net.ReachFailure) -> Unit = { _, _ -> },
+    ): ai.risicloud.risime.net.ReachOutcome<ai.risicloud.risime.net.AuthConfig> =
+        ai.risicloud.risime.net.reachWithRetry(
+            ai.risicloud.risime.net.ReachRetry(), online = { networkOnline.value = hasInternet(); networkOnline.value },
+            onRetry = { n, f ->
+                Log.i("RisiMe", "RisiMe server check: attempt $n failed (${f.cause}${f.httpStatus?.let { " $it" } ?: ""}), retrying")
+                onRetry(n, f)
+            },
+        ) { n -> api.authConfig(if (n == 1) checkHttp else checkHttpFresh) }
+            .also { o -> Log.i("RisiMe", "RisiMe server check: ${o.failure?.let { "failed ${it.cause} (\"${it.line}\")" } ?: "ok"} after ${o.attempts} attempt(s)") }
+
     val sessionStore = SessionStore(prefs, BuildConfig.DEFAULT_SERVER_URL)
     private val prefsStore = prefs
     val db = openDb(context)
@@ -1902,7 +1936,17 @@ class AppContainer(
                 object : android.net.ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: android.net.Network) {
                         http.connectionPool.evictAll()
+                        networkOnline.value = true
                         realtime.networkChanged()
+                    }
+
+                    override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) {
+                        networkOnline.value = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    }
+
+                    override fun onLost(network: android.net.Network) {
+                        // (Another default network, if any, follows with onAvailable.)
+                        networkOnline.value = hasInternet()
                     }
                 },
             )

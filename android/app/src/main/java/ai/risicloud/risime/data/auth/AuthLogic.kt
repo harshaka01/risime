@@ -22,7 +22,7 @@ sealed interface SignInChoice {
     data class Options(val options: List<SignInOption>, val config: AuthConfig) : SignInChoice
 
     /** Couldn't reach the server (or it answered garbage): show an error with "Retry". */
-    data class Unreachable(val message: String) : SignInChoice
+    data class Unreachable(val message: String, val cause: String? = null) : SignInChoice
 }
 
 /**

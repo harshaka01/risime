@@ -112,8 +112,18 @@ private fun LoginScreen(s: LoginUiState, vm: LoginViewModel, authUi: AuthUi, not
         }
         notice?.let { Text(it, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         when (val choice = s.choice) {
-            null -> Text("Checking the server…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            is SignInChoice.Unreachable -> ErrorState(choice.message, onRetry = vm::retryChoice)
+            null -> {
+                Text("Checking the server…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (s.checkRetries > 0) {
+                    Text("Slow connection, still trying…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            is SignInChoice.Unreachable -> {
+                ErrorState(choice.message, onRetry = vm::retryChoice)
+                choice.cause?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag(SERVER_CHECK_CAUSE_TAG))
+                }
+            }
             is SignInChoice.Options -> {
                 val oidc = SignInOption.OIDC in choice.options
                 val dev = SignInOption.DEV in choice.options
@@ -170,6 +180,7 @@ private fun OtpScreen(s: LoginUiState, vm: LoginViewModel) {
     OtpContent(s, vm::onCode, vm::verify, vm::requestCode, vm::back)
 }
 
+const val SERVER_CHECK_CAUSE_TAG = "server_check_cause"
 const val OTP_VERIFY_TAG = "otp_verify"
 const val OTP_RESEND_TAG = "otp_resend"
 
