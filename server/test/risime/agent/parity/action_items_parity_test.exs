@@ -285,4 +285,45 @@ defmodule RisiMe.Agent.Parity.ActionItemsTest do
     assert posts() == []
     assert Repo.aggregate(Commitment, :count) == 0
   end
+
+  # Fix 2026-10-13 (found by these parity tests): the owner as the call's only speaker crashed
+  # the confirm card (`LedgerOut.name_list([], _)`).
+  test "a call whose item owner was the only speaker: the confirm card says From your call", w do
+    started = DateTime.add(RisiMe.Agent.Clock.now(), -600, :second)
+
+    s = %Session{
+      session_id: Ecto.UUID.generate(),
+      call_id: Ecto.UUID.generate(),
+      conversation_id: w.og,
+      chat_id: Secretary.chat_id(w.og),
+      state: "ended",
+      discard: false,
+      started_at: started,
+      ended_at: DateTime.add(started, 300, :second)
+    }
+
+    llm!(fn body ->
+      [it(body, "task", "Send the quotation", "Harsha", "I will send the quotation")]
+    end)
+
+    rows = [
+      %{
+        message_id: TimeUUID.generate(),
+        speaker: w.harsha.id,
+        text: "I will send the quotation",
+        language: "en",
+        model: "faster-whisper-large-v3",
+        ms: 20_000,
+        start: DateTime.add(started, 30, :second),
+        turn: 1,
+        parts: [%{"o" => 0, "t" => "I will send the quotation"}],
+        p: 0.95,
+        romanised: false
+      }
+    ]
+
+    assert :ok = ActionItems.from_call(w.og, s, rows)
+    {_, cbody, _} = post_in(posts(), w.rc, "action_confirm")
+    assert cbody =~ ~r/From your call \(\d\d:\d\d\)/
+  end
 end

@@ -710,8 +710,11 @@ defmodule RisiMe.Agent.ActionItems do
     from =
       case src.source do
         "call" ->
-          others = src.participants -- [owner]
-          "From your call with #{LedgerOut.name_list(others, names)} (#{hm})"
+          case src.participants -- [owner] do
+            # The owner was the only speaker (name_list/2 of [] raised).
+            [] -> "From your call (#{hm})"
+            others -> "From your call with #{LedgerOut.name_list(others, names)} (#{hm})"
+          end
 
         _ ->
           if src.speaker == owner,
