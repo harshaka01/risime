@@ -26,6 +26,7 @@ import argparse
 import array
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -34,8 +35,16 @@ import sys
 PROVENANCE = {
     # SinhaSpeech/sinhala-asr-data pools YouTube speech; overlap with the SPEAK-ASR YouTube test
     # can't be ruled out (docs/RISI-MODELS.md caveat, Harsha 2026-10-12: treat as unreliable).
-    "yt-si": ["whisper-small-sinhala"],
+    # Nerdstorm rev 2 trained on 25 channels of SPEAK-ASR/youtube-sinhala-asr (re-split), and
+    # SPEAK-ASR's medium-all LoRA on its preprocessed YouTube train split: both excluded.
+    "yt-si": ["whisper-small-sinhala", "qwen3-asr-0.6b-sinhala", "whisper-medium-si-all"],
+    # SLR30 (Google TTS corpus): only hlasith/whisper-sinhala-small (not evaluated) lists it.
     "slr30-si": [],
+    # Omnilingual corpus: Meta's omniASR models trained on its train split; the test split is
+    # their designated held-out set (different recordings, possibly the same speakers), so it is
+    # scored but marked in-domain for omnilingual-ctc-1b. No other candidate lists it.
+    "omni-si": [],
+    # FLEURS ta_in test: lemuralabs used FLEURS-Tamil *train*; vasista22 FLEURS train+dev. Clean.
     "fleurs-ta": [],
     "fleurs-en": [],
     "real": [],
@@ -45,6 +54,7 @@ PROVENANCE = {
 LICENCE = {
     "yt-si": "none stated on the repo (internal eval only, not redistributed)",
     "slr30-si": "CC BY-SA 4.0",
+    "omni-si": "CC BY 4.0",
     "fleurs-ta": "CC BY 4.0",
     "fleurs-en": "CC BY 4.0",
     "real": "in-house, consented, internal testing only",
@@ -106,17 +116,104 @@ def convert_real(d):
     todo = [n for n in sorted(os.listdir(d))
             if n.lower().endswith(AUDIO_EXT) and n[:2].isdigit()
             and not os.path.exists(os.path.join(out, os.path.splitext(n)[0] + ".wav"))]
-    if todo:
-        image = os.environ.get("ASR_EVAL_IMAGE") or subprocess.run(
-            ["docker", "inspect", "-f", "{{.Config.Image}}", "risime-whisper-whisper-1"],
-            capture_output=True, text=True, check=True).stdout.strip()
-        loop = ('for f in "$@"; do ffmpeg -nostdin -loglevel error -y -i "/in/$f" -ac 1 -ar 16000 '
-                '-c:a pcm_s16le "/in/16k/${f%.*}.wav" || exit 1; done')
-        subprocess.run(["docker", "run", "--rm", "--network", "none", "--memory", "1g",
-                        "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{d}:/in",
-                        "--entrypoint", "bash", image, "-c", loop, "convert", *todo], check=True)
-        print(f"converted {len(todo)} recordings in {d}", file=sys.stderr)
+    ffmpeg_16k(d, todo, "16k")
     return out
+
+
+def ffmpeg_16k(d, names, sub):
+    """d/<name> -> d/<sub>/<stem>.wav, mono 16 kHz PCM16, in one throwaway container of the speech
+    image (offline, 1 GB)."""
+    if not names:
+        return
+    image = os.environ.get("ASR_EVAL_IMAGE") or subprocess.run(
+        ["docker", "inspect", "-f", "{{.Config.Image}}", "risime-whisper-whisper-1"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    loop = (f'mkdir -p "/in/{sub}"; for f in "$@"; do b="$(basename "${{f%.*}}")"; '
+            f'ffmpeg -nostdin -loglevel error -y -i "/in/$f" '
+            f'-ac 1 -ar 16000 -c:a pcm_s16le "/in/{sub}/$b.wav" || exit 1; done')
+    subprocess.run(["docker", "run", "--rm", "--network", "none", "--memory", "1g",
+                    "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{d}:/in",
+                    "--entrypoint", "bash", image, "-c", loop, "convert", *names], check=True)
+    print(f"converted {len(names)} files in {d}", file=sys.stderr)
+
+
+TAG = re.compile(r"<[^>]*>")
+
+
+def clean_omni(text):
+    """Omnilingual corpus transcript -> reference: drop <hesitation>/<noise>/<laugh>/<> tags and
+    hyphenated false starts (a word ending in '-'), newlines to spaces."""
+    words = [w for w in TAG.sub(" ", text).split() if not w.endswith("-")]
+    return " ".join(words)
+
+
+def prep_slr30(data, n=60, seed=71):
+    """dl/slr30/si_lk.tar.gz (OpenSLR SLR30) -> slr30-si/<utt>.wav (16 kHz) for n random
+    utterances, at most 3 per speaker, + slr30-si/selected.json [[utt, text]]."""
+    import random
+    import tarfile
+    src = os.path.join(data, "dl", "slr30")
+    lines = {}
+    with open(os.path.join(src, "si_lk.lines.txt"), encoding="utf-8") as f:
+        for ln in f:
+            m = re.match(r'\(\s*(\S+)\s+"(.*)"\s*\)\s*$', ln.strip())
+            if m:
+                lines[m.group(1)] = m.group(2).strip()
+    utts = sorted(lines)
+    random.Random(seed).shuffle(utts)
+    per, sel = {}, []
+    for u in utts:
+        spk = u.split("_")[1]
+        if per.get(spk, 0) < 3:
+            per[spk] = per.get(spk, 0) + 1
+            sel.append(u)
+        if len(sel) == n:
+            break
+    out = os.path.join(data, "slr30-si")
+    raw = os.path.join(out, "raw")
+    os.makedirs(raw, exist_ok=True)
+    want = {u + ".wav" for u in sel}
+    with tarfile.open(os.path.join(src, "si_lk.tar.gz")) as t:
+        for m in t:
+            base = os.path.basename(m.name)
+            if m.isfile() and base in want and not os.path.exists(os.path.join(raw, base)):
+                with t.extractfile(m) as fsrc, open(os.path.join(raw, base), "wb") as fdst:
+                    fdst.write(fsrc.read())
+    ffmpeg_16k(out, [os.path.join("raw", u + ".wav") for u in sel
+                     if not os.path.exists(os.path.join(out, u + ".wav"))], ".")
+    with open(os.path.join(out, "selected.json"), "w") as f:
+        json.dump([[u, lines[u]] for u in sel], f, ensure_ascii=False)
+    print(f"slr30-si: {len(sel)} utterances from {len(per)} speakers")
+
+
+def prep_omni(data, n=60, seed=71):
+    """dl/omni-si/.../sin_Sinh test parquet (facebook/omnilingual-asr-corpus) -> omni-si/<id>.wav +
+    omni-si/selected.json [[id, reference, speaker, prompt_id]]. Needs pyarrow (run with a venv
+    python: the host python has none)."""
+    import random
+    import pyarrow.parquet as pq
+    p = os.path.join(data, "dl", "omni-si", "data", "sin_Sinh", "test-00000-of-00001.parquet")
+    rows = pq.read_table(p).to_pylist()
+    random.Random(seed).shuffle(rows)
+    rows = rows[:n]
+    out = os.path.join(data, "omni-si")
+    raw = os.path.join(out, "raw")
+    os.makedirs(raw, exist_ok=True)
+    sel, names = [], []
+    for r in rows:
+        rid = f"{r['speaker_id']}_{r['prompt_id']}_{r['segment_id']}"
+        ext = os.path.splitext(r["audio"]["path"])[1] or ".flac"
+        fp = os.path.join(raw, rid + ext)
+        if not os.path.exists(fp):
+            with open(fp, "wb") as f:
+                f.write(r["audio"]["bytes"])
+        if not os.path.exists(os.path.join(out, rid + ".wav")):
+            names.append(os.path.join("raw", rid + ext))
+        sel.append([rid, clean_omni(r["raw_text"]), r["speaker_id"], r["prompt_id"]])
+    ffmpeg_16k(out, names, ".")
+    with open(os.path.join(out, "selected.json"), "w") as f:
+        json.dump(sel, f, ensure_ascii=False)
+    print(f"omni-si: {len(sel)} clips, {len({s[2] for s in sel})} speakers")
 
 
 def legacy(data, prefix):
@@ -145,6 +242,17 @@ def build(data):
                               "source": "OpenSLR SLR30 (Google, Sinhala TTS corpus)",
                               "licence": LICENCE["slr30-si"],
                               "in_training_of": PROVENANCE["slr30-si"]})
+    omni = os.path.join(data, "omni-si", "selected.json")
+    if os.path.exists(omni):
+        with open(omni) as f:
+            for rid, text, spk, prompt_id in json.load(f):
+                p = os.path.join(data, "omni-si", rid + ".wav")
+                clips.append({"id": f"omni-si-{rid}", "set": "omni-si", "lang": "si", "audio": p,
+                              "text": text, "duration_s": duration(p), "kind": "spontaneous",
+                              "speaker": spk,
+                              "source": "facebook/omnilingual-asr-corpus sin_Sinh test",
+                              "licence": LICENCE["omni-si"],
+                              "in_training_of": PROVENANCE["omni-si"]})
     for c in legacy(data, "fleurs-ta-"):
         c.update(set="fleurs-ta", kind="read", licence=LICENCE["fleurs-ta"],
                  in_training_of=PROVENANCE["fleurs-ta"])
@@ -211,7 +319,7 @@ def synth_cs(data, clips, skip, n=6):
             if ra != 16000 or rb != 16000:
                 continue
             gap = array.array("h", bytes(2 * 4800))
-            out = os.path.join(out_dir, f"{lang}-en-{i:02d}.wav")
+            out = os.path.join(out_dir, f"{c['id']}+{e['id']}.wav")
             if not os.path.exists(out):
                 write_wav(out, a + gap + b)
             res.append({"id": f"synth-{lang}+en-{i:02d}", "set": "synth-cs", "lang": f"{lang}+en",
@@ -229,7 +337,13 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--data", default=os.path.expanduser("~/risime-eval-data"))
     p.add_argument("--out", default="manifests/all.jsonl")
+    p.add_argument("--prep", choices=["slr30", "omni"],
+                   help="extract a downloaded public set first (omni needs pyarrow)")
     a = p.parse_args()
+    if a.prep == "slr30":
+        prep_slr30(a.data)
+    elif a.prep == "omni":
+        prep_omni(a.data)
     clips = build(a.data)
     out = os.path.join(a.data, a.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)

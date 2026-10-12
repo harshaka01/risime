@@ -60,7 +60,9 @@ MAX_UPLOAD = int(os.environ.get("WHISPER_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024
 BUDGET_MB = int(os.environ.get("WHISPER_MEM_BUDGET_MB", "11000"))
 # Host MemAvailable must stay above this after a load (protects risi-l1 and the pilot).
 MIN_AVAIL_MB = int(os.environ.get("WHISPER_MIN_AVAILABLE_MB", "3072"))
-ROUTE = {"si": "whisper-small-sinhala", "ta": "tamil-asr-qwen3", "en": DEFAULT}
+ROUTE = {"si": os.environ.get("WHISPER_ROUTE_SI", "whisper-small-sinhala"),
+         "ta": os.environ.get("WHISPER_ROUTE_TA", "tamil-asr-qwen3"),
+         "en": DEFAULT}
 ROUTE_LANGS = tuple(ROUTE)
 # Below this (renormalised over si/ta/en) the chunk goes to the default model, which detects itself.
 MIN_ROUTE_P = float(os.environ.get("WHISPER_ROUTE_MIN_P", "0.5"))
@@ -69,7 +71,16 @@ MIN_ROUTE_P = float(os.environ.get("WHISPER_ROUTE_MIN_P", "0.5"))
 SI_PROMPT = os.environ.get("WHISPER_SI_PROMPT", "මෙය සිංහල කතාබහකි.")
 # Retry order for a romanised Sinhala result: the first entry that is not the model that just ran,
 # is served, and fits memory (NoMemory -> the next one). One retry at most.
-SI_RETRY_ORDER = ("whisper-large-v3-sinhala", "whisper-small-sinhala")
+SI_RETRY_ORDER = tuple(os.environ.get("WHISPER_SI_RETRY_ORDER",
+                                      "whisper-large-v3-sinhala,whisper-small-sinhala").split(","))
+# Compare without a models list (amendment c): per detected language, the routed model plus the
+# alternatives worth seeing side by side (unknown names and models not on disk are skipped).
+COMPARE_SETS = {
+    "si": os.environ.get("WHISPER_COMPARE_SI",
+                         "whisper-small-sinhala,whisper-large-v3-sinhala," + DEFAULT),
+    "ta": os.environ.get("WHISPER_COMPARE_TA", "tamil-asr-qwen3," + DEFAULT),
+    "en": os.environ.get("WHISPER_COMPARE_EN", DEFAULT + ",faster-whisper-large-v3-turbo"),
+}
 
 # name -> spec. est_mb: measured resident memory (GPU unified + host MemAvailable drop, with
 # CT2_CUDA_ALLOCATOR=cuda_malloc_async), see decision 071. idle_s: unload after this long unused
@@ -92,10 +103,38 @@ SPECS = {
                                           path=f"{MODELS_ROOT}/faster-whisper-large-v3-turbo",
                                           compute="float16", workers=1, est_mb=2400, lang=None,
                                           role="compare", idle_s=120),
+    # Amendment c (2026-10-12): Sinhala and Tamil candidates from the ASR eval
+    # (docs/RISI-MODELS.md). Served only if their directory exists under MODELS_ROOT.
+    "whisper-medium-si-exp10": dict(kind="ct2", path=f"{MODELS_ROOT}/faster-whisper-medium-si-exp10",
+                                    compute="int8_float16", workers=1, est_mb=1300, lang="si",
+                                    role="compare", idle_s=120),
+    "whisper-small-sinhala-185k": dict(kind="ct2",
+                                       path=f"{MODELS_ROOT}/faster-whisper-small-sinhala-185k",
+                                       compute="float16", workers=1, est_mb=1000, lang="si",
+                                       role="compare", idle_s=120),
+    "qwen3-asr-0.6b-sinhala": dict(kind="qwen3", path=f"{MODELS_ROOT}/qwen3-asr-0.6b-sinhala",
+                                   est_mb=3500, lang="si", force_lang=True, role="compare",
+                                   idle_s=120),
+    "omnilingual-ctc-1b": dict(kind="onnx_ctc", path=f"{MODELS_ROOT}/omnilingual-ctc-1b",
+                               est_mb=2500, lang=None, role="compare", idle_s=120),
+    "whisper-tamil-small": dict(kind="ct2", path=f"{MODELS_ROOT}/faster-whisper-tamil-small",
+                                compute="float16", workers=1, est_mb=1000, lang="ta",
+                                role="compare", idle_s=120),
+    "whisper-tamil-medium": dict(kind="ct2", path=f"{MODELS_ROOT}/faster-whisper-tamil-medium",
+                                 compute="int8_float16", workers=1, est_mb=1300, lang="ta",
+                                 role="compare", idle_s=120),
 }
+WEIGHTS = {"ct2": "model.bin", "qwen3": "model.safetensors", "onnx_ctc": "tokens.txt"}
 SPECS = {n: s for n, s in SPECS.items()
-         if os.path.isfile(os.path.join(s["path"], "model.bin" if s["kind"] == "ct2"
-                                        else "model.safetensors"))}
+         if os.path.isfile(os.path.join(s["path"], WEIGHTS[s["kind"]]))}
+# A routed model is never unloaded for idleness and is part of the resident pool.
+for _lang, _n in ROUTE.items():
+    if _n in SPECS and _n != DEFAULT and SPECS[_n]["role"] == "compare":
+        SPECS[_n].update(role="route", idle_s=int(os.environ.get("WHISPER_IDLE_UNLOAD_S", "900")))
+# ... and a model that no longer routes is compare-only (unloaded after use, not kept resident).
+for _n, _s in SPECS.items():
+    if _s["role"] == "route" and _n not in ROUTE.values():
+        _s.update(role="compare", idle_s=120)
 if DEFAULT not in SPECS:
     raise SystemExit(f"default model missing: {DEFAULT_DIR}")
 ACCEPTED = set(SPECS) | {"whisper-1", "auto"}
@@ -165,7 +204,7 @@ class Pool:
     @staticmethod
     def _close(name, m):
         t0 = time.monotonic()
-        if SPECS[name]["kind"] == "qwen3":
+        if SPECS[name]["kind"] in ("qwen3", "onnx_ctc"):
             m.close()
         else:
             m.model.unload_model()
@@ -244,6 +283,9 @@ def load(name):
     if s["kind"] == "ct2":
         m = WhisperModel(s["path"], device="cuda", compute_type=s["compute"],
                          num_workers=s["workers"], local_files_only=True)
+    elif s["kind"] == "onnx_ctc":
+        from omni_ctc import OmniCTC
+        m = OmniCTC(s["path"])
     else:
         from qwen3_asr import Qwen3ASR  # torch/transformers only when needed
         m = Qwen3ASR(s["path"], num_beams=QWEN_BEAMS)
@@ -336,9 +378,13 @@ def run(name, audio, language=None, prompt=None, temperature=0.0, vad_filter=Tru
                                      "no_speech_prob": round(x.no_speech_prob, 4),
                                      "compression_ratio": round(x.compression_ratio, 4)}
                                     for i, x in enumerate(segs)]}
-            else:
-                text, _ = m.transcribe(audio, prompt=prompt)
+            elif s["kind"] == "qwen3":
+                text, _ = m.transcribe(audio, prompt=prompt,
+                                       language=lang if s.get("force_lang") else None)
                 out = {"language": s["lang"], "segments": []}
+            else:  # onnx_ctc: no language conditioning, no prompt
+                text, _ = m.transcribe(audio)
+                out = {"language": language, "segments": []}
         elapsed = time.monotonic() - t0
     finally:
         pool.release(name, unload=unload_after)
@@ -414,7 +460,9 @@ def models(request: Request):
              **({"measured_load_mb": measured[n]} if n in measured else {})}
             for n, s in SPECS.items()]
     data.append({"id": "auto", "object": "model", "owned_by": "risime", "role": "router",
-                 "routes": {k: v for k, v in ROUTE.items() if v in SPECS}})
+                 "routes": {k: v for k, v in ROUTE.items() if v in SPECS},
+                 "compare_sets": {k: compare_set(k) for k in COMPARE_SETS},
+                 "si_retry_order": [n for n in SI_RETRY_ORDER if n in SPECS]})
     return {"object": "list", "data": data,
             "memory": {"budget_mb": BUDGET_MB, "min_available_mb": MIN_AVAIL_MB,
                        "available_mb": mem_available_mb()}}
@@ -535,8 +583,8 @@ def compare(request: Request,
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
-    names = [n.strip() for n in models.split(",")] if models else list(SPECS)
-    unknown = [n for n in names if n not in SPECS]
+    names = [n.strip() for n in models.split(",")] if models else None
+    unknown = [n for n in names or [] if n not in SPECS]
     if unknown:
         return err(404, f"unknown models {unknown}; served: {sorted(SPECS)}")
     audio, bad = read_audio(file)
@@ -553,6 +601,10 @@ def compare(request: Request,
             # result its script check (no retry here: compare shows each model as it is).
             si = language == "si" or (language is None and det["language"] == "si" and
                                       det["probability"] >= MIN_ROUTE_P)
+            if names is None:
+                lang = language if language in COMPARE_SETS else (
+                    det["language"] if det["probability"] >= MIN_ROUTE_P else "en")
+                names = compare_set(lang)
             results = []
             for n in names:
                 try:
@@ -577,6 +629,13 @@ def compare(request: Request,
              time.monotonic() - t_all)
     return {"duration": round(duration, 3), "detected": det, "routed_model": routed,
             "results": results, "processing_s": round(time.monotonic() - t_all, 3)}
+
+
+def compare_set(lang):
+    """Default compare candidates for a language: the routed model first, then the configured
+    alternatives that are served, without duplicates."""
+    names = [ROUTE.get(lang, DEFAULT)] + [n.strip() for n in COMPARE_SETS.get(lang, "").split(",")]
+    return [n for i, n in enumerate(names) if n in SPECS and n not in names[:i]]
 
 
 def idle_reaper():

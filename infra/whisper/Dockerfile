@@ -34,7 +34,7 @@ ENV LD_LIBRARY_PATH=/opt/ct2/lib:${LD_LIBRARY_PATH}
 RUN pip install --no-cache-dir /wheels/ctranslate2-*.whl \
       "faster-whisper==${FASTER_WHISPER_VERSION}" "av==15.1.0" \
  && python3 -c "import ctranslate2, faster_whisper; print('ctranslate2', ctranslate2.__version__, 'faster-whisper', faster_whisper.__version__)"
-COPY server.py qwen3_asr.py /app/
+COPY server.py qwen3_asr.py omni_ctc.py /app/
 WORKDIR /app
 USER 1000:1000
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 HOME=/tmp \

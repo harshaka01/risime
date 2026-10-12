@@ -17,7 +17,9 @@ Manifest (JSONL, one clip per line):
   kind           read | broadcast | real | synthetic-concat   (optional)
   synthetic      true for clips made by concatenating other clips (optional)
 
-  run    --manifest M [--models a,b,auto] [--langs si,ta] [--limit N] [--out results.jsonl]
+  run    --manifest M --models a,b,auto [--langs si,ta] [--sets omni-si] [--limit N] --out R
+         [--chunk-s 15]  clips longer than this are sent in chunks (cut at the quietest 20 ms
+                         in the last 3 s), like the call path; the texts are joined
          [--no-force-lang]  (model=auto never gets a language)
          Results are appended (resumable: a (model, clip) pair already in --out is skipped).
          A 503 (no memory to load the model) waits and retries for up to --wait-s seconds.
@@ -33,9 +35,11 @@ next to it. "romanised" = a si/ta hypothesis with letters but none in the expect
 """
 
 import argparse
+import array
 import collections
 import json
 import os
+import struct
 import sys
 import time
 import unicodedata
@@ -108,14 +112,14 @@ def load_manifest(path):
 
 
 def post(url, key, path, fields, timeout=600):
+    """multipart POST; fields["file"] = (filename, bytes)."""
     boundary = uuid.uuid4().hex
     io_parts = []
     for k, v in fields.items():
         if k == "file":
-            with open(v, "rb") as f:
-                data = f.read()
+            name, data = v
             io_parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
-                            f'filename="{os.path.basename(v)}"\r\n'
+                            f'filename="{name}"\r\n'
                             f"Content-Type: application/octet-stream\r\n\r\n".encode() + data
                             + b"\r\n")
         elif v is not None:
@@ -129,9 +133,84 @@ def post(url, key, path, fields, timeout=600):
         return json.loads(r.read())
 
 
+def read_pcm16(path):
+    """WAV (mono PCM16 or float32) -> (array('h'), rate)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    pos, fmt, rate, bits, pcm = 12, None, None, None, b""
+    while pos + 8 <= len(data):
+        cid, size = data[pos:pos + 4], struct.unpack("<I", data[pos + 4:pos + 8])[0]
+        body = data[pos + 8:pos + 8 + size]
+        if cid == b"fmt ":
+            fmt, ch, rate = struct.unpack("<HHI", body[:8])
+            bits = struct.unpack("<H", body[14:16])[0]
+            if ch != 1:
+                raise ValueError(f"{path}: not mono")
+        elif cid == b"data":
+            pcm = body
+        pos += 8 + size + (size & 1)
+    if fmt == 1 and bits == 16:
+        a = array.array("h")
+        a.frombytes(pcm)
+    elif fmt == 3 and bits == 32:
+        fl = array.array("f")
+        fl.frombytes(pcm)
+        a = array.array("h", (max(-32768, min(32767, int(x * 32767))) for x in fl))
+    else:
+        raise ValueError(f"{path}: WAV format {fmt}/{bits} unsupported")
+    return a, rate
+
+
+def wav_bytes(samples, rate):
+    raw = samples.tobytes()
+    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(raw), b"WAVE", b"fmt ", 16, 1, 1,
+                       rate, rate * 2, 2, 16, b"data", len(raw)) + raw
+
+
+def chunks(path, chunk_s):
+    """Split like the call path does (fixed-length chunks), but cut at the quietest 20 ms frame
+    in the last 3 s of each window so fewer words are cut in half. -> [(name, wav bytes)]."""
+    a, rate = read_pcm16(path)
+    size, frame = int(chunk_s * rate), rate // 50
+    if len(a) <= size:
+        return [(os.path.basename(path), wav_bytes(a, rate))]
+    out, start = [], 0
+    while start < len(a):
+        end = min(start + size, len(a))
+        if end < len(a):
+            best, best_e = end, None
+            for f0 in range(end - 3 * rate, end - frame, frame):
+                e = sum(x * x for x in a[f0:f0 + frame:4])
+                if best_e is None or e < best_e:
+                    best, best_e = f0 + frame // 2, e
+            end = best
+        out.append((f"chunk{len(out)}.wav", wav_bytes(a[start:end], rate)))
+        start = end
+    return out
+
+
+def transcribe(a, key, model, file, lang):
+    """One request with the 503 (no memory) wait. -> response dict or {"error": ...}."""
+    fields = {"file": file, "model": model, "response_format": "verbose_json", "language": lang}
+    deadline = time.monotonic() + a.wait_s
+    while True:
+        try:
+            return post(a.url, key, "/v1/audio/transcriptions", fields)
+        except urllib.error.HTTPError as e:
+            msg = e.read().decode(errors="replace")[:300]
+            if e.code == 503 and time.monotonic() < deadline:
+                print(f"  503 for {model} (memory), waiting 30 s", file=sys.stderr)
+                time.sleep(30)
+                continue
+            return {"error": f"HTTP {e.code}: {msg}"}
+        except Exception as e:  # timeouts etc.
+            return {"error": f"{type(e).__name__}: {e}"}
+
+
 def cmd_run(a):
     clips = [c for c in load_manifest(a.manifest)
-             if not a.langs or c["lang"] in a.langs or base_lang(c["lang"]) in a.langs]
+             if (not a.langs or c["lang"] in a.langs or base_lang(c["lang"]) in a.langs)
+             and (not a.sets or c.get("set") in a.sets)]
     if a.limit:
         clips = clips[:a.limit]
     done = set()
@@ -149,45 +228,40 @@ def cmd_run(a):
                 if (model, c["id"]) in done:
                     continue
                 lang = None if (model == "auto" or a.no_force_lang) else base_lang(c["lang"])
-                fields = {"file": c["audio"], "model": model, "response_format": "verbose_json",
-                          "language": lang}
                 t0 = time.monotonic()
-                deadline = t0 + a.wait_s
-                while True:
-                    try:
-                        res = post(a.url, key, "/v1/audio/transcriptions", fields)
-                        break
-                    except urllib.error.HTTPError as e:
-                        msg = e.read().decode(errors="replace")[:300]
-                        if e.code == 503 and time.monotonic() < deadline:
-                            print(f"  503 for {model} (memory), waiting 30 s", file=sys.stderr)
-                            time.sleep(30)
-                            continue
-                        res = {"error": f"HTTP {e.code}: {msg}"}
-                        break
-                    except Exception as e:  # timeouts etc.
-                        res = {"error": f"{type(e).__name__}: {e}"}
+                parts = []
+                for piece in chunks(c["audio"], a.chunk_s):
+                    res = transcribe(a, key, model, piece, lang)
+                    parts.append(res)
+                    if "error" in res:
                         break
                 rec = {"model": model, "id": c["id"], "lang": c["lang"],
                        "forced_language": lang, "wall_s": round(time.monotonic() - t0, 3),
-                       "duration_s": c.get("duration_s")}
-                if "error" in res:
-                    rec["error"] = res["error"]
-                    print(f"  {model} {c['id']}: {res['error']}", file=sys.stderr)
+                       "duration_s": c.get("duration_s"), "chunks": len(parts)}
+                bad = [p for p in parts if "error" in p]
+                if bad:
+                    rec["error"] = bad[0]["error"]
+                    print(f"  {model} {c['id']}: {rec['error']}", file=sys.stderr)
                 else:
-                    rec.update(text=res.get("text", ""), served_by=res.get("model"),
-                               language=res.get("language"),
-                               processing_s=res.get("model_processing_s"),
-                               retried_with=res.get("retried_with"),
-                               route=(res.get("routing") or {}).get("reason"),
-                               fallback=(res.get("routing") or {}).get("fallback"))
+                    first = parts[0]
+                    rec.update(text=" ".join(p.get("text", "").strip() for p in parts).strip(),
+                               served_by=",".join(sorted({p.get("model") or "" for p in parts})),
+                               language=first.get("language"),
+                               processing_s=round(sum(p.get("model_processing_s") or 0
+                                                      for p in parts), 3),
+                               retried_with=next((p["retried_with"] for p in parts
+                                                  if p.get("retried_with")), None),
+                               route=(first.get("routing") or {}).get("reason"),
+                               fallback=next(((p.get("routing") or {}).get("fallback")
+                                              for p in parts
+                                              if (p.get("routing") or {}).get("fallback")), None))
                 out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 out.flush()
                 n += 1
             print(f"{model}: {n} clips run", file=sys.stderr)
 
 
-def score(clips, results, langs=None, by=None):
+def score(clips, results, langs=None, by=None, include_trained=False):
     """-> {(model, group): stats}"""
     meta = {c["id"]: c for c in clips}
     agg = collections.defaultdict(lambda: collections.Counter())
@@ -201,7 +275,8 @@ def score(clips, results, langs=None, by=None):
         excl = c["in_training_of"]
         if "*" in excl or r["model"] in excl or (r["model"] == "auto" and r.get("served_by") in excl):
             st["excluded"] += 1
-            continue
+            if not include_trained:
+                continue
         if "error" in r:
             st["errors"] += 1
             continue
@@ -250,7 +325,7 @@ def cmd_score(a):
     last = {}
     for r in results:
         last[(r["model"], r["id"])] = r
-    agg = score(clips, list(last.values()), a.langs, a.by)
+    agg = score(clips, list(last.values()), a.langs, a.by, a.include_trained)
     rows = []
     for (model, group), st in sorted(agg.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         served = ", ".join(f"{k[7:]} {v}" for k, v in st.items() if k.startswith("served:"))
@@ -313,12 +388,17 @@ def main():
     r.add_argument("--out", required=True)
     r.add_argument("--url", default=os.environ.get("WHISPER_URL", "http://127.0.0.1:8200"))
     r.add_argument("--no-force-lang", action="store_true")
+    r.add_argument("--sets", type=lambda s: s.split(","), help="only these manifest sets")
+    r.add_argument("--chunk-s", type=float, default=15.0,
+                   help="clips longer than this go in chunks, like call audio (default 15)")
     r.add_argument("--wait-s", type=int, default=1800)
     s = sub.add_parser("score")
     s.add_argument("--manifest", required=True)
     s.add_argument("--results", required=True, nargs="+")
     s.add_argument("--langs", type=lambda x: x.split(","))
     s.add_argument("--by")
+    s.add_argument("--include-trained", action="store_true",
+                   help="score in-training clips too (excl then counts them; for reference only)")
     s.add_argument("--markdown", action="store_true")
     s.add_argument("--json", action="store_true")
     c = sub.add_parser("check")

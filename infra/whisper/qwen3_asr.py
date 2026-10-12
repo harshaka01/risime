@@ -99,16 +99,23 @@ class Qwen3ASR:
         self.eos = [i for i in (tok.convert_tokens_to_ids("<|im_end|>"),
                                 tok.convert_tokens_to_ids("<|endoftext|>")) if i is not None]
 
-    @staticmethod
-    def _prompt(context):
+    LANG_NAMES = {"si": "Sinhala", "ta": "Tamil", "en": "English"}
+
+    @classmethod
+    def _prompt(cls, context, language=None):
+        # Forced language (Qwen3-ASR's own format): the assistant turn starts with
+        # "language <Name><asr_text>", so the model only writes the transcript.
+        forced = (f"language {cls.LANG_NAMES[language]}<asr_text>"
+                  if language in cls.LANG_NAMES else "")
         return ("<|im_start|>system\n" + (context or "") + "<|im_end|>\n"
                 "<|im_start|>user\n<|audio_start|><|audio_pad|><|audio_end|><|im_end|>\n"
-                "<|im_start|>assistant\n")
+                "<|im_start|>assistant\n" + forced)
 
     @torch.inference_mode()
-    def transcribe(self, audio: np.ndarray, prompt=None):
-        """audio: float32 mono 16 kHz. Returns (text, language name or None)."""
-        inputs = self.processor(text=[self._prompt(prompt)], audio=[audio],
+    def transcribe(self, audio: np.ndarray, prompt=None, language=None):
+        """audio: float32 mono 16 kHz; language (si|ta|en) forces the output language.
+        Returns (text, language name or None)."""
+        inputs = self.processor(text=[self._prompt(prompt, language)], audio=[audio],
                                 audio_kwargs={"n_window": self.n_window})
         inputs.pop("num_audio_tokens", None)
         inputs = inputs.to(self.device)
@@ -122,7 +129,7 @@ class Qwen3ASR:
         # <asr_text> is an added (possibly special) token: keep it, drop the <|...|> markers.
         raw = self.processor.tokenizer.decode(gen, skip_special_tokens=False)
         raw = re.sub(r"<\|[^|>]*\|>", "", raw)
-        lang, text = None, raw
+        lang, text = self.LANG_NAMES.get(language), raw
         if "<asr_text>" in raw:
             head, text = raw.split("<asr_text>", 1)
             m = re.match(r"\s*language\s+(\w+)", head)
