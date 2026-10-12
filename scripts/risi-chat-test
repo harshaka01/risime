@@ -1,0 +1,542 @@
+#!/usr/bin/env bash
+# Talking to Risi gate (PART 4, Harsha 2026-10-12; §25.2 Risi chat, §24.11 @Risi in Official). Two redroid phones on
+# spark2 against a temp server from THIS checkout (TABS + Risi with the pilot's switches: TOOLS, SKILLS, LEDGER, NOTES,
+# EVENTS), fresh installs, a model behind a local proxy that the gate can take down:
+#   scripts/risi-chat-test [--apk app-debug.apk] [--live] [--keep] [--shots] [--soft]
+#   --live   the real risi-l1 (127.0.0.1:8100, read-only use: the container is never touched) instead of scripts/fake-llm
+#            --script; answers are then checked by "a Risi message arrived" (server), not by their words.
+#   --soft   keep going after a failed check (a full matrix); the result is still FAIL.
+#  1. A, B sign in through the real login UI; friends (fixture).
+#  2. A's Risi chat, empty: the "What can Risi do?" card with its 4 examples; a tap on "Remind me tomorrow at 9 to
+#     call …" fills the composer (cursor at the name), nothing is sent.            shots 66-risi-empty-card, -example-tap
+#  3. A asks in the Risi chat: "Risi is typing…" shows, the reply is on screen within 10 s.  shots 66-risi-typing, -reply
+#  4. The model goes down (the proxy stops): A asks; "Risi is offline, I'll reply when I'm back." within 20 s; the model
+#     comes back; the reply arrives by itself.                                       shots 66-risi-offline, -back
+#  5. A group A+B, Official: B's plain message gets no Risi reply (server count, 25 s); A types "@", the picker offers
+#     Risi, A asks; the answer shows on A AND on B (visible agent).                  shots 66-risi-group-*
+#  6. The 1:1 A↔B Official: "Risi, <question>" without the chip is answered.       shot 66-risi-dm-official
+#  7. The 1:1 Private: typing "@Risi …" shows "Risi only works in Official. Move this to Official?"; nothing reaches
+#     Risi or the model (server + model log); [Move to Official] opens Official with the text; sending it is answered.
+#                                                                                    shots 66-risi-private-hint, -moved
+#  8. No FATAL EXCEPTION / ANR / main-thread DB on either phone.
+# Writes ~/risime-logs/risi-chat-test/v<version>.result; prints "RCTEST PASS|FAIL <check>" and "RCTEST OK". Never
+# touches :4000, the risi-l1 container, other sessions' redroids or containers.
+set -euo pipefail
+CALLER_PWD="$PWD"
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+SUF="${RC_INSTANCE:-_rc}"; PORT="${RC_PORT:-4166}"; LLM_PORT="${RC_LLM_PORT:-8166}"; PROXY_PORT="${RC_PROXY_PORT:-8167}"
+LIVE_URL="${RC_LIVE_URL:-http://127.0.0.1:8100}"
+APK=""; KEEP=0; SHOTS=0; LIVE=0; SOFT=0; VERSION=""; COMMIT=""
+while [ $# -gt 0 ]; do case "$1" in
+  --apk) APK="$2"; shift 2;; --version) VERSION="$2"; shift 2;; --commit) COMMIT="$2"; shift 2;;
+  --keep) KEEP=1; shift;; --shots) SHOTS=1; shift;; --live) LIVE=1; shift;; --soft) SOFT=1; shift;;
+  *) echo "unknown arg $1"; exit 2;; esac; done
+APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
+case "$APK" in /*) ;; *) APK="$CALLER_PWD/$APK";; esac
+[ -f "$APK" ] || { echo "no APK at $APK"; exit 2; }
+BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* 2>/dev/null | sort -V | tail -1)"
+badging="$("$BT/aapt2" dump badging "$APK" | sed -n 1p)"
+PKG="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+VN="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
+case "$PKG" in ai.risicloud.risime|ai.risicloud.risime.debug) CLS=ai.risicloud.risime ;;
+  *) echo "risi-chat-test is for ai.risicloud.risime(.debug), not '$PKG'"; exit 2 ;; esac
+VERSION="${VERSION:-$VN}"; COMMIT="${COMMIT:-$(git rev-parse HEAD)}"
+APK_SHA="$(sha256sum "$APK" | cut -d' ' -f1)"
+PATH="$("$REPO/scripts/android-target" adb):$PATH"
+I1="${RC_REDROID_A:--rc1}"; P1="${RC_REDROID_A_PORT:-5761}"
+I2="${RC_REDROID_B:--rc2}"; P2="${RC_REDROID_B_PORT:-5762}"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-rctest.XXXXXX")"
+OUTDIR="${RC_OUTDIR:-$HOME/risime-logs/risi-chat-test}"; LOGS="$OUTDIR/run$SUF"; SHOTDIR="$LOGS/shots"
+rm -rf -- "${SHOTDIR:?}"; mkdir -p "$OUTDIR" "$LOGS" "$SHOTDIR"
+export RISIME_DEV_DB="risime_rctest$SUF" RISIME_DEV_KEYSPACE="risime_rctest$SUF" ERL_EPMD_ADDRESS=127.0.0.1
+export MIX_BUILD_PATH="$REPO/server/_build/rctest$SUF" RISIME_CODE_RELOADER=false
+RESULT=FAIL; REASON="not finished"; CHECKS=""; FAILED=""; TIMINGS=""
+write_result() {
+  { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "package=$PKG"; echo "apk_sha256=$APK_SHA"
+    echo "host=$(hostname)"; echo "device=redroid"; echo "model=$([ "$LIVE" = 1 ] && echo live || echo fake-llm)"
+    echo "time=$(date -u +%s)"; echo "checks=${CHECKS# }"; echo "failed=${FAILED# }"; echo "timings=${TIMINGS# }"
+    echo "reason=$REASON"; } > "$OUTDIR/v$VERSION.result"
+  echo "==> result: $OUTDIR/v$VERSION.result ($RESULT)"
+}
+pass() { echo "RCTEST PASS $1"; CHECKS+=" $1"; }
+# A failed check: stops the run, or with --soft is recorded and the run goes on. A failed prerequisite always stops.
+bad() { echo "RCTEST FAIL $1: $2"; FAILED+=" $1"; [ "$SOFT" = 1 ] || { REASON="$1: $2"; diag; write_result; exit 1; }; }
+fail() { REASON="$*"; echo "RCTEST FAIL $*"; diag; write_result; exit 1; }
+diag() {
+  local d
+  for d in A B; do
+    [ -n "$(ser $d)" ] || continue
+    adb -s "$(ser $d)" exec-out screencap -p > "$LOGS/$d-screen.png" 2>/dev/null || true
+    adb -s "$(ser $d)" logcat -d > "$LOGS/$d-logcat.txt" 2>/dev/null || true
+    cp "$WORK/ui-$d.xml" "$LOGS/$d-ui.xml" 2>/dev/null || true
+  done
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  echo "    diagnostics in $LOGS"
+}
+SA=""; SB=""
+cleanup() {
+  local rc=$?
+  if [ "$rc" != 0 ] && [ "$REASON" = "not finished" ]; then REASON="aborted (exit $rc)"; write_result || true; fi
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  cp "$WORK/llm-requests.jsonl" "$LOGS/llm-requests.jsonl" 2>/dev/null || true
+  # This run's server, model and proxy only: their tmux sessions (never a pattern kill).
+  tmux kill-session -t "risime-rctest$SUF" 2>/dev/null || true
+  tmux kill-session -t "risime-rctest-llm$SUF" 2>/dev/null || true
+  tmux kill-session -t "risime-rctest-proxy$SUF" 2>/dev/null || true
+  if [ "$KEEP" = 0 ]; then
+    REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+    REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+echo "==> Risi chat test: $PKG $VN ($(basename "$APK"), sha256 ${APK_SHA:0:12}), commit ${COMMIT:0:12}, model $([ "$LIVE" = 1 ] && echo "LIVE $LIVE_URL" || echo fake-llm)"
+
+# ---------------------------------------------------------------- the model: fake-llm (or live) behind a proxy
+for p in "$PORT" "$LLM_PORT" "$PROXY_PORT"; do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy (RC_PORT / RC_LLM_PORT / RC_PROXY_PORT)"; exit 1; }; done
+[ -d server/deps ] || { echo "server/deps missing in $REPO (mix deps.get)"; exit 1; }
+# Deterministic answers: each question carries a marker rcqN, its answer starts with rcaN (§25.1 next-action finals).
+python3 -I - "$WORK/script.json" <<'PY'
+import json, sys
+def final(a): return {"tool": "final", "answer": a, "sources": [], "next_steps": []}
+rules = [
+    {"name": "q1", "task": "risi_next_action", "match": "rcq1", "delay_ms": 3000, "actions": [final("rca1 The plan is ready.")]},
+    {"name": "q2", "task": "risi_next_action", "match": "rcq2", "actions": [final("rca2 I am back with your answer.")]},
+    {"name": "q3", "task": "risi_next_action", "match": "rcq3", "actions": [final("rca3 You decided the venue.")]},
+    {"name": "q4", "task": "risi_next_action", "match": "rcq4", "actions": [final("rca4 The review is on Tuesday.")]},
+    {"name": "q5", "task": "risi_next_action", "match": "rcq5", "actions": [final("rca5 Moved to Official and answered.")]},
+    {"name": "other", "task": "risi_next_action", "actions": [final("rcax Done.")]},
+]
+json.dump({"v": 1, "rules": rules}, open(sys.argv[1], "w"))
+PY
+start_llm() {
+  [ "$LIVE" = 1 ] && return 0
+  tmux kill-session -t "risime-rctest-llm$SUF" 2>/dev/null || true
+  tmux new -d -s "risime-rctest-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT --script '$WORK/script.json' --record '$WORK/llm-requests.jsonl' >> '$WORK/fake-llm.out' 2>&1"
+  for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && return 0; sleep 0.5; done
+  echo "fake-llm didn't start"; tail -5 "$WORK/fake-llm.out"; return 1
+}
+# The proxy in front of the model: "down" = the proxy stops (the server sees connection refused), never the model.
+cat > "$WORK/proxy.py" <<'PY'
+import sys, urllib.request, urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+port, upstream = int(sys.argv[1]), sys.argv[2].rstrip("/")
+class H(BaseHTTPRequestHandler):
+    def _go(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n) if n else None
+        hdr = {k: v for k, v in self.headers.items() if k.lower() in ("content-type", "authorization", "accept")}
+        req = urllib.request.Request(upstream + self.path, data=body, headers=hdr, method=self.command)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                data, code, ct = r.read(), r.status, r.headers.get("Content-Type", "application/json")
+        except urllib.error.HTTPError as e:
+            data, code, ct = e.read(), e.code, e.headers.get("Content-Type", "application/json")
+        except Exception:
+            data, code, ct = b'{"error":"upstream"}', 502, "application/json"
+        self.send_response(code); self.send_header("Content-Type", ct); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+    do_GET = _go
+    do_POST = _go
+    def log_message(self, *a): pass
+ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+UPSTREAM="http://127.0.0.1:$LLM_PORT"; [ "$LIVE" = 1 ] && UPSTREAM="$LIVE_URL"
+model_up() {
+  tmux kill-session -t "risime-rctest-proxy$SUF" 2>/dev/null || true
+  tmux new -d -s "risime-rctest-proxy$SUF" "python3 -I '$WORK/proxy.py' $PROXY_PORT '$UPSTREAM' >> '$WORK/proxy.out' 2>&1"
+  for _ in $(seq 1 20); do ss -ltnH "sport = :$PROXY_PORT" | grep -q . && return 0; sleep 0.5; done
+  echo "the model proxy didn't start"; return 1
+}
+model_down() { tmux kill-session -t "risime-rctest-proxy$SUF" 2>/dev/null || true; for _ in $(seq 1 20); do ss -ltnH "sport = :$PROXY_PORT" | grep -q . || return 0; sleep 0.5; done; return 1; }
+if [ "$LIVE" = 1 ]; then curl -sf -o /dev/null "$LIVE_URL/health" || { echo "the live model at $LIVE_URL isn't healthy"; exit 1; }; else start_llm || exit 1; fi
+model_up || exit 1
+: > "$WORK/llm-requests.jsonl"
+asked_model() { grep -c -- "$1" "$WORK/llm-requests.jsonl" 2>/dev/null || true; }
+
+echo "==> MLS NIF (--prod), throwaway keys"
+MLS_NIF_OUT="$WORK/librisime_mls_nif.so" timeout 1200 scripts/build-mls-nif --prod >/dev/null || { echo "scripts/build-mls-nif --prod failed"; exit 1; }
+umask 077
+{ echo "TABS=on"; echo "RISI=on"; echo "RISI_TOOLS=on"; echo "RISI_SKILLS=on"; echo "RISI_LEDGER=on"; echo "RISI_NOTES=on"; echo "RISI_EVENTS=on"
+  echo "RISI_MLS_NIF=$WORK/librisime_mls_nif"; echo "RISI_LLM_URL=http://127.0.0.1:$PROXY_PORT/v1"; echo "RISI_FALLBACK=off"
+  echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"
+  echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/risi.env"
+umask 022
+cat > "$WORK/fixtures.exs" <<'EXS'
+alias RisiMe.{Accounts, Repo}
+alias RisiMe.Accounts.User
+import Ecto.Query
+[mode | rest] = System.argv()
+phones = %{"A" => "+94770000971", "B" => "+94770000972"}
+user! = fn p -> Repo.get_by!(User, phone: p) end
+case mode do
+  "setup" ->
+    for {l, p} <- phones do
+      {:ok, _} = Accounts.allow(%{phone: p, email: "rctest#{String.downcase(l)}@example.com", display_name: "ZZ RC #{l}", company: "Risi"})
+    end
+    IO.puts("rctest: setup ok")
+  "friends" ->
+    RisiMe.Social.make_friends!(user!.(phones["A"]).id, user!.(phones["B"]).id)
+    IO.puts("rctest: friends ok")
+  "risi" ->
+    :ok = RisiMe.Risi.seed()
+    IO.puts("rctest: risi ok")
+  "risi_msgs" ->
+    # Metadata only: how many message events from Risi in <who>'s inbox, in Official conversations of <kind>
+    # (risi = the Risi chat, dm = a 1:1's Official, group = a group's Official).
+    [who, kind] = rest
+    risi = RisiMe.Risi.user_id()
+    sel =
+      Repo.all(from g in RisiMe.Groups.Group, where: g.tab == "official", select: {g.id, g.chat_id, g.chat_kind})
+      |> Enum.filter(fn {_id, chat, ck} ->
+        chat = chat || ""
+        case kind do
+          "risi" -> ck == "risi"
+          "dm" -> ck != "risi" and String.starts_with?(chat, "dm:")
+          "group" -> ck != "risi" and String.starts_with?(chat, "grp:")
+        end
+      end)
+      |> MapSet.new(&elem(&1, 0))
+    evs = RisiMe.Messaging.Store.impl().list_events(user!.(phones[who]).id, nil, 5000, false)
+    n = Enum.count(evs, &(&1.kind == "message" and MapSet.member?(sel, &1.data["conversation_id"]) and &1.data["from"] == risi))
+    IO.puts("rctest: risi_msgs=#{n}")
+  "risi_inbox_dm" ->
+    # Risi's own inbox: any event of a 1:1 (Private) conversation at all (Risi is never in Private).
+    evs = RisiMe.Messaging.Store.impl().list_events(RisiMe.Risi.user_id(), nil, 5000, false)
+    n = Enum.count(evs, &String.starts_with?(to_string(&1.data["conversation_id"]), "dm:"))
+    IO.puts("rctest: risi_inbox_dm=#{n}")
+end
+EXS
+fx() { (cd server && set -a && . "$WORK/risi.env" && set +a && RISI_MLS_NIF=/nonexistent $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^rctest:' || true); }
+risi_msgs() { fx risi_msgs "$1" "$2" | sed -n 's/^rctest: risi_msgs=//p'; }
+echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, TABS + Risi: TOOLS SKILLS LEDGER NOTES EVENTS)"
+(cd server && { $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true; } && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+  || { echo "could not create/migrate the test store"; exit 1; }
+(cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
+[ -f "$WORK/attest.jwk" ] || { echo "no attestation key"; exit 1; }
+(cd server && $M mix compile >/dev/null 2>&1) || { echo "server compile failed"; exit 1; }
+[ "$(fx risi)" = "rctest: risi ok" ] || { echo "fixture: risi seed"; exit 1; }
+: > "$WORK/server.log"
+tmux new -d -s "risime-rctest$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+  PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server >> '$WORK/server.log' 2>&1"
+for _ in $(seq 1 180); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { echo "server didn't start"; tail -20 "$WORK/server.log"; exit 1; }
+cfg="$(curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config")"
+grep -q '"tabs":"on"' <<<"$cfg" && grep -q '"risi_tools":"on"' <<<"$cfg" || { echo "the temp server's /auth/config doesn't say tabs + risi_tools on"; exit 1; }
+[ "$(fx setup)" = "rctest: setup ok" ] || { echo "fixture: setup"; exit 1; }
+otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
+
+# ---------------------------------------------------------------- phones: fresh installs
+echo "==> two redroid containers ($I1:$P1, $I2:$P2)"
+SA="$(REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" start)" || fail "redroid A didn't start"
+SB="$(REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" start)" || fail "redroid B didn't start"
+ser() { case "$1" in A) echo "$SA";; B) echo "$SB";; esac; }
+DEV=""
+A() { adb -s "$(ser "$DEV")" "$@"; }
+install_fresh() {
+  A uninstall "$PKG" >/dev/null 2>&1 || true
+  A install "$APK" >/dev/null || fail "$DEV: fresh install of $PKG"
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  A shell pm disable-user com.android.inputmethod.latin >/dev/null 2>&1 || true
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  A logcat -G 16M >/dev/null 2>&1 || true
+  A logcat -c || true
+}
+for DEV in A B; do install_fresh; done
+
+# ---- UI helpers (as scripts/e2ee-clarity-test)
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui-$DEV.xml" 2>/dev/null || : > "$WORK/ui-$DEV.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui-$DEV.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for: $1"; return 1; }
+node_xy() {
+  dump
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+def hit(n):
+    t, d = n.get('text') or '', n.get('content-desc') or ''
+    if want.startswith('~'): return want[1:] in t or want[1:] in d
+    if want.startswith('@'): return d == want[1:]
+    if want.startswith('^'): return t == want[1:]
+    return t == want or d == want or (want.endswith('*') and t.startswith(want[:-1]))
+for n in nodes:
+    if hit(n):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+}
+wait_text() { for _ in $(seq 1 "${2:-30}"); do [ -n "$(node_xy "$1")" ] && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for text: $1"; return 1; }
+tap() { local b; b="$(node_xy "$1")"; [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }; A shell input tap $b; }
+# The text of the focused/first EditText (the composer).
+field_text() {
+  dump
+  python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+edits = [n for n in nodes if n.get('class') == 'android.widget.EditText']
+pick = [n for n in edits if n.get('focused') == 'true'] or edits
+print((pick[0].get('text') or '') if pick else '')
+PY
+}
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+typ() { A shell input text "$(printf '%s' "$1" | sed 's/ /%s/g')"; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; risi_intro_ok; true; }
+risi_intro_ok() { grep -qF 'Risi listens in Official' "$WORK/ui-$DEV.xml" 2>/dev/null && { tap "OK" >/dev/null || true; sleep 1; }; true; }
+on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
+wait_list() { for _ in $(seq 1 "${1:-30}"); do on_list && return 0; sleep 1; done; return 1; }
+back_to_list() {
+  for _ in 1 2 3 4 5 6; do
+    on_list && return 0
+    [ -s "$WORK/ui-$DEV.xml" ] || { sleep 1; continue; }
+    A shell input keyevent KEYCODE_BACK; sleep 1
+  done
+  on_list && return 0
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1 || true
+  wait_list 10
+}
+sign_in() {  # $1 phone, $2 email
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+  wait_for "Server:" 40 || return 1
+  tap "Server:*" || return 1; sleep 1
+  tap "Server URL" || tap "http://*" || tap "https://*" || return 1; sleep 0.5
+  clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+  if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+  sleep 2
+  for _ in $(seq 1 30); do has "Phone number" && break; has "Developer sign-in (OTP)" && tap "Developer sign-in (OTP)"; sleep 1; done
+  wait_for "Phone number" 5 || return 1
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; hide_keyboard; tap "Send code" || return 1
+  wait_for "6-digit code" 30 || return 1
+  local code=""; for _ in $(seq 1 20); do code="$(otp "$1")"; [ -n "$code" ] && break; sleep 1; done
+  [ -n "$code" ] || return 1
+  type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
+  wait_list 40 || return 1
+  dismiss_prompts
+}
+open_chat() {
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts
+  back_to_list || { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts; }
+  wait_for "$1" 40 || return 1; tap "$1"; sleep 2
+}
+# The Risi chat from the chat list ("Risi", pinned first; created by the app at start on a risi_tools phone).
+open_risi_chat() {
+  back_to_list || return 1
+  wait_text "^Risi" 90 || return 1
+  tap "^Risi" || return 1
+  wait_for 'text="Ask Risi…"' 60
+}
+# The Official tab of the open chat with a usable composer; starts Official the first time.
+official_tab() {
+  local i
+  for i in $(seq 1 120); do
+    dump; risi_intro_ok
+    grep -qF 'class="android.widget.EditText"' "$WORK/ui-$DEV.xml" \
+      && { grep -qF 'Risi is listening' "$WORK/ui-$DEV.xml" || grep -qF 'Search in Official' "$WORK/ui-$DEV.xml"; } && return 0
+    grep -qF 'text="Start Official"' "$WORK/ui-$DEV.xml" && { tap "Start Official" || true; sleep 2; continue; }
+    [ $((i % 10)) = 1 ] && { tap "● Official" || true; }
+    sleep 1
+  done
+  echo "    [$DEV] official_tab: $(grep -o 'text="[^"]*"' "$WORK/ui-$DEV.xml" | grep -v 'text=""' | head -30 | tr '\n' ' ')"
+  return 1
+}
+private_tab() {
+  for _ in 1 2 3 4 5; do
+    dump; risi_intro_ok
+    has 'Risi is listening' || grep -qF 'Search in Official' "$WORK/ui-$DEV.xml" || return 0
+    tap "🔒 Private" >/dev/null || true; sleep 2
+  done
+  return 1
+}
+tap_new_group() {
+  dump
+  if grep -qE '(text|content-desc)="New"' "$WORK/ui-$DEV.xml" && ! grep -qE '(text|content-desc)="New group"' "$WORK/ui-$DEV.xml"; then
+    tap "New" || return 1; sleep 2
+  fi
+  tap "New group"
+}
+logcat_ok() {
+  local d out
+  for d in A B; do
+    DEV=$d; out="$(A logcat -d 2>/dev/null || true)"
+    printf '%s\n' "$out" | "$REPO/scripts/logcat-gate" "$1 $d" || bad logcat_clean "$1: $d crashed or touched the database on the main thread"
+    grep -qE "ANR in $PKG( |\$|:)" <<<"$out" && bad logcat_clean "$1: ANR in $PKG on $d"
+  done
+  return 0
+}
+shot() { A exec-out screencap -p > "$SHOTDIR/66-risi-$1.png" 2>/dev/null || true; echo "    shot 66-risi-$1.png"; }
+now_ms() { date +%s%3N; }
+# An answer on screen: fake-llm's words (rcaN), or with --live any new Risi message in that kind of chat (server).
+# $1 marker, $2 who (A/B: the phone and the inbox), $3 kind (risi|dm|group), $4 count before, $5 seconds.
+wait_answer() {
+  local i
+  for i in $(seq 1 "$5"); do
+    if [ "$LIVE" = 1 ]; then [ "$(risi_msgs "$2" "$3")" -gt "$4" ] 2>/dev/null && return 0
+    else has "$1" && return 0; fi
+    sleep 1
+  done
+  return 1
+}
+compose_send() { tap "Send" >/dev/null || { sleep 1; tap "Send"; }; }
+
+# ---------------------------------------------------------------- 1. sign in, friends
+DEV=A; sign_in "+94770000971" "rctesta@example.com" || fail "sign-in A"
+DEV=B; sign_in "+94770000972" "rctestb@example.com" || fail "sign-in B"
+[ "$(fx friends)" = "rctest: friends ok" ] || fail "fixture: friends"
+for DEV in A B; do A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; done
+pass sign_in
+
+# ---------------------------------------------------------------- 2. the empty Risi chat: "What can Risi do?"
+DEV=A; open_risi_chat || fail "A: no Risi chat in the chat list (or it didn't open)"
+for _ in $(seq 1 60); do has 'Only you and Risi' && break; sleep 1; done
+if wait_text "What can Risi do?" 30; then
+  missing=""
+  for ex in "Summarise my Official chats today" "Remind me tomorrow at 9 to call …" "Add a meeting to my calendar" "What did I promise this week?"; do
+    [ -n "$(node_xy "$ex")" ] || missing+=" '$ex'"
+  done
+  shot empty-card
+  [ -z "$missing" ] && pass empty_card || bad empty_card "the card lacks$missing"
+  if tap "Remind me tomorrow at 9 to call …"; then
+    sleep 1; t="$(field_text)"
+    shot example-tap
+    [ "$t" = "Remind me tomorrow at 9 to call " ] && pass example_tap_fills || bad example_tap_fills "the composer holds '$t'"
+    [ "$(asked_model 'Remind me tomorrow')" = 0 ] || bad example_tap_fills "a tap on an example sent it"
+    clear_field; hide_keyboard
+  else bad example_tap_fills "no tappable reminder example"; fi
+else
+  shot empty-card
+  bad empty_card "no 'What can Risi do?' card in the empty Risi chat"
+  bad example_tap_fills "no card to tap"
+fi
+
+# ---------------------------------------------------------------- 3. Risi chat: typing state, reply ≤ 10 s
+DEV=A
+n0="$(risi_msgs A risi)"
+tap "Ask Risi…" || true; sleep 0.5; typ "rcq1 what is the plan"; sleep 0.5
+t0="$(now_ms)"; compose_send || fail "A: send in the Risi chat"
+typing=""; answered=""
+for _ in $(seq 1 25); do
+  dump
+  grep -qF 'Risi is typing' "$WORK/ui-$DEV.xml" && { [ -z "$typing" ] && shot typing; typing=1; }
+  if { [ "$LIVE" = 1 ] && [ "$(risi_msgs A risi)" -gt "$n0" ]; } || grep -qF 'rca1' "$WORK/ui-$DEV.xml"; then answered="$(( $(now_ms) - t0 ))"; break; fi
+  sleep 0.3
+done
+TIMINGS+=" risi_chat_reply_ms=${answered:-none}"
+[ -n "$typing" ] && pass typing_state || bad typing_state "no 'Risi is typing…' while the reply was pending"
+shot reply
+if [ -n "$answered" ] && [ "$answered" -le 10500 ]; then pass "risi_chat_reply_10s(${answered}ms)"
+else bad risi_chat_reply_10s "the reply took ${answered:-more than 25 s} ms"; fi
+
+# ---------------------------------------------------------------- 4. the model is down: offline notice, later reply
+DEV=A
+model_down || fail "couldn't stop the model proxy"
+n0="$(risi_msgs A risi)"
+tap "Ask Risi…" || true; sleep 0.5; typ "rcq2 are you there"; sleep 0.5
+t0="$(now_ms)"; compose_send || fail "A: send while the model is down"
+off=""
+for _ in $(seq 1 40); do dump; grep -qF "Risi is offline" "$WORK/ui-$DEV.xml" && { off="$(( $(now_ms) - t0 ))"; break; }; sleep 0.5; done
+TIMINGS+=" offline_notice_ms=${off:-none}"
+shot offline
+[ -n "$off" ] && [ "$off" -le 20000 ] && pass "offline_notice_${off}ms" || bad offline_notice "no 'Risi is offline, I'll reply when I'm back' within 20 s (${off:-none})"
+sleep 5; model_up || fail "couldn't restart the model proxy"
+t1="$(now_ms)"; back=""
+for _ in $(seq 1 90); do
+  if [ "$LIVE" = 1 ]; then [ "$(risi_msgs A risi)" -gt "$(( n0 + 1 ))" ] && { back=1; break; }
+  else has "rca2" && { back=1; break; }; fi
+  sleep 1
+done
+TIMINGS+=" later_reply_ms=$([ -n "$back" ] && echo $(( $(now_ms) - t1 )) || echo none)"
+shot back
+[ -n "$back" ] && pass later_reply || bad later_reply "no reply within 90 s after the model came back"
+
+# ---------------------------------------------------------------- 5. a group's Official: quiet without @Risi, @ picker
+DEV=A; back_to_list || fail "A: back to the list"
+for _ in $(seq 1 30); do tap_new_group && break; sleep 2; back_to_list || true; done
+wait_for "Add members" 15 || fail "A: no New group"
+sleep 2
+tap "ZZ RC B" && tap "Next" && sleep 1 && type_into "Group name" "RC group" && hide_keyboard && tap "Create" || fail "A: group creation"
+wait_for "RC group" 60 || fail "the group wasn't created"
+sleep 3
+open_chat "RC group" || fail "A: open the group"
+official_tab || fail "A: the group's Official tab"
+DEV=B; open_chat "RC group" || fail "B: the group isn't listed"
+official_tab || fail "B: the group's Official tab"
+na="$(risi_msgs A group)"; nb="$(risi_msgs B group)"
+tap "Message" || true; sleep 0.5; typ "rc plain hello team the venue is the main hall"; sleep 0.5; compose_send || fail "B: send in Official"
+DEV=A; wait_for "the main hall" 60 || fail "A never got B's Official message"
+sleep 25
+[ "$(risi_msgs A group)" = "$na" ] && [ "$(risi_msgs B group)" = "$nb" ] && pass group_quiet_without_mention \
+  || bad group_quiet_without_mention "Risi posted in the group's Official without @Risi ($na→$(risi_msgs A group))"
+DEV=A; tap "Message" || true; sleep 0.5; typ "@"; sleep 1.5
+if [ -n "$(node_xy "@Mention Risi")" ]; then
+  shot group-picker
+  tap "@Mention Risi" || true; sleep 1
+  pass mention_picker
+else
+  shot group-picker
+  bad mention_picker "typing @ offers no Risi in the picker"
+  clear_field; hide_keyboard; tap "^@Risi" || true; sleep 1
+fi
+has 'text="Ask Risi…"' || { tap "Ask Risi…" || true; }
+tap "Ask Risi…" || true; sleep 0.3
+typ "rcq3 what did we decide"; sleep 0.5
+nb="$(risi_msgs B group)"
+compose_send || fail "A: send the @Risi ask"
+wait_answer "rca3" A group "$na" 60 && { shot group-answer-a; pass group_answer_asker; } || { shot group-answer-a; bad group_answer_asker "no answer on A"; }
+DEV=B; wait_answer "rca3" B group "$nb" 60 && { shot group-answer-b; pass group_answer_visible_to_member; } || { shot group-answer-b; bad group_answer_visible_to_member "B doesn't see Risi's answer"; }
+
+# ---------------------------------------------------------------- 6. the 1:1 Official: "Risi, …" without the chip
+DEV=A; back_to_list || true
+open_chat "ZZ RC B" || fail "A: the DM with B"
+official_tab || fail "A: the DM's Official tab"
+n0="$(risi_msgs A dm)"
+tap "Message" || true; sleep 0.5; typ "Risi, rcq4 when is the review"; sleep 0.5
+compose_send || fail "A: send in the 1:1 Official"
+wait_answer "rca4" A dm "$n0" 60 && { shot dm-official; pass dm_official_direct_question; } || { shot dm-official; bad dm_official_direct_question "'Risi, …' in the 1:1 Official wasn't answered"; }
+
+# ---------------------------------------------------------------- 7. Private: the hint, nothing reaches Risi
+DEV=A; private_tab || fail "A: the DM's Private tab"
+inbox0="$(fx risi_inbox_dm)"
+{ tap "Encrypted message" || tap "Message"; } || true; sleep 0.5
+typ "@Risi rcq5 move me"; sleep 1.5
+if [ -n "$(node_xy "~Risi only works in Official")" ]; then
+  shot private-hint
+  pass private_hint
+else
+  shot private-hint
+  bad private_hint "no 'Risi only works in Official. Move this to Official?' hint in Private"
+fi
+sleep 3
+[ "$(asked_model rcq5)" = 0 ] && [ "$(fx risi_inbox_dm)" = "$inbox0" ] && [ "$inbox0" = "rctest: risi_inbox_dm=0" ] && pass private_nothing_to_risi \
+  || bad private_nothing_to_risi "Private reached Risi or the model ($(asked_model rcq5) model requests, $(fx risi_inbox_dm))"
+if tap "Move to Official"; then
+  sleep 2
+  official_tab || true
+  t="$(field_text)"
+  shot moved
+  case "$t" in *"rcq5 move me"*) pass move_to_official_carries_text;; *) bad move_to_official_carries_text "the Official composer holds '$t'";; esac
+  n0="$(risi_msgs A dm)"
+  compose_send || true
+  wait_answer "rca5" A dm "$n0" 60 && pass moved_question_answered || bad moved_question_answered "the moved @Risi question wasn't answered"
+  shot moved-answer
+else
+  bad move_to_official_carries_text "no 'Move to Official' button"
+fi
+[ "$(asked_model rcq5)" -le 1 ] || bad private_nothing_to_risi "the moved question reached the model more than once"
+
+# ---------------------------------------------------------------- 8. crash / ANR
+logcat_ok "final"
+pass logcat_clean
+[ "$SHOTS" = 1 ] && { cp "$SHOTDIR"/66-risi-*.png "$REPO/docs/status/screens/"; echo "==> screens copied to docs/status/screens/66-risi-*.png"; }
+if [ -n "$FAILED" ]; then RESULT=FAIL; REASON="failed:$FAILED"; write_result; echo "RCTEST FAILED:$FAILED"; exit 1; fi
+RESULT=PASS; REASON=ok; write_result
+echo "RCTEST OK"
