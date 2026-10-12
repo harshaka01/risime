@@ -77,6 +77,29 @@ fun isRisiChat(conversationId: String, rows: Map<String, ChatTabEntity>?): Boole
 fun serverSaysRisiChat(conversationId: String, tab: String?, chatId: String?, chatKind: String?): Boolean =
     chatKind == ChatTabEntity.KIND_RISI && tab == ChatTabEntity.TAB_OFFICIAL && chatId != null && chatId.equals(conversationId, ignoreCase = true)
 
+/**
+ * P0 2026-10-12 bug D repair (a phone already stuck on nightly.1): local groups with no MLS-derived row whose
+ * current members are only me and agents (Risi): a Risi chat this phone lost its state for. They are shown as
+ * the Risi chat ([ChatTabs.notePendingRisi]); nothing is deleted (hard rule 9).
+ */
+fun localRisiChatCandidates(
+    groups: List<ai.risicloud.risime.data.db.GroupEntity>,
+    members: List<ai.risicloud.risime.data.db.GroupMemberEntity>,
+    rows: Map<String, ChatTabEntity>,
+    me: String,
+): Set<String> {
+    val byConv = members.filter { it.current }.groupBy { it.conversationId.lowercase() }
+    return groups.asSequence()
+        .filter { !it.readOnly && it.conversationId.startsWith("grp:") && rows[it.conversationId.lowercase()] == null }
+        .map { it.conversationId.lowercase() }
+        .filter { conv ->
+            val ms = byConv[conv].orEmpty()
+            val humans = ms.filter { it.kind != ai.risicloud.risime.net.GroupMember.KIND_AGENT }.map { it.userId.lowercase() }.toSet()
+            humans == setOf(me.lowercase()) && ms.any { it.kind == ai.risicloud.risime.net.GroupMember.KIND_AGENT }
+        }
+        .toSet()
+}
+
 /** §25.2 a Risi chat per its MLS-derived row, or (no row yet) per the server's hint [pendingRisi]. */
 fun isRisiChatOrPending(conversationId: String, rows: Map<String, ChatTabEntity>?, pendingRisi: Set<String>): Boolean {
     val key = conversationId.lowercase()
@@ -271,6 +294,16 @@ class ChatTabs(
         }
         if (t.official) _starting.update { it - t.chatId.lowercase() }
         _rows.update { m -> m?.plus(conversationId.lowercase() to t) }
+    }
+
+    /** Bug D repair: local conversations recognised as a Risi chat with no MLS state ([localRisiChatCandidates]). */
+    fun notePendingRisi(conversationIds: Set<String>) {
+        val add = conversationIds.map { it.lowercase() }.filter { _rows.value?.containsKey(it) != true && it !in _pendingRisi.value }
+        if (add.isEmpty()) return
+        log("tabs: ${add.size} local conversation(s) repaired as the Risi chat")
+        _hints.update { it - add.toSet() }
+        _pendingRisi.update { it + add }
+        persistPendingRisi(_pendingRisi.value)
     }
 
     /**

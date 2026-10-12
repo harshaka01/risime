@@ -75,7 +75,16 @@ fun applyRisiRows(
     fun isRisi(r: ChatRow) = r.group && r.conversationId?.let { ai.risicloud.risime.data.tabs.isRisiChatOrPending(it, tabs, pendingRisi) } == true
     val (risi, others) = rows.partition(::isRisi)
     if (!risiOn) return others
-    val marked = risi.map { it.copy(name = ai.risicloud.risime.data.tabs.RISI_CHAT_NAME, risi = true, lastTab = null, lastSender = null) }
+    // Bug D: a Risi chat known only from the server or the local repair (no MLS state) with no message, next to
+    // another usable Risi chat, is a phantom: not listed (its conversation stays on the phone; hard rule 9).
+    fun empty(r: ChatRow) = r.last == null || (r.last.from.isEmpty() && r.last.body.isEmpty())
+    fun pending(r: ChatRow) = r.conversationId?.lowercase()?.let { tabs?.get(it) == null && it in pendingRisi } == true
+    val kept = if (risi.size <= 1) risi else {
+        val primary = risi.filter { !pending(it) && it.stateLine == null }.maxByOrNull { it.last?.localTs ?: 0L }
+            ?: risi.filter { !empty(it) }.maxByOrNull { it.last?.localTs ?: 0L } ?: risi.maxByOrNull { it.last?.localTs ?: 0L }
+        risi.filter { it === primary || !(pending(it) && empty(it)) }
+    }
+    val marked = kept.map { it.copy(name = ai.risicloud.risime.data.tabs.RISI_CHAT_NAME, risi = true, lastTab = null, lastSender = null) }
         .sortedByDescending { it.last?.localTs ?: 0L }
     val usable = marked.any { it.stateLine == null || it.stateLine == "Creating…" }
     val entry = if (usable || tabs == null) emptyList() else listOf(

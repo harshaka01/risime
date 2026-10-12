@@ -534,7 +534,10 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
      */
     val risi: ai.risicloud.risime.ui.tabs.RisiHost = object : ai.risicloud.risime.ui.tabs.RisiHost {
         private val requests = ai.risicloud.risime.data.tabs.RisiRequests(
-            isOfficial = { c.db.chatTabs().get(conversationId)?.official == true },
+            // Bug D: the Risi chat while its MLS state is being rebuilt (server-listed, [ChatTabs.pendingRisi]) takes the
+            // ask too: it waits PENDING in the outbox (groups are e2ee-only) and goes out once the rebuild landed; the
+            // outbox re-checks the MLS meta before it encrypts (ChatEngine), so it never reaches a Private group.
+            isOfficial = { c.db.chatTabs().get(conversationId)?.official == true || conversationId.lowercase() in c.chatTabs.pendingRisi.value },
             send = { c.engine.sendRisiControl(conversationId, it) },
         )
 

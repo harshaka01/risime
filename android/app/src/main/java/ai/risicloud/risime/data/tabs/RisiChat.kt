@@ -23,6 +23,9 @@ const val RISI_CHAT_HINT = "Ask Risi…"
 const val RISI_CHAT_SUBTITLE = "Only you and Risi are in this chat"
 const val RISI_CHAT_EMPTY_PREVIEW = "Ask Risi anything"
 
+/** Bug D: the Risi chat's only state line while this phone has no MLS state for it yet (after a reinstall). */
+const val RISI_CHAT_RECONNECTING = "Reconnecting to Risi…"
+
 fun risiChatErrorText(code: String?): String = when (code) {
     TabsErrors.AGENT_UNAVAILABLE -> "Risi isn't available right now. Try again later."
     "invalid_device" -> "Update RisiMe to chat with Risi on this phone."

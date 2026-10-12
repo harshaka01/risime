@@ -103,6 +103,44 @@ class RisiChatTest {
         assertTrue(isRisiChatOrPending(risiConv, tabs, emptySet()))
     }
 
+    // ---- bug D repair: a phone already stuck on nightly.1 ----
+
+    private fun member(conv: String, user: String, kind: String = "user", state: String = "active") =
+        ai.risicloud.risime.data.db.GroupMemberEntity(conv, user, user, null, "member", kind, state, null)
+
+    private fun group(conv: String, state: String = "active") =
+        ai.risicloud.risime.data.db.GroupEntity(conv, null, "admin", state, null, null, 1, null, null, null, 1)
+
+    @Test fun repairFindsLocalGroupsOfOnlyMeAndRisiWithNoMlsRow() {
+        val stuck = "grp:aaaaaaaa-0000-4000-8000-000000000001"
+        val team = "grp:aaaaaaaa-0000-4000-8000-000000000002"
+        val left = "grp:aaaaaaaa-0000-4000-8000-000000000003"
+        val members = listOf(
+            member(stuck, me), member(stuck, "risi", kind = "agent"),
+            member(team, me), member(team, "kamal"), member(team, "risi", kind = "agent"),
+            member(left, me), member(left, "risi", kind = "agent"),
+            member(risiConv, me), member(risiConv, "risi", kind = "agent"),
+            member(other, me),
+        )
+        val groups = listOf(group(stuck), group(team), group(left, state = "left"), group(risiConv), group(other))
+        // risiConv already has its MLS row; `other` has only me (no agent); `team` has another human.
+        assertEquals(setOf(stuck), localRisiChatCandidates(groups, members, tabs, me.uppercase()))
+    }
+
+    @Test fun anEmptyPhantomRisiChatIsNotListedButOneWithMessagesIsKept() {
+        val phantom = "grp:bbbbbbbb-0000-4000-8000-000000000001"
+        val withMsgs = "grp:bbbbbbbb-0000-4000-8000-000000000002"
+        val pending = setOf(phantom, withMsgs)
+        val empty = groupRow(phantom, "Rejoining group…").copy(last = LastMessage(phantom, "", 5, false, "READ"))
+        val rows = listOf(groupRow(risiConv, "", 100), empty, groupRow(withMsgs, "Rejoining group…", 50).copy(last = LastMessage(withMsgs, "hi", 50, true, "READ", from = me)))
+        val out = applyRisiRows(rows, tabs, risiOn = true, pendingRisi = pending)
+        assertEquals("never a message hidden (rule 9); the empty phantom is gone", listOf(risiConv, withMsgs), out.filter { it.risi }.map { it.conversationId })
+        assertTrue(out.none { it.name == "Rejoining group…" || it.name == "Group" })
+        // Only phantoms: one Risi row (the newest), never zero, never the create entry next to it.
+        val only = applyRisiRows(listOf(empty), emptyMap(), risiOn = true, pendingRisi = setOf(phantom))
+        assertEquals(listOf(phantom), only.map { it.conversationId })
+    }
+
     @Test fun theServerSaysRisiChatOnlyForItsExactShape() {
         assertTrue(serverSaysRisiChat(risiConv, "official", risiConv.uppercase(), "risi"))
         assertFalse(serverSaysRisiChat(risiConv, "official", other, "risi"))

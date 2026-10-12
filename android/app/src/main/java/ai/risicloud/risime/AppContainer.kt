@@ -777,6 +777,20 @@ class AppContainer(
 
     private val risiChatEnsured = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /**
+     * P0 2026-10-12 bug D, a phone already stuck (nightly.1): a local group with no MLS state whose members are only
+     * me and Risi is the Risi chat: shown as such (never "Rejoining group…"), its rejoin/reset runs as for any Risi
+     * chat. Nothing is deleted.
+     */
+    private suspend fun repairLocalRisiChats() {
+        runCatching {
+            val me = sessionStore.current()?.user?.id ?: return
+            val rows = chatTabs.rows.first { it != null } ?: return
+            val found = ai.risicloud.risime.data.tabs.localRisiChatCandidates(db.groups().allNow(), db.groups().observeAllMembers().first(), rows, me)
+            if (found.isNotEmpty()) chatTabs.notePendingRisi(found)
+        }.onFailure { Log.w("RisiMe", "risi chat repair: ${it.message}") }
+    }
+
     /** §27.10 once per process: create the Risi chat when this phone has none (POST /risi/chat is idempotent). */
     private suspend fun ensureRisiChat() {
         if (risiChatEnsured.get()) return
@@ -1376,6 +1390,7 @@ class AppContainer(
                 chatTabs.setAdvertised(tabs)
                 val risi = ai.risicloud.risime.net.DeviceMls.CAP_RISI_TOOLS in caps
                 risiTools.setAdvertised(risi)
+                if (risi) scope.launch(Dispatchers.IO) { repairLocalRisiChats() }
                 if (!risi) risiProgress.clear()
                 val skills = ai.risicloud.risime.net.DeviceMls.CAP_RISI_SKILLS in caps
                 risiSkills.setAdvertised(skills)
@@ -1531,6 +1546,11 @@ class AppContainer(
         sessionStore.current()?.let { it.kind == AuthKind.DEV || auth.hasSession() } ?: false
 
     init {
+        // Bug D: an ask typed while the Risi chat was being rebuilt goes out once its MLS state exists here.
+        scope.launch(Dispatchers.IO) {
+            var before = chatTabs.pendingRisi.value
+            chatTabs.pendingRisi.collect { now -> if ((before - now).isNotEmpty()) runCatching { engine.flushOutbox() }; before = now }
+        }
         // Decision 064: read the token vault at process start, with no UI (a push-started process too).
         // A Keystore that doesn't answer yet (busy after boot) keeps RESTORING: read again with backoff.
         scope.launch(Dispatchers.IO) {

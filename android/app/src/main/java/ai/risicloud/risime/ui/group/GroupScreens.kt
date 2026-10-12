@@ -306,7 +306,9 @@ fun GroupChatScreen(
             ai.risicloud.risime.ui.chat.SelectionBarFor(vm.del, messages, selection, x)
             ai.risicloud.risime.ui.chat.MessagingHost(x, starredOpen, onStarredClose = { starredOpen = false }, groupInfo = { m -> m.messageId?.let(vm::openReadBy) })
             ai.risicloud.risime.ui.chat.DeleteHost(vm.del, clearAsk, onClearAskDone = { clearAsk = null }, onDeletedChat = onBack)
-            e2eeStrip?.let { strip ->
+            // Bug D: the Risi chat is one pane; while this phone (re)builds its encryption it says so plainly, never
+            // "Setting up encryption on this phone…" (decision 048: no lock is shown until it is encrypted).
+            (if (risiChat) e2eeStrip?.let { ai.risicloud.risime.data.tabs.RISI_CHAT_RECONNECTING } else e2eeStrip)?.let { strip ->
                 Text(
                     strip,
                     Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs),

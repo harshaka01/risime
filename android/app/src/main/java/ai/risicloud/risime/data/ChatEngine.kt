@@ -1065,6 +1065,8 @@ class ChatEngine(
         if (m.risiCtl) {
             // §24.11: the stored envelope, encrypted at send time; Official only (a group), never plaintext.
             val json = m.systemJson ?: return PushResult.Rejected(AuthErrors.BAD_REQUEST)
+            // Bug D: an ask queued before the MLS state existed goes only to a group whose MLS meta says Official.
+            mlsEngine()?.let { e -> if (e.group(m.conversationId) != null && e.groupMeta(m.conversationId)?.official != true) return PushResult.Rejected(AuthErrors.NOT_E2EE) }
             return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { json.toByteArray(Charsets.UTF_8) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
         if (m.media) {
