@@ -542,6 +542,17 @@ class ChatEngine(
                     } || incoming
                 }
             }
+            if (r is MlsResult.Voice) {
+                // §37.2/§37.3: a voice note keeps its key like an image (sealed media row); it auto-downloads on any network.
+                val hooks = images
+                if (hooks != null) {
+                    val meta = ai.risicloud.risime.data.media.VoiceMeta.of(r.envelope).encode()
+                    incoming = applyMessage(me, r.message, "", MessageEntity.KIND_VOICE, r.envelope.blob.blobId, systemJson = meta, extras = r.envelope.extras) { row ->
+                        hooks.storedVoice(row, r.envelope)
+                        imagesStored = true
+                    } || incoming
+                }
+            }
             if (r is MlsResult.Reaction) {
                 applyReaction(r.message.conversationId, r.target, r.message.from, r.emoji, r.op, r.message.serverTs, r.message.messageId, r.message.clientMsgId)
             }
@@ -1059,6 +1070,14 @@ class ChatEngine(
     private suspend fun applyStatus(s: StatusData) {
         val row = messages.byClientMsgId(s.clientMsgId) ?: messages.byMessageId(s.messageId) ?: return
         if (!row.outgoing) return
+        if (s.status == ai.risicloud.risime.net.ACK_PLAYED) {
+            // §37.4: `played` implies `read` (status only moves forward) and turns the mic blue.
+            val current = MessageStatus.valueOf(row.status)
+            val next = current.advance(MessageStatus.READ)
+            if (next != current || row.messageId == null) messages.updateStatus(row.clientMsgId, next.name, s.messageId, null, null)
+            messages.setOutgoingPlayed(row.clientMsgId, HistoryMarkers.epochMs(s.at) ?: clock())
+            return
+        }
         val incoming = MessageStatus.fromWire(s.status) ?: return
         val current = MessageStatus.valueOf(row.status)
         val next = current.advance(incoming)
@@ -1657,6 +1676,23 @@ class ChatEngine(
                 }
             }
         }
+        // §37.4: `played` once per received voice note, after its `read` (the server records both if needed).
+        for (chunk in messages.unackedPlayed().chunked(ACK_BATCH)) {
+            when (realtime().ack(chunk.mapNotNull { it.messageId }, ai.risicloud.risime.net.ACK_PLAYED)) {
+                is PushResult.Ok, is PushResult.Rejected -> messages.setAcked(chunk.map { it.clientMsgId }, MessageEntity.ACKED_PLAYED)
+                PushResult.Unavailable -> return@withLock
+            }
+        }
+    }
+
+    /**
+     * §37.4: playback of a received voice note started on this device. The first time only: the unplayed dot goes,
+     * the row is read, and the `played` ack is sent (never for my own notes, never for other types).
+     */
+    suspend fun markPlayed(clientMsgId: String) {
+        val row = messages.byClientMsgId(clientMsgId) ?: return
+        if (row.outgoing || !row.voice) return
+        if (messages.setPlayed(clientMsgId, clock()) > 0) flushAcks()
     }
 
     companion object {

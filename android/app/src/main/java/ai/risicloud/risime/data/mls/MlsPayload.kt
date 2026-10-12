@@ -34,6 +34,9 @@ object MlsPayload {
         /** §11.2: an encrypted reaction (op "add" sets, "remove" clears). */
         data class Reaction(val target: String, val emoji: String, val op: String) : Decoded
 
+        /** v1.41 §37.2: a strictly validated `voice` envelope. */
+        data class Voice(val envelope: ai.risicloud.risime.data.media.VoiceEnvelope) : Decoded
+
         /** §14.4: a strictly validated image envelope. */
         data class Image(val envelope: ai.risicloud.risime.data.media.ImageEnvelope) : Decoded
 
@@ -130,6 +133,10 @@ object MlsPayload {
         if (type == ai.risicloud.risime.data.media.FileEnvelope.TYPE) {
             // §33.13: a bad name (or blob/enc) → dropped as malformed and logged; `parts` → a placeholder.
             return ai.risicloud.risime.data.media.FileEnvelope.validate(obj)?.let { Decoded.File(it) } ?: Decoded.Ignored("file (malformed)")
+        }
+        if (type == ai.risicloud.risime.data.media.VoiceEnvelope.TYPE) {
+            // §37.2: malformed (blob/enc, mime, duration, a waveform that isn't 64 bytes) → dropped and logged.
+            return ai.risicloud.risime.data.media.VoiceEnvelope.validate(obj)?.let { Decoded.Voice(it) } ?: Decoded.Ignored("voice (malformed)")
         }
         if (type == ai.risicloud.risime.data.media.ImageEnvelope.TYPE) {
             // §14.4: malformed → dropped and logged like an unknown type (never stored, fetched or decoded).

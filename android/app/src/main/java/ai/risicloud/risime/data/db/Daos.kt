@@ -74,7 +74,7 @@ interface MessageDao {
     /** Incoming messages whose local status is ahead of what the server has confirmed. */
     @Query(
         "SELECT * FROM messages WHERE outgoing = 0 AND message_id IS NOT NULL " +
-            "AND (acked_status IS NULL OR acked_status != status) ORDER BY local_ts ASC",
+            "AND (acked_status IS NULL OR (acked_status != status AND acked_status != 'PLAYED')) ORDER BY local_ts ASC",
     )
     suspend fun unackedIncoming(): List<MessageEntity>
 
@@ -94,6 +94,34 @@ interface MessageDao {
     @Query("UPDATE messages SET acked_status = :acked WHERE client_msg_id IN (:clientMsgIds)")
     suspend fun setAcked(clientMsgIds: List<String>, acked: String)
 
+    /**
+     * §37.4: playback of a received voice note started on this device for the first time: `played_at` (the unplayed
+     * dot goes) and `read` (played implies read). 1 = first play (the `played` ack is owed), 0 = played before.
+     */
+    @Query(
+        "UPDATE messages SET played_at = :at, status = 'READ' WHERE client_msg_id = :clientMsgId AND outgoing = 0 AND kind = 'voice' AND played_at IS NULL",
+    )
+    suspend fun setPlayed(clientMsgId: String, at: Long): Int
+
+    /** §37.4: received voice notes played on this device whose `played` ack the server hasn't confirmed. */
+    @Query(
+        "SELECT * FROM messages WHERE outgoing = 0 AND kind = 'voice' AND message_id IS NOT NULL AND played_at IS NOT NULL " +
+            "AND (acked_status IS NULL OR acked_status != 'PLAYED') ORDER BY local_ts ASC",
+    )
+    suspend fun unackedPlayed(): List<MessageEntity>
+
+    /** §37.4 my own voice note was played (DM `status: played`, or a group's `all_played`): the blue mic. First time wins. */
+    @Query("UPDATE messages SET played_at = COALESCE(played_at, :at), read_at = COALESCE(read_at, :at), delivered_at = COALESCE(delivered_at, :at) WHERE client_msg_id = :clientMsgId AND outgoing = 1")
+    suspend fun setOutgoingPlayed(clientMsgId: String, at: Long): Int
+
+    /** §37.4 a group voice note's `played` count (and the blue mic once all played). */
+    @Query("UPDATE messages SET receipt_played = :played WHERE message_id = :messageId AND outgoing = 1")
+    suspend fun setGroupPlayed(messageId: String, played: Int): Int
+
+    /** §37.3 auto-play: the received voice notes of a conversation, in order (the next unplayed one follows). */
+    @Query("SELECT * FROM messages WHERE conversation_id = :conversationId AND kind = 'voice' ORDER BY local_ts ASC")
+    suspend fun voiceNotesIn(conversationId: String): List<MessageEntity>
+
     @Query(
         "UPDATE messages SET status = 'READ' WHERE conversation_id = :conversationId AND outgoing = 0 AND status != 'READ'",
     )
@@ -106,7 +134,7 @@ interface MessageDao {
     suspend fun lastInConversation(conversationId: String): MessageEntity?
 
     @Query(
-        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind, deleted_by, deleted_by_admin, delete_state, CASE WHEN kind = 'file' THEN system_json ELSE NULL END AS system_json, e2ee, from_device FROM messages m " +
+        "SELECT conversation_id, body, local_ts, outgoing, status, from_id, kind, deleted_by, deleted_by_admin, delete_state, CASE WHEN kind IN ('file', 'voice') THEN system_json ELSE NULL END AS system_json, e2ee, from_device FROM messages m " +
             "WHERE local_ts = (SELECT MAX(local_ts) FROM messages WHERE conversation_id = m.conversation_id) " +
             "GROUP BY conversation_id",
     )
@@ -390,7 +418,7 @@ interface DeleteDao {
     @Query(
         "UPDATE messages SET kind = 'deleted', body = '', system_json = NULL, blob_id = NULL, forward_hops = NULL, reply_to_message_id = NULL, reply_to_from = NULL, deleted_by = :by, " +
             "deleted_by_admin = :byAdmin, deleted_at = :at, delete_state = NULL, delete_unverified = 0, " +
-            "receipt_delivered = NULL, receipt_read = NULL, receipt_of = NULL, fail_reason = NULL, " +
+            "receipt_delivered = NULL, receipt_read = NULL, receipt_of = NULL, receipt_played = NULL, played_at = NULL, fail_reason = NULL, " +
             "status = CASE WHEN outgoing = 0 THEN 'READ' ELSE status END, " +
             "acked_status = CASE WHEN outgoing = 0 THEN 'READ' ELSE acked_status END " +
             "WHERE client_msg_id = :clientMsgId",
@@ -487,14 +515,21 @@ interface MediaDao {
     /** Downloadable images, newest message first (§14.7 Receiving 7). */
     @Query(
         "SELECT x.* FROM media x JOIN messages m ON m.client_msg_id = x.client_msg_id " +
-            "WHERE x.state IN ('NONE', 'DOWNLOADING') AND x.blob_id IS NOT NULL AND (x.w > 0 OR x.blob_size <= 2097200) ORDER BY m.local_ts DESC",
+            "WHERE x.state IN ('NONE', 'DOWNLOADING') AND x.blob_id IS NOT NULL AND (x.w > 0 OR x.blob_size <= 2097200 OR m.kind = 'voice') ORDER BY m.local_ts DESC",
     )
     suspend fun downloadable(): List<MediaEntity>
+
+    /** §37.3 received voice notes auto-download on any network: the ones not on the phone yet, newest first. */
+    @Query(
+        "SELECT x.* FROM media x JOIN messages m ON m.client_msg_id = x.client_msg_id " +
+            "WHERE x.state IN ('NONE', 'DOWNLOADING') AND x.blob_id IS NOT NULL AND m.kind = 'voice' ORDER BY m.local_ts DESC",
+    )
+    suspend fun downloadableVoice(): List<MediaEntity>
 
     /** Rows with a cache file, with their message's status (eviction, R4). */
     @Query(
         "SELECT x.client_msg_id, x.file_name, x.blob_size, x.last_access, x.expires_at_est, x.outgoing, x.state, m.status AS message_status " +
-            "FROM media x JOIN messages m ON m.client_msg_id = x.client_msg_id WHERE x.file_name IS NOT NULL",
+            "FROM media x JOIN messages m ON m.client_msg_id = x.client_msg_id WHERE x.file_name IS NOT NULL AND m.kind != 'voice'",
     )
     suspend fun cached(): List<CachedMedia>
 

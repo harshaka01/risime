@@ -72,8 +72,19 @@ data class MessageEntity(
      * explicitly allowed to go without encryption ("Send without encryption"); null = a row from before v17 (unknown).
      */
     @ColumnInfo(name = "e2ee") val e2ee: String? = null,
+    /**
+     * v18 (§37.4 voice notes): an incoming voice note: when this device first played it (the unplayed dot; the
+     * `played` ack goes once: [ackedStatus] becomes [ACKED_PLAYED]). My own voice note: when it was played (DM
+     * `status: played`) or played by everyone (group `all_played`): the blue mic. Null otherwise.
+     */
+    @ColumnInfo(name = "played_at") val playedAt: Long? = null,
+    /** v18 (§37.4): a group voice note's `played` count from `group_receipt` (null: none yet). */
+    @ColumnInfo(name = "receipt_played") val receiptPlayed: Int? = null,
 ) {
     val system: Boolean get() = kind == KIND_SYSTEM
+
+    /** v1.41 §37 a voice note ([systemJson] = [ai.risicloud.risime.data.media.VoiceMeta]; [body] = ""). */
+    val voice: Boolean get() = kind == KIND_VOICE
 
     /** Sent or received without end-to-end encryption (shown with ⚠ Not encrypted). */
     val notEncrypted: Boolean get() = e2ee == E2EE_PLAIN
@@ -82,8 +93,8 @@ data class MessageEntity(
     /** v1.34 §33.13 a `file` message ([systemJson] = [ai.risicloud.risime.data.media.FileMeta]; [body] = the caption). */
     val file: Boolean get() = kind == KIND_FILE
 
-    /** A row with a media blob (§15.2 "media targets": image and file). */
-    val media: Boolean get() = image || file
+    /** A row with a media blob (§15.2 "media targets": image, file and, from v1.41, voice). */
+    val media: Boolean get() = image || file || voice
 
     val isViewOnce: Boolean get() = viewOnce == true
     val call: Boolean get() = kind == KIND_CALL
@@ -106,6 +117,12 @@ data class MessageEntity(
 
         /** v1.34 §33.13 a file (Room: `kind` is text, no schema change). */
         const val KIND_FILE = "file"
+
+        /** v1.41 §37 a voice note (`kind` is text; v18 adds only `played_at` / `receipt_played`). */
+        const val KIND_VOICE = "voice"
+
+        /** §37.4: [ackedStatus] once the `played` ack of an incoming voice note was sent. */
+        const val ACKED_PLAYED = "PLAYED"
 
         /** v8 (§16.6): a call-history line ("Missed voice call"); [body] = the line from this user's perspective. */
         const val KIND_CALL = "call"

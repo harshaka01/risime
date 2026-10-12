@@ -115,6 +115,10 @@ data class BackupMessageLine(
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("starred_at") val starredAt: String? = null,
+    /** v1.41 §37.5: an incoming voice note: when this user first played it; absent otherwise. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("played_at") val playedAt: String? = null,
 ) {
     companion object {
         const val TYPE = "message"

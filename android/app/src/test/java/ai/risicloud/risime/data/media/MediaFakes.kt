@@ -40,7 +40,9 @@ class FakeMediaDao(private val messages: FakeMessageDao) : MediaDao {
         .filter { it.state in setOf("NONE", "DOWNLOADING") && it.blobId != null && messages.rows[it.clientMsgId] != null }
         .sortedByDescending { messages.rows[it.clientMsgId]!!.localTs }
 
-    override suspend fun cached() = rows.value.values.filter { it.fileName != null && messages.rows[it.clientMsgId] != null }.map {
+    override suspend fun downloadableVoice() = downloadable().filter { messages.rows[it.clientMsgId]?.voice == true }
+
+    override suspend fun cached() = rows.value.values.filter { it.fileName != null && messages.rows[it.clientMsgId] != null && messages.rows[it.clientMsgId]?.voice != true }.map {
         CachedMedia(it.clientMsgId, it.fileName!!, it.blobSize, it.lastAccess, it.expiresAtEst, it.outgoing, it.state, messages.rows[it.clientMsgId]!!.status)
     }
 

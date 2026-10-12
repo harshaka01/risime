@@ -74,13 +74,13 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         /** Bump together with a new exported schema (app/schemas) and a Migration in [MIGRATIONS]. */
-        const val VERSION = 17
+        const val VERSION = 18
 
         /**
          * One step per version (n-1 → n). Installed release builds must keep their data, so there is
          * no destructive fallback: a missing migration crashes on open instead of wiping chats.
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13, Migration13To14, Migration14To15, Migration15To16, Migration16To17)
+        val MIGRATIONS: Array<Migration> = arrayOf(Migration1To2, Migration2To3, Migration3To4, Migration4To5, Migration5To6, Migration6To7, Migration7To8, Migration8To9, Migration9To10, Migration10To11, Migration11To12, Migration12To13, Migration13To14, Migration14To15, Migration15To16, Migration16To17, Migration17To18)
 
         fun create(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "risime.db")
@@ -383,6 +383,22 @@ object Migration15To16 : Migration(15, 16) {
  */
 object Migration16To17 : Migration(16, 17) {
     val SQL = listOf("ALTER TABLE `messages` ADD COLUMN `e2ee` TEXT")
+
+    override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
+
+    override fun migrate(connection: SQLiteConnection) = SQL.forEach { connection.execSQL(it) }
+}
+
+/**
+ * v18 (v1.41 §37 voice notes, hard rule 9): two nullable columns on `messages`, `played_at` (the unplayed dot / blue
+ * mic) and `receipt_played` (a group note's `played` count). A voice note's row is an ordinary `kind = 'voice'` row
+ * (text column, no schema change); no existing row is changed or removed.
+ */
+object Migration17To18 : Migration(17, 18) {
+    val SQL = listOf(
+        "ALTER TABLE `messages` ADD COLUMN `played_at` INTEGER",
+        "ALTER TABLE `messages` ADD COLUMN `receipt_played` INTEGER",
+    )
 
     override fun migrate(db: SupportSQLiteDatabase) = SQL.forEach(db::execSQL)
 

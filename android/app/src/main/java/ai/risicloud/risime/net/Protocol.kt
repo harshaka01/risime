@@ -377,9 +377,14 @@ data class AuthConfig(
     @SerialName("google_calendar") val googleCalendar: String? = null,
     /** §36.1 (v1.39): the call-transcription fast path; "on" | "off"; absent = off (the kill switch). */
     @SerialName("call_transcribe") val callTranscribe: String? = null,
+    /** §37.1 (v1.41): Risi transcribes Official voice notes; "on" | "off"; absent = off (the kill switch for §37.6 only). */
+    @SerialName("voice_transcribe") val voiceTranscribe: String? = null,
 ) {
     /** §36.1: the server takes `call:transcribe` pushes and chunk uploads; only then the app advertises `call_transcribe`. */
     val callTranscribeOn: Boolean get() = callTranscribe == "on"
+
+    /** §37.1: Risi transcribes Official voice notes now (drives the one-time Official note only; notes work either way). */
+    val voiceTranscribeOn: Boolean get() = voiceTranscribe == "on"
 
     /** §31.1: the Google Calendar link on the server; only then does the app advertise `google_calendar` (with `risi_events`). */
     val googleCalendarOn: Boolean get() = googleCalendar == "on"
@@ -719,6 +724,9 @@ data class DeviceMls(
         /** v1.34 §33.1: receive, validate and open the `file` envelope. */
         const val CAP_FILES = CAPABILITY_FILES
 
+        /** v1.41 §37.1: send, receive, play and render voice notes (with `voice_transcript`), and understand `played`. */
+        const val CAP_VOICE = CAPABILITY_VOICE
+
         /** v1.34 §33.1: the Risi `export_pdf` tool and the `pdf` chip (kept only with `risi_tools`). */
         const val CAP_PDF_EXPORT = CAPABILITY_PDF_EXPORT
 
@@ -810,6 +818,9 @@ data class MlsGroup(
     /** v1.34 §33.1: as `images_ready`, for the `file` envelope (`files` capability). A hint only. */
     @SerialName("files_ready") val filesReady: Boolean = false,
     @SerialName("missing_files") val missingFiles: List<MissingImages> = emptyList(),
+    /** v1.41 §37.1: as `files_ready`, for the `voice` envelope (`voice` capability). The mic shows only when true. */
+    @SerialName("voice_ready") val voiceReady: Boolean = false,
+    @SerialName("missing_voice") val missingVoice: List<MissingImages> = emptyList(),
     /** §20.1 members' instances seen in 30 days without `group_calls` (information only). */
     @SerialName("missing_group_calls") val missingGroupCalls: List<MissingImages> = emptyList(),
     /** v1.33 §20.1: `"server"` while the server has no LiveKit (`group_calls_ready` is then false); absent otherwise. */
@@ -1197,6 +1208,9 @@ data class GroupReceiptEvent(
     val of: Int,
     @SerialName("all_delivered") val allDelivered: Boolean,
     @SerialName("all_read") val allRead: Boolean,
+    /** v1.41 §37.4: present once the voice note has a `played` ack (absent = 0 / false). */
+    val played: Int? = null,
+    @SerialName("all_played") val allPlayed: Boolean? = null,
     val at: String? = null,
 )
 
@@ -1205,6 +1219,8 @@ data class GroupReceipt(
     @SerialName("user_id") val userId: String,
     @SerialName("delivered_at") val deliveredAt: String? = null,
     @SerialName("read_at") val readAt: String? = null,
+    /** v1.41 §37.4. */
+    @SerialName("played_at") val playedAt: String? = null,
 )
 
 @Serializable

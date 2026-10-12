@@ -150,6 +150,11 @@ class ApiClient(
 
     suspend fun putRisiDev(settings: RisiDevSettings): ApiResult<RisiDevSettings> = call("PUT", "me/risi/dev", settings)
 
+    /** v1.41 §37.7 the sender's voice-note settings (Settings → Risi). */
+    suspend fun risiVoice(): ApiResult<RisiVoiceSettings> = call<Unit, RisiVoiceSettings>("GET", "me/risi/voice", null)
+
+    suspend fun putRisiVoice(settings: RisiVoiceSettings): ApiResult<RisiVoiceSettings> = call("PUT", "me/risi/voice", settings)
+
     // ---- §24 (v1.24) chats and their tabs (tabs devices only) ----
 
     suspend fun chats(deviceId: String): ApiResult<ChatsReply> = call<Unit, ChatsReply>("GET", "chats", null, headers = mapOf(DEVICE_HEADER to deviceId))

@@ -22,6 +22,9 @@ sealed interface MlsResult {
     /** v1.34 §33.13: a decrypted, validated `file` envelope (a `parts` file is a placeholder row without media). */
     data class File(val message: MessageData, val envelope: ai.risicloud.risime.data.media.FileEnvelope) : MlsResult
 
+    /** v1.41 §37.2: a decrypted, validated `voice` envelope (stored with its key in the same transaction). */
+    data class Voice(val message: MessageData, val envelope: ai.risicloud.risime.data.media.VoiceEnvelope) : MlsResult
+
     /** §14.4: a decrypted, validated image envelope (stored with its thumbnail in the same transaction). */
     data class Image(val message: MessageData, val envelope: ai.risicloud.risime.data.media.ImageEnvelope) : MlsResult
 
@@ -341,6 +344,7 @@ class MlsPipeline(
                     is MlsPayload.Decoded.Reaction -> MlsResult.Reaction(msg, p.target, p.emoji, p.op)
                     is MlsPayload.Decoded.Image -> MlsResult.Image(msg, p.envelope)
                     is MlsPayload.Decoded.File -> MlsResult.File(msg, p.envelope)
+                    is MlsPayload.Decoded.Voice -> MlsResult.Voice(msg, p.envelope)
                     // §15.3: a delete envelope is only valid in a `delete` event; in a `message` event it is dropped and logged.
                     is MlsPayload.Decoded.Delete -> {
                         log("delete envelope in a message event ${msg.messageId}: dropped")

@@ -23,6 +23,9 @@ interface ImageHooks {
     /** v1.34 §33.13: a `file` with a blob, inside the event's transaction (nothing fetched here). */
     suspend fun storedFile(row: MessageEntity, envelope: FileEnvelope) {}
 
+    /** v1.41 §37.2: a `voice` note, inside the event's transaction (nothing fetched here). */
+    suspend fun storedVoice(row: MessageEntity, envelope: VoiceEnvelope) {}
+
     /** After the events' transactions: schedule downloads. */
     fun received()
 
@@ -162,6 +165,20 @@ class ImageRepository(
         )
     }
 
+    override suspend fun storedVoice(row: MessageEntity, envelope: VoiceEnvelope) {
+        val sent = row.serverTs?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: clock()
+        media.insert(
+            MediaEntity(
+                clientMsgId = row.clientMsgId, conversationId = row.conversationId, outgoing = row.outgoing, state = MediaState.NONE.name,
+                blobId = envelope.blob.blobId, blobSize = envelope.blob.size, blobSha256 = envelope.blob.sha256, clientBlobId = null,
+                sealedEnc = sealer.sealEnc(row.clientMsgId, envelope.enc), sealedThumb = null,
+                // A voice row (w = h = 0 like a file) is told apart by its message's kind: it always downloads, is never evicted (§37.3).
+                mime = envelope.mime, w = 0, h = 0, fileName = null,
+                expiresAtEst = sent + ImageUploader.FETCHABLE_MS, lastAccess = clock(),
+            ),
+        )
+    }
+
     override fun received() = enqueueDownloads()
 
     fun thumb(clientMsgId: String, row: MediaEntity): ImageThumb? =
@@ -257,12 +274,69 @@ class ImageRepository(
         return row
     }
 
+    /**
+     * §37.3 a recorded voice note (Ogg/Opus bytes in memory) → encrypted with a fresh key into the blob file, then one
+     * transaction: the PENDING `voice` row and its media row (ENCRYPTED); then the upload job. The plaintext exists on
+     * disk only in `noBackupFilesDir/media/tmp` for the encrypt call and is deleted right after.
+     */
+    suspend fun commitVoice(
+        audio: ByteArray,
+        conversationId: String,
+        me: String,
+        to: String,
+        meta: VoiceMeta,
+        replyTo: ai.risicloud.risime.net.ReplyRef? = null,
+    ): MessageEntity {
+        val core = crypto() ?: throw ImageRejected("Voice notes need end-to-end encryption on this phone")
+        val id = newId()
+        val name = files.nameFor(id)
+        val plain = File(files.tmp, "$name.plain")
+        val sealed = try {
+            plain.writeBytes(audio)
+            core.encryptFile(plain, files.file(name))
+        } finally {
+            plain.delete()
+        }
+        if (sealed.cipherSize > MediaFormat.MAX_MEDIA_CIPHER) {
+            files.file(name).delete()
+            throw ImageRejected("This voice note is too long")
+        }
+        val row = MessageEntity(
+            clientMsgId = id, messageId = null, conversationId = conversationId, from = me, to = to,
+            body = "", serverTs = null, localTs = clock(), status = MessageStatus.PENDING.name, outgoing = true,
+            kind = MessageEntity.KIND_VOICE, systemJson = meta.encode(),
+            replyToMessageId = replyTo?.messageId, replyToFrom = replyTo?.from,
+        )
+        val enc = ImageEnc(sealed.alg, sealed.key, sealed.plainSize)
+        tx.run {
+            messages.insert(row)
+            media.insert(
+                MediaEntity(
+                    clientMsgId = id, conversationId = conversationId, outgoing = true, state = MediaState.ENCRYPTED.name,
+                    blobId = null, blobSize = sealed.cipherSize, blobSha256 = b64.encodeToString(sealed.sha256),
+                    clientBlobId = newId(), sealedEnc = sealer.sealEnc(id, enc), sealedThumb = null, mime = meta.mime, w = 0, h = 0,
+                    fileName = name, expiresAtEst = null, lastAccess = clock(),
+                ),
+            )
+        }
+        sealed.key.fill(0)
+        enqueueUpload(id)
+        return row
+    }
+
     override suspend fun envelope(clientMsgId: String): ByteArray? {
         val row = media.get(clientMsgId)?.takeIf { it.state == MediaState.UPLOADED.name || it.state == MediaState.CACHED.name } ?: return null
         val msg = messages.byClientMsgId(clientMsgId) ?: return null
         val blobId = row.blobId ?: return null
         // §33.4 / §33.9: a forward's `forwarded` and a reply's `reply_to` travel with the media envelope.
         val extras = sendExtras(msg)
+        if (msg.voice) {
+            val meta = VoiceMeta.decode(msg.systemJson) ?: return null
+            return VoiceEnvelope(
+                BlobRef(blobId, row.blobSize, row.blobSha256), sealer.openEnc(clientMsgId, row.sealedEnc), meta.mime, meta.durationMs, meta.levels,
+                transcribe = meta.transcribe?.takeIf { !it }, requestId = meta.requestId, extras = extras,
+            ).encode()
+        }
         if (msg.file) {
             val meta = FileMeta.decode(msg.systemJson) ?: return null
             return FileEnvelope(

@@ -70,8 +70,32 @@ class FakeMessageDao : MessageDao {
     override suspend fun delete(clientMsgId: String): Int = if (rows.remove(clientMsgId) != null) 1 else 0
 
     override suspend fun unackedIncoming() = rows.values
-        .filter { !it.outgoing && it.messageId != null && it.ackedStatus != it.status }
+        .filter { !it.outgoing && it.messageId != null && it.ackedStatus != it.status && it.ackedStatus != MessageEntity.ACKED_PLAYED }
         .sortedBy { it.localTs }
+
+    override suspend fun setPlayed(clientMsgId: String, at: Long): Int {
+        val r = rows[clientMsgId]?.takeIf { !it.outgoing && it.voice && it.playedAt == null } ?: return 0
+        rows[clientMsgId] = r.copy(playedAt = at, status = "READ")
+        return 1
+    }
+
+    override suspend fun unackedPlayed() = rows.values
+        .filter { !it.outgoing && it.voice && it.messageId != null && it.playedAt != null && it.ackedStatus != MessageEntity.ACKED_PLAYED }
+        .sortedBy { it.localTs }
+
+    override suspend fun setOutgoingPlayed(clientMsgId: String, at: Long): Int {
+        val r = rows[clientMsgId]?.takeIf { it.outgoing } ?: return 0
+        rows[clientMsgId] = r.copy(playedAt = r.playedAt ?: at, readAt = r.readAt ?: at, deliveredAt = r.deliveredAt ?: at)
+        return 1
+    }
+
+    override suspend fun setGroupPlayed(messageId: String, played: Int): Int {
+        val r = rows.values.firstOrNull { it.messageId == messageId && it.outgoing } ?: return 0
+        rows[r.clientMsgId] = r.copy(receiptPlayed = played)
+        return 1
+    }
+
+    override suspend fun voiceNotesIn(conversationId: String) = rows.values.filter { it.conversationId == conversationId && it.voice }.sortedBy { it.localTs }
 
     override suspend fun updateStatus(clientMsgId: String, status: String, messageId: String?, serverTs: String?, failReason: String?) {
         val r = rows[clientMsgId] ?: return

@@ -380,6 +380,11 @@ class GroupStore(
             messages.updateStatus(row.clientMsgId, row.status, r.messageId, null, row.failReason)
         }
         messages.setGroupReceipt(row.messageId ?: r.messageId, r.delivered, r.read, r.of, current.advance(target).name)
+        // v1.41 §37.4: `played` / `all_played` (absent = 0 / false); the mic turns blue when all played.
+        r.played?.let { messages.setGroupPlayed(row.messageId ?: r.messageId, it) }
+        if (r.allPlayed == true) {
+            messages.setOutgoingPlayed(row.clientMsgId, r.at?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() } ?: clock())
+        }
     }
 
     /** A Welcome joined or a commit changed the group: make sure the row exists and the name is current. */

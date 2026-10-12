@@ -5,6 +5,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.long
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -375,34 +376,83 @@ class ContractExamplesTest {
     }
 
     /**
-     * v1.41 §37 voice notes and v1.42 §38 action items (added by root with the contract bump): today's parsers
-     * must tolerate every new example (unknown envelope type → Ignored, new Risi kinds → `body`, extra fields
-     * ignored). Android replaces these with real decoders when it builds §37/§38.
+     * v1.41 §37 voice notes: the real models (data/media/VoiceEnvelope.kt, net/Protocol141.kt). The `voice_payload*`
+     * examples carry `blob.size` 49 248 for `plain_size` 49 152, whose §14.3 `cipher_size` is 49 168: strict validation
+     * (§37.2 → §14.4) drops them as malformed, so each is checked both as shipped (dropped) and with the size corrected
+     * (decoded field by field). Proposal 2026-10-12-voice-example-sizes asks root to fix the examples.
      */
-    private val voiceV141V142: Map<String, (String) -> Any> by lazy {
+    private val voiceV141: Map<String, (String) -> Any> by lazy {
         fun obj(s: String) = ProtocolJson.parseToJsonElement(s).jsonObject
-        fun mls(s: String) = ai.risicloud.risime.data.mls.MlsPayload.decode(s.toByteArray()).also { require(obj(s)["type"]!!.jsonPrimitive.content == "voice") }
+        fun fixSize(o: JsonObject): JsonObject {
+            val plain = o["enc"]!!.jsonObject["plain_size"]!!.jsonPrimitive.long
+            val blob = JsonObject(o["blob"]!!.jsonObject + ("size" to kotlinx.serialization.json.JsonPrimitive(ai.risicloud.risime.data.media.MediaFormat.cipherSize(plain)!!)))
+            return JsonObject(o + ("blob" to blob))
+        }
+        fun voice(s: String): ai.risicloud.risime.data.media.VoiceEnvelope {
+            val asShipped = ai.risicloud.risime.data.mls.MlsPayload.decode(s.toByteArray())
+            require(asShipped is ai.risicloud.risime.data.mls.MlsPayload.Decoded.Voice || asShipped == ai.risicloud.risime.data.mls.MlsPayload.Decoded.Ignored("voice (malformed)"))
+            val d = ai.risicloud.risime.data.mls.MlsPayload.decode(fixSize(obj(s)).toString().toByteArray())
+            val v = (d as ai.risicloud.risime.data.mls.MlsPayload.Decoded.Voice).envelope
+            require(v.mime == ai.risicloud.risime.data.media.VoiceEnvelope.MIME_OGG_OPUS && v.waveform.size == 64 && v.enc.plainSize == 49_152L)
+            // Round trip: what this app would send decodes to the same envelope.
+            require(ai.risicloud.risime.data.media.VoiceEnvelope.validate(ProtocolJson.parseToJsonElement(v.encode().toString(Charsets.UTF_8)).jsonObject) == v)
+            return v
+        }
+        fun card(s: String) = ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.body.isNotEmpty()) }
+            .let { RisiVoiceTranscript.parse(ProtocolJson.parseToJsonElement(s).jsonObject["risi"].toString())!! }
+        mapOf(
+            "auth_config_v141.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.voiceTranscribeOn && it.callTranscribeOn) } },
+            "device_put_voice.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(DeviceMls.CAP_VOICE in it.mls!!.capabilities!!) } },
+            "voice_payload.json" to { s ->
+                voice(s).also { require(it.durationMs == 12_400L && it.transcribe == null && it.requestId == null && it.extras == EnvelopeExtras.NONE && (it.waveform[0].toInt() and 0xFF) == 4) }
+            },
+            "voice_payload_reply_no_transcribe.json" to { s ->
+                voice(s).also { require(it.transcribe == false && it.extras.replyTo!!.messageId == "c1a2b3e1-a0b1-11f0-8000-0242ac120002") }
+            },
+            "voice_payload_forwarded.json" to { s -> voice(s).also { require(it.extras.forwardHops == 1 && it.transcribe == null) } },
+            "voice_payload_risi_chat.json" to { s -> voice(s).also { require(it.requestId == "8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f" && it.durationMs == 5_200L) } },
+            // §37.2: a waveform that isn't exactly 64 bytes → dropped as malformed (with the size corrected too).
+            "voice_payload_bad_waveform.json" to { s ->
+                listOf(obj(s), fixSize(obj(s))).map { ai.risicloud.risime.data.mls.MlsPayload.decode(it.toString().toByteArray()) }
+                    .also { r -> require(r.all { it == ai.risicloud.risime.data.mls.MlsPayload.Decoded.Ignored("voice (malformed)") }) }
+            },
+            "msg_ack_played.json" to { s ->
+                ProtocolJson.decodeFromString<MsgAck>(s).also { require(it.status == ACK_PLAYED && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) }
+            },
+            "event_status_played.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { require(it.statusData()!!.status == ACK_PLAYED) } },
+            "event_group_receipt_v141.json" to { s ->
+                ProtocolJson.decodeFromString<Event>(s).groupReceipt()!!.also { require(it.played == 1 && it.allPlayed == false && it.allRead) }
+            },
+            "group_receipts_reply_v141.json" to { s ->
+                ProtocolJson.decodeFromString<GroupReceiptsReply>(s).also { r -> require(r.receipts[0].playedAt != null && r.receipts[1].playedAt == null) }
+            },
+            "envelope_risi_voice_transcript.json" to { s ->
+                card(s).also { require(it.ok && it.status == RisiKinds141.STATUS_OK && it.language == "si" && it.durationMs == 12_400L && it.script!!.ok && it.messageId == "d1e2f3a4-a6f2-11f1-8000-0242ac120002") }
+            },
+            "envelope_risi_voice_transcript_unclear.json" to { s -> card(s).also { require(!it.ok && it.status == RisiKinds141.STATUS_UNCLEAR && it.text == null && it.romanised) } },
+            "envelope_risi_action_transcript_delete.json" to { s ->
+                obj(s).also { require(ai.risicloud.risime.data.tabs.RisiControl.valid(it) && it["action"]!!.jsonPrimitive.content == RisiKinds141.ACTION_TRANSCRIPT_DELETE) }
+            },
+            "me_risi_voice_put.json" to { s ->
+                ProtocolJson.decodeFromString<RisiVoiceSettings>(s).also { require(!it.transcribe && it.actionItems && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) }
+            },
+            "me_risi_voice_reply.json" to { s -> ProtocolJson.decodeFromString<RisiVoiceSettings>(s).also { require(!it.transcribe && it.actionItems) } },
+            "backup_entry_message_v141.json" to { s ->
+                ProtocolJson.decodeFromString<ai.risicloud.risime.data.backup.BackupMessageLine>(s).also { require(it.playedAt == "2026-10-12T09:15:41.002Z" && it.payload["type"]!!.jsonPrimitive.content == "voice") }
+            },
+        )
+    }
+
+    /**
+     * v1.42 §38 action items (added by root with the contract bump): today's parsers must tolerate every new example
+     * (new Risi kinds → `body`, extra fields ignored). Android replaces these with real decoders when it builds §38.
+     */
+    private val actionItemsV142: Map<String, (String) -> Any> by lazy {
+        fun obj(s: String) = ProtocolJson.parseToJsonElement(s).jsonObject
         fun card(s: String, kind: String) = ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == kind && it.body.isNotEmpty()) }
         fun act(s: String, a: String) = obj(s).also { require(it["type"]!!.jsonPrimitive.content == "risi_action" && it["action"]!!.jsonPrimitive.content == a) }
         mapOf(
-            "auth_config_v141.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(obj(s)["voice_transcribe"]!!.jsonPrimitive.content == "on") } },
             "auth_config_v142.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(obj(s)["risi_action_items"]!!.jsonPrimitive.content == "on") } },
-            "device_put_voice.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require("voice" in it.mls!!.capabilities!!) } },
-            "voice_payload.json" to { s -> mls(s) },
-            "voice_payload_reply_no_transcribe.json" to { s -> mls(s).also { require(!obj(s)["transcribe"]!!.jsonPrimitive.boolean) } },
-            "voice_payload_forwarded.json" to { s -> mls(s).also { require(obj(s)["forwarded"]!!.jsonObject["hops"]!!.jsonPrimitive.int == 1) } },
-            "voice_payload_risi_chat.json" to { s -> mls(s) },
-            "voice_payload_bad_waveform.json" to { s -> mls(s).also { require(java.util.Base64.getDecoder().decode(obj(s)["waveform"]!!.jsonPrimitive.content).size != 64) } },
-            "msg_ack_played.json" to { s -> obj(s).also { require(it["status"]!!.jsonPrimitive.content == "played") } },
-            "event_status_played.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { require(it.statusData()!!.status == "played") } },
-            "event_group_receipt_v141.json" to { s -> ProtocolJson.decodeFromString<Event>(s).also { requireNotNull(it.groupReceipt()) } },
-            "group_receipts_reply_v141.json" to { s -> ProtocolJson.decodeFromString<GroupReceiptsReply>(s) },
-            "envelope_risi_voice_transcript.json" to { s -> card(s, "voice_transcript") },
-            "envelope_risi_voice_transcript_unclear.json" to { s -> card(s, "voice_transcript") },
-            "envelope_risi_action_transcript_delete.json" to { s -> act(s, "transcript_delete") },
-            "me_risi_voice_put.json" to { s -> obj(s).also { require(!it["transcribe"]!!.jsonPrimitive.boolean) } },
-            "me_risi_voice_reply.json" to { s -> obj(s).also { require(it["action_items"]!!.jsonPrimitive.boolean) } },
-            "backup_entry_message_v141.json" to { s -> ProtocolJson.decodeFromString<ai.risicloud.risime.data.backup.BackupMessageLine>(s) },
             "envelope_risi_action_items.json" to { s -> card(s, "action_items") },
             "envelope_risi_action_items_voice_note.json" to { s -> card(s, "action_items") },
             "envelope_risi_action_items_unclear.json" to { s -> card(s, "action_items") },
@@ -414,7 +464,7 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141V142 + mapOf(
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.
