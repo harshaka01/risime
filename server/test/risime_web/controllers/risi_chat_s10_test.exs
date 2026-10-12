@@ -227,6 +227,94 @@ defmodule RisiMeWeb.RisiChatS10Test do
     assert op.type == "devices" and inspect(op.payload) =~ d
   end
 
+  # The device was last seen an hour ago, before its user's newer device was registered (§12.1).
+  defp supersede!(dev) do
+    past = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+    Repo.update_all(from(d in RisiMe.Devices.Device, where: d.device_id == ^dev),
+      set: [last_seen_at: past, inserted_at: DateTime.add(past, -60, :second)]
+    )
+
+    Repo.update_all(from(i in "app_instances", where: i.instance_key == ^("device:" <> dev)),
+      set: [last_seen_at: past]
+    )
+  end
+
+  defp reset!(user, dev, conv, gen),
+    do: api(:post, "/api/v1/mls/groups/#{conv}/reset", user.token, %{"generation" => gen}, dev)
+
+  test "reinstall (P0 2026-10-12): no candidate in a Risi chat → the owner may reset at once",
+       ctx do
+    %{a: a, risi: risi} = ctx
+    conv = active_chat!(ctx)
+
+    # The reinstalled phone: a new risi_tools device; one old device is still current (seen since).
+    new = risi_tools_device!(a)
+    supersede!(ctx.a_dev)
+
+    Repo.update_all(from(d in RisiMe.Devices.Device, where: d.device_id == ^ctx.a_dev2),
+      set: [last_seen_at: DateTime.add(DateTime.utc_now(), 60, :second)]
+    )
+
+    {202, %{"candidates" => 1, "exhausted" => false, "group" => g}} =
+      api(:post, "/api/v1/groups/#{conv}/rejoin", a.token, nil, new)
+
+    assert {g["chat_kind"], g["tab"], g["chat_id"]} == {"risi", "official", conv}
+    # The owner's other phone can still re-add it: the §12.12.3 guard holds.
+    {409, %{"error" => %{"code" => "rejoin_pending", "candidates" => 1}}} =
+      reset!(a, new, conv, 1)
+
+    # Both old phones gone: nobody can ever re-add it (Risi never commits).
+    supersede!(ctx.a_dev2)
+
+    {202, %{"candidates" => 0, "exhausted" => false}} =
+      api(:post, "/api/v1/groups/#{conv}/rejoin", a.token, nil, new)
+
+    {200, %{"generation" => 2}} = reset!(a, new, conv, 1)
+
+    # The rebuild is this device's; the chat stays the owner's Risi chat with Risi in it.
+    assert [%{type: "rebuild", committer_device: ^new}] = RisiMe.Groups.Ops.list(conv)
+    assert RisiMe.RisiChat.of_owner(a.user.id).id == conv
+    assert Groups.member(conv, risi.user_id).state == "active"
+  end
+
+  test "an ordinary group keeps the 24 h wait for no candidate (§12.12.3)", ctx do
+    %{a: a, a_dev: a_dev} = ctx
+    b = logged_in_user(display_name: "Bimal")
+    befriend!(a, b)
+    _b_dev = tabs_device!(b)
+
+    {201, %{"group" => %{"id" => id}}} =
+      api(
+        :post,
+        "/api/v1/groups",
+        a.token,
+        %{"client_group_id" => Ecto.UUID.generate(), "member_ids" => [b.user.id]},
+        a_dev
+      )
+
+    added =
+      for %{user_id: u, device_id: d} <- Groups.groups_devices([a.user.id, b.user.id]),
+          {u, d} != {a.user.id, a_dev},
+          do: ref(u, d)
+
+    {200, _} =
+      api(
+        :post,
+        "/api/v1/mls/groups/#{id}/commit",
+        a.token,
+        create_commit([], {a.user.id, a_dev}, %{"added" => added}),
+        a_dev
+      )
+
+    new = risi_tools_device!(a)
+    for d <- [a_dev, ctx.a_dev2, ctx.a_tabs], do: supersede!(d)
+    # b's device isn't in the member path here (no member_devices gate), so no candidate either.
+    {202, %{"op" => op}} = api(:post, "/api/v1/groups/#{id}/rejoin", a.token, nil, new)
+    assert op != nil
+    {409, %{"error" => %{"code" => "rejoin_pending"}}} = reset!(a, new, id, 1)
+  end
+
   test "leave: Risi's data for the chat is deleted; a later POST creates a new chat", ctx do
     %{a: a, a_dev: a_dev, risi: risi} = ctx
     conv = active_chat!(ctx)

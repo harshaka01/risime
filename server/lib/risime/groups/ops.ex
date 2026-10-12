@@ -939,7 +939,7 @@ defmodule RisiMe.Groups.Ops do
   @doc """
   §12.12.3 server guard: `{:error, {:rejoin_pending, op_id, candidates}}` while a pending
   `devices` op adds the calling device, is not exhausted, and has a candidate or was created less
-  than 24 h ago. Under the group lock.
+  than 24 h ago; never for a Risi chat with no candidate (§25.2). Under the group lock.
   """
   def rejoin_guard(%Group{} = g, ref) do
     case adding_op(g.id, ref) do
@@ -950,7 +950,12 @@ defmodule RisiMe.Groups.Ops do
         {n, exhausted?} = rejoin_status(g, op)
         young? = DateTime.diff(DateTime.utc_now(), op.created_at) < 24 * 3600
 
-        if not exhausted? and (n > 0 or young?),
+        # v1.25 §25.2 (P0 2026-10-12): a Risi chat's only human is its owner and Risi never
+        # commits, so with no candidate (no other `risi_tools` device of the owner in it) nobody
+        # can ever re-add this device: no 24 h wait, the owner may reset at once (as a DM).
+        risi_alone? = n == 0 and Groups.risi_chat?(g)
+
+        if not exhausted? and not risi_alone? and (n > 0 or young?),
           do: {:error, {:rejoin_pending, op.op_id, n}},
           else: :ok
     end
