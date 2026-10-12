@@ -106,12 +106,19 @@ def cer(ref, hyp):
 
 models = get("/v1/models")
 ids = [m["id"] for m in models["data"]]
-want = {"auto", "faster-whisper-large-v3", "whisper-small-sinhala", "tamil-asr-qwen3"}
+router = next(m for m in models["data"] if m["id"] == "auto")
+# Routes come from the service (WHISPER_ROUTE_SI / _TA, amendment c); en is always large-v3.
+ROUTE = router["routes"]
+EXPECT_SI = os.environ.get("ASR_SMOKE_ROUTE_SI")  # e.g. the decided si model, checked if set
+if ROUTE.get("en") != "faster-whisper-large-v3" or set(ROUTE) != {"si", "ta", "en"}:
+    fail(f"routes {ROUTE}")
+if EXPECT_SI and ROUTE["si"] != EXPECT_SI:
+    fail(f"si routes to {ROUTE['si']}, want {EXPECT_SI}")
+want = {"auto", *ROUTE.values()}
 if not want <= set(ids):
     fail(f"/v1/models lacks {want - set(ids)}: {ids}")
-print(f"ok   /v1/models: {ids}")
-
-ROUTE = {"si": "whisper-small-sinhala", "ta": "tamil-asr-qwen3", "en": "faster-whisper-large-v3"}
+SI_MODELS = {m["id"] for m in models["data"] if m.get("language") == "si"}
+print(f"ok   /v1/models: {ids}; routes {ROUTE}; compare sets {router.get('compare_sets')}")
 clips = [("si", "si-slr30-sin_6897_3117231257.ogg", open(os.path.join(DATA, "si.txt")).read()),
          ("ta", "ta-fleurs-10015420708072669120.ogg", open(os.path.join(DATA, "ta.txt")).read()),
          ("en", "en-jfk.ogg", "And so, my fellow Americans, ask not what your country can do for "
@@ -172,10 +179,12 @@ print(f"ok   json shape for auto: {sorted(out)}")
 # Compare: every candidate, sequentially.
 for lang, name, ref in clips[:2]:
     out, dt = post("/v1/audio/compare", open(os.path.join(DATA, name), "rb").read(), name, {})
-    served = [m["id"] for m in models["data"] if m["id"] != "auto"]
+    # Default candidates per detected language (amendment c): the routed model first.
+    served = (router.get("compare_sets") or {}).get(lang) or \
+        [m["id"] for m in models["data"] if m["id"] != "auto"]
     got = [r["model"] for r in out["results"]]
-    if got != served:
-        fail(f"compare models {got}, want {served}")
+    if got != served or got[0] != ROUTE[lang] or len(got) < 2:
+        fail(f"compare models {got}, want {served} (routed {ROUTE[lang]} first, >= 2)")
     # Memory floor (other workloads on the host): reported loudly, like fallback: memory above.
     nomem = [r for r in out["results"] if str(r.get("error", "")).startswith("not enough memory")]
     for r in nomem:
@@ -197,7 +206,7 @@ for lang, name, ref in clips[:2]:
             s_ = r["script"]
             sc = (f" script {'ok' if s_['ok'] else 'ROMANISED'} si={s_['sinhala_chars']} "
                   f"latin={s_['latin_chars']}")
-            if r["model"] in ("whisper-small-sinhala", "whisper-large-v3-sinhala") and not s_["ok"]:
+            if r["model"] in SI_MODELS and not s_["ok"]:
                 fail(f"compare si: {r['model']} romanised: {r['text'][:80]!r}")
         elif "script" in r:
             fail(f"compare {lang}: unexpected script check on {r['model']}")
@@ -260,7 +269,9 @@ def check(first, outputs, want_model, want_retry, want_rom, nomem=()):
     assert got == want, (first, outputs, nomem, got, want, calls)
     assert len([c for c in calls if c not in nomem]) <= 2, calls
     print(f"ok   si retry fixture: {first} -> {calls} => model={got[0]} retried_with={got[1]} romanised={got[2]}")
-sm, lg = "whisper-small-sinhala", "whisper-large-v3-sinhala"
+# sm = the si route, lg = its retry model (the first of SI_RETRY_ORDER that is not sm).
+sm = S.ROUTE["si"]
+lg = next((n for n in S.SI_RETRY_ORDER if n != sm and n in S.SPECS), "none")
 assert S.script_check(SI)[0]["ok"] and S.script_check(LATIN)[1] and not S.script_check("")[1]
 assert S.script_check(LATIN)[0]["latin_chars"] == 23 and S.script_check(SI)[0]["latin_chars"] == 0
 check(sm, {sm: SI, lg: SI}, sm, None, False)

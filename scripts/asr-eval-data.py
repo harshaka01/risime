@@ -38,6 +38,9 @@ PROVENANCE = {
     # Nerdstorm rev 2 trained on 25 channels of SPEAK-ASR/youtube-sinhala-asr (re-split), and
     # SPEAK-ASR's medium-all LoRA on its preprocessed YouTube train split: both excluded.
     "yt-si": ["whisper-small-sinhala", "qwen3-asr-0.6b-sinhala", "whisper-medium-si-all"],
+    # The 5 channels Nerdstorm held out: clean for it, omni, kasunw and SPEAK-ASR medium (OpenSLR
+    # only). SinhaSpeech's pool has 2% YouTube of unknown origin: possible overlap, excluded.
+    "yt5-si": ["whisper-small-sinhala"],
     # SLR30 (Google TTS corpus): only hlasith/whisper-sinhala-small (not evaluated) lists it.
     "slr30-si": [],
     # Omnilingual corpus: Meta's omniASR models trained on its train split; the test split is
@@ -186,6 +189,39 @@ def prep_slr30(data, n=60, seed=71):
     print(f"slr30-si: {len(sel)} utterances from {len(per)} speakers")
 
 
+# The 5 SPEAK-ASR YouTube channels that Nerdstorm's Qwen3-ASR-0.6B-Sinhala rev 2 held out
+# (its card: split by channel, none of their clips in training).
+YT5 = ("Carnage", "Newsfirst Sri Lanka", "Arogya", "Anoma's Kitchen", "Hera's Diary")
+
+
+def prep_yt5(data):
+    """dl/yt-si/test.parquet (SPEAK-ASR/youtube-sinhala-asr test) -> yt5-si/<n>.wav + selected.json
+    for every clip of the 5 held-out channels. Needs pyarrow."""
+    import pyarrow.parquet as pq
+    rows = pq.read_table(os.path.join(data, "dl", "yt-si", "test.parquet")).to_pylist()
+    out = os.path.join(data, "yt5-si")
+    raw = os.path.join(out, "raw")
+    os.makedirs(raw, exist_ok=True)
+    sel, names = [], []
+    for i, r in enumerate(rows):
+        up = (r["uploader"] or "").strip()
+        if not any(up.startswith(c) for c in YT5):
+            continue
+        rid = f"{i:03d}"
+        ext = os.path.splitext(r["audio"].get("path") or "")[1] or ".wav"
+        fp = os.path.join(raw, rid + ext)
+        if not os.path.exists(fp):
+            with open(fp, "wb") as f:
+                f.write(r["audio"]["bytes"])
+        if not os.path.exists(os.path.join(out, rid + ".wav")):
+            names.append(os.path.join("raw", rid + ext))
+        sel.append([rid, r["text"], up, bool(r["is_code_mixed"]), bool(r["has_noise"])])
+    ffmpeg_16k(out, names, ".")
+    with open(os.path.join(out, "selected.json"), "w") as f:
+        json.dump(sel, f, ensure_ascii=False)
+    print(f"yt5-si: {len(sel)} clips")
+
+
 def prep_omni(data, n=60, seed=71):
     """dl/omni-si/.../sin_Sinh test parquet (facebook/omnilingual-asr-corpus) -> omni-si/<id>.wav +
     omni-si/selected.json [[id, reference, speaker, prompt_id]]. Needs pyarrow (run with a venv
@@ -242,6 +278,16 @@ def build(data):
                               "source": "OpenSLR SLR30 (Google, Sinhala TTS corpus)",
                               "licence": LICENCE["slr30-si"],
                               "in_training_of": PROVENANCE["slr30-si"]})
+    yt5 = os.path.join(data, "yt5-si", "selected.json")
+    if os.path.exists(yt5):
+        with open(yt5) as f:
+            for rid, text, up, mixed, noise in json.load(f):
+                p = os.path.join(data, "yt5-si", rid + ".wav")
+                clips.append({"id": f"yt5-si-{rid}", "set": "yt5-si", "lang": "si", "audio": p,
+                              "text": text, "duration_s": duration(p), "kind": "broadcast",
+                              "channel": up, "code_mixed": mixed, "noise": noise,
+                              "source": "SPEAK-ASR/youtube-sinhala-asr test, 5 held-out channels",
+                              "licence": LICENCE["yt-si"], "in_training_of": PROVENANCE["yt5-si"]})
     omni = os.path.join(data, "omni-si", "selected.json")
     if os.path.exists(omni):
         with open(omni) as f:
@@ -337,13 +383,15 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--data", default=os.path.expanduser("~/risime-eval-data"))
     p.add_argument("--out", default="manifests/all.jsonl")
-    p.add_argument("--prep", choices=["slr30", "omni"],
+    p.add_argument("--prep", choices=["slr30", "omni", "yt5"],
                    help="extract a downloaded public set first (omni needs pyarrow)")
     a = p.parse_args()
     if a.prep == "slr30":
         prep_slr30(a.data)
     elif a.prep == "omni":
         prep_omni(a.data)
+    elif a.prep == "yt5":
+        prep_yt5(a.data)
     clips = build(a.data)
     out = os.path.join(a.data, a.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)
