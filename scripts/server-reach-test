@@ -22,6 +22,10 @@ REPO="$PWD"
 PKG=ai.risicloud.risime.debug
 CLS=ai.risicloud.risime
 INST="${REACH_REDROID:--reach}"; RPORT="${REACH_REDROID_PORT:-5861}"; PORT="${REACH_PORT:-4561}"
+# Unless pinned, move off ports another run already holds (e.g. a report-only UI robot's redroid on 5861).
+busy() { ss -ltnH "sport = :$1" | grep -q .; }
+if [ -z "${REACH_REDROID_PORT:-}" ]; then while busy "$RPORT"; do RPORT=$((RPORT + 100)); done; fi
+if [ -z "${REACH_PORT:-}" ]; then while busy "$PORT"; do PORT=$((PORT + 100)); done; fi
 CONTAINER="risime-redroid$INST"
 APK=""; KEEP=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
