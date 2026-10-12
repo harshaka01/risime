@@ -8,6 +8,7 @@ defmodule RisiMe.Workers.Risi do
   | `extract` | `risi` (2) | commitment extraction of a conversation (debounced, one pending) |
   | `memory_ingest` | `risi` | v1.36 §35: memory items + vectors of a conversation (debounced, one pending) |
   | `discussion_quiet` | `risi` | v1.27 §27.2 quiet rule of a conversation (one pending, moved by each counted message) |
+  | `call_transcribe_summary` | `risi` | v1.39 §36.7: the summary of a transcribed 1:1 Official call (conv + session id) |
   | `item_expire` | `risi_timers` | v1.27 §27.5: a proposed ledger item unconfirmed after 48 h |
   | `request` | `risi_requests` (2) | an `ask`/`summarise`/`report` (or its `error` reply) |
   | `action` | `risi_timers` (4) | a `risi_action`: a commitment, or a confirm card (§25.4; a client write waits ≤ 15 s for the phone here) |
@@ -58,6 +59,8 @@ defmodule RisiMe.Workers.Risi do
     RisiMe.Agent.Notes.prune()
     # v1.36 §35.1: chats whose memory hasn't started copy the 24-h buffer in (once).
     RisiMe.Agent.Memory.seed_all()
+    # v1.39 §36.8: call-transcription consent records after 90 days.
+    RisiMe.Agent.CallTranscribe.prune()
     :ok
   end
 
@@ -179,6 +182,10 @@ defmodule RisiMe.Workers.Risi do
 
   # v1.27 §27.2: the quiet rule's check of a conversation.
   defp run(%{"kind" => "discussion_quiet", "conv" => conv}), do: RisiMe.Agent.Ledger.quiet(conv)
+
+  # v1.39 §36.7: the summary of a transcribed 1:1 Official call (ids only).
+  defp run(%{"kind" => "call_transcribe_summary", "conv" => conv, "session_id" => sid}),
+    do: RisiMe.Agent.CallTranscribe.Summary.run(conv, sid)
 
   # v1.27 §27.6: a ledger item's reminder, follow-up or nudge.
   defp run(%{"kind" => "item_reminder"} = args), do: RisiMe.Agent.LedgerReminders.fire(args)

@@ -57,7 +57,8 @@ defmodule RisiMeWeb.Endpoint do
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
   plug Plug.Parsers,
-    parsers: [:urlencoded, :multipart, :json],
+    # v1.39 §36.4: call chunks are parsed in memory (never a temp file) before :multipart.
+    parsers: [:urlencoded, RisiMeWeb.Plugs.MemoryMultipart, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()
 

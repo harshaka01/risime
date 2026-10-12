@@ -22,7 +22,7 @@ defmodule RisiMe.Agent.LearningLog.Cassandra do
   @cluster RisiMe.Messaging.Store.Cassandra.Cluster
 
   @cols ~w(conversation_id task model_alias model provider fallback latency_ms prompt_tokens
-           completion_tokens cost confidence status source_message_ids prompt_sha256)a
+           completion_tokens cost confidence status source_message_ids prompt_sha256 meta)a
 
   @types %{
     conversation_id: "text",
@@ -39,7 +39,9 @@ defmodule RisiMe.Agent.LearningLog.Cassandra do
     confidence: "double",
     status: "text",
     source_message_ids: "list<timeuuid>",
-    prompt_sha256: "text"
+    prompt_sha256: "text",
+    # v1.39 §36.8 (`priv/cql/010_…`): JSON of non-text facts (speech rows only).
+    meta: "text"
   }
 
   @by_day "risi_llm_calls_by_day"
@@ -70,7 +72,8 @@ defmodule RisiMe.Agent.LearningLog.Cassandra do
       ],
       cols,
       vals,
-      sealed_output(@by_day, id, e[:output])
+      sealed_output(@by_day, id, e[:output]),
+      e[:ttl_s]
     )
 
     insert!(
@@ -82,19 +85,27 @@ defmodule RisiMe.Agent.LearningLog.Cassandra do
       ],
       cols,
       vals,
-      sealed_output(@by_chat, id, e[:output])
+      sealed_output(@by_chat, id, e[:output]),
+      e[:ttl_s]
     )
 
     :ok
   end
 
-  defp insert!(table, keys, cols, vals, sealed) do
+  # `ttl_s` (v1.39 §36.8: 30 days for `transcribe_compare` rows) shortens the table's 90 days.
+  defp insert!(table, keys, cols, vals, sealed, ttl_s) do
     extra = if sealed, do: [{"output_sealed", "blob", sealed}], else: []
     names = Enum.map(keys ++ extra, &elem(&1, 0)) ++ Enum.map(cols, &Atom.to_string/1)
     params = Enum.map(keys ++ extra, fn {_, t, v} -> {t, v} end) ++ vals
 
+    {using, params} =
+      if is_integer(ttl_s) and ttl_s > 0 and ttl_s < LearningLog.ttl_s(),
+        do: {" USING TTL ?", params ++ [{"int", ttl_s}]},
+        else: {"", params}
+
     run!(
-      "INSERT INTO #{table} (#{Enum.join(names, ", ")}) VALUES (?#{String.duplicate(", ?", length(names) - 1)})",
+      "INSERT INTO #{table} (#{Enum.join(names, ", ")}) VALUES (?#{String.duplicate(", ?", length(names) - 1)})" <>
+        using,
       params
     )
   end
@@ -365,6 +376,7 @@ defmodule RisiMe.Agent.LearningLog.Cassandra do
   defp cast(:latency_ms, v), do: trunc(v)
   defp cast(:cost, v), do: v / 1
   defp cast(:confidence, v), do: v / 1
+  defp cast(:meta, v) when is_map(v), do: Jason.encode!(v)
   defp cast(_c, v), do: v
 
   defp timeuuid?(<<_::binary-size(14), "1", _::binary-size(21)>>), do: true

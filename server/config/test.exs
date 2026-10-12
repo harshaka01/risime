@@ -136,6 +136,14 @@ config :risime, :risi_llm,
   backoff_ms: 0
 
 config :risime, :risi_sender, RisiMe.Agent.TestSender
+
+# v1.39 §36: the speech service only ever through a Req.Test stub (or the fake behaviour,
+# RisiMe.CallTranscribeHelpers).
+config :risime, :risi_speech_http,
+  url: "http://127.0.0.1:8200",
+  api_key: "test-speech-key",
+  req_options: [plug: {Req.Test, RisiMe.Agent.Speech.Http}, retry: false]
+
 # Risi's own post limit is global (15 per 10 s); tests post faster than that.
 config :risime, :risi_send_limit, 10_000
 

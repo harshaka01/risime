@@ -17,6 +17,43 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
 
+## v1.39 §36 call transcription fast path (decision 080) — READY v1.39 (not deployed)
+1:1 Official calls only (groups §36.9 not built). Code: `server/lib/risime/agent/call_transcribe*.ex`,
+`agent/speech*.ex`, `risime_web/plugs/memory_multipart.ex`. Migration `20261031100000_risi_call_transcribe`
+(additive: `risi_call_transcribe_sessions`, 90 days; `risi_dev_settings`) and CQL `010_risi_transcribe_meta.cql`
+(additive `meta text` on the two learning-log tables). Fast-lane safe (no wire change beyond v1.39).
+- **Pilot env (root sets in `.env`/pilot.env; no real ids in git):** `RISI_CALL_TRANSCRIBE=on` (default off = kill
+  switch), `RISI_DEV_USERS=<uuid>,<uuid>` (developers who may turn compare on), `WHISPER_API_KEY` (already in `.env`),
+  optional `RISI_SPEECH_URL` (default `http://127.0.0.1:8200`, loopback only). `/auth/config` says
+  `call_transcribe: "on"` only with the switch, Risi up and the speech service healthy (`/health`, cached 15 s);
+  absent = off. The after-call summary needs `RISI_LEDGER=on` (it reuses `Ledger.call_ended/2`).
+- **Server behaviour beyond §36 the phone should know:**
+  - The call record is the `ring: true` 1:1 `call:signal` (first ring of a `call_id` wins, 4 h, memory only).
+    A server restart forgets live sessions: they become `stopped` (`unavailable`, or `switch_off` if the switch is off);
+    phones must `GET /calls/{id}/transcribe` after reconnecting (as §36.3 says).
+  - Upload order of checks: `503 transcribe_off` → `404` → `403 not_participant` → `403 not_official` →
+    `409 not_consented`/`409 stopped` → `403 invalid_device` → `413` → `422` → `202 duplicate` → `429` → `503 full`.
+  - Rate limit is a token bucket: burst 3, refill 8 per 60 s per participant (so 10–15 s chunks never hit it; a
+    reconnect may flush 3 at once). `429` carries `Retry-After: 8`.
+  - A `stop` from a user with a bound device must come from that device (`invalid_device` otherwise). `decline` and a
+    `stop` while still `requested` may come from any of the pending user's devices.
+  - Unknown `session_id` on allow/decline/stop → `bad_state`; malformed push → `bad_request`.
+  - Silent chunks keep the session alive (90-s `left` rule) and post nothing.
+  - Compare mode: the service runs every model it serves (currently 5: the 3 routed ones plus
+    `whisper-large-v3-sinhala` and `faster-whisper-large-v3-turbo`), so `results` may have more than 3 entries.
+- **Live check of the speech client (2026-10-12, local service):** en-jfk → en/faster-whisper-large-v3 712 ms;
+  si clip → si/whisper-small-sinhala 1.2 s; ta clip → ta/tamil-asr-qwen3 5.0 s; compare on the si clip: 5 models, routed
+  whisper-small-sinhala.
+- **Gate driver for the device gate** (`server/priv/scripts/transcribe-inject`, curl + python3): uploads Ogg/Opus clips
+  as one participant's chunks, with that phone's token and bound device id:
+  `server/priv/scripts/transcribe-inject --server https://risime.risicloud.ai --token "$TOKEN_A" --device "$DEVICE_A"
+  --call "$CALL_ID" infra/whisper/testdata/si-slr30-sin_6897_3117231257.ogg infra/whisper/testdata/en-jfk.ogg`
+  (session = the call's newest, which must be `on` with that device bound; 8 s between uploads). Use it for one phone
+  while the other phone records for real, or for both phones with each one's token/device.
+- Tests: `test/risime/agent/call_transcribe_{consent,upload}_test.exs`, `speech_http_test.exs`,
+  `test/risime_web/channels/call_transcribe_channel_test.exs`, `test/contract/examples_v139_test.exs` (every v1.39
+  example vs real server output). Includes the no-temp-file test (multipart parsed in memory, never `Plug.Upload`).
+
 ## v1.37 §8.1 app_id / second Firebase project (decision 079) — READY v1.37
 Gate green on main (1204 tests, 0 failures). Migration `20261030100000_device_app_id` (additive, nullable).
 - `PUT /me/devices/{id}` stores `app_id` (≤ 100, `[a-z0-9._]`; malformed → ignored, never 422; unknown ids stored).

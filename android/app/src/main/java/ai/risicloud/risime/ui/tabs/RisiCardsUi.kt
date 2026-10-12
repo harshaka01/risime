@@ -474,7 +474,8 @@ private fun CallTranscriptLine(row: MessageEntity, ctx: RisiCardContext, modifie
                 } else {
                     Text(row.body, style = MaterialTheme.typography.bodyMedium)
                 }
-                Text("Risi transcript" + (t?.model?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Ownership rule (0598707): no model names outside the Developer view.
+                Text("Risi transcript", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

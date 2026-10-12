@@ -239,7 +239,12 @@ defmodule RisiMe.Calls do
 
       # Any signal of this call from the callee's user answers the ring: no fallback push.
       State.answered(sender_id, req.call_id)
-      if req.ring, do: ring(req.to, req.call_id, req.media)
+
+      if req.ring do
+        # v1.39 §36.2: the call's participants, in memory for 4 h (transcription consent).
+        RisiMe.Agent.CallTranscribe.note_ring(req.call_id, sender_id, req.to, conv, req.media)
+        ring(req.to, req.call_id, req.media)
+      end
 
       :telemetry.execute([:risime, :call, :signal], %{count: 1}, %{ring: req.ring})
       {:ok, reply}

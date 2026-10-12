@@ -72,7 +72,15 @@ defmodule RisiMeWeb.ApiError do
     cursor_expired: "Your calendar sync is too old; list your events again",
     not_invitable: "You can only invite people you share a chat with",
     # v1.31 §31.3.
-    not_google_device: "Google Calendar is connected on another device"
+    not_google_device: "Google Calendar is connected on another device",
+    # v1.39 §36.1, §36.4.
+    not_developer: "This setting is for RisiMe developers",
+    transcribe_off: "Call transcription is off on this server",
+    not_official: "Transcription is only for Official calls",
+    not_participant: "You're not a participant of this call",
+    not_consented: "Not every participant has allowed transcription",
+    stopped: "Transcription has stopped",
+    transcribe_unavailable: "Transcription isn't available right now"
   }
 
   @doc """

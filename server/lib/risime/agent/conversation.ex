@@ -50,6 +50,14 @@ defmodule RisiMe.Agent.Conversation do
   def send_envelope(pid, envelope, timeout \\ 60_000),
     do: GenServer.call(pid, {:send, fn -> envelope end}, timeout)
 
+  @doc """
+  v1.39 §36.5 "stop and delete": deletes Risi's own messages `targets` (1–100 TimeUUIDs) for
+  everyone (§15.2 `msg:delete`, scope `everyone`, the §15.3 `delete` envelope with its `'D'`
+  authenticated data). `{:ok, reply}` or `{:error, reason}`.
+  """
+  def delete_own(pid, targets, timeout \\ 60_000),
+    do: GenServer.call(pid, {:delete, targets}, timeout)
+
   ## Server
 
   @impl true
@@ -82,6 +90,7 @@ defmodule RisiMe.Agent.Conversation do
   defp dispatch({:event, f}, state), do: event(f.(), state)
   defp dispatch(:removed, state), do: {{:stop, purge(state, "removed")}, state}
   defp dispatch({:send, f}, state), do: do_send(f.(), state, 1)
+  defp dispatch({:delete, targets}, state), do: do_delete(targets, state, 1)
 
   ## Events
 
@@ -333,6 +342,48 @@ defmodule RisiMe.Agent.Conversation do
 
       case Messaging.send(Risi.user_id(), params, device_id: Risi.device_id()) do
         {:error, :stale_epoch} when retries > 0 -> do_send(envelope, state, retries - 1)
+        result -> {result, state}
+      end
+    else
+      {:error, {kind, _}} -> {{:error, kind}, state}
+      {:error, _} = e -> {e, state}
+    end
+  end
+
+  # §15.2/§15.3: the `delete` envelope, its AAD `0x01 'D' ‖ sorted 16-byte targets`.
+  defp do_delete(targets, state, retries) do
+    targets = targets |> Enum.map(&String.downcase/1) |> Enum.uniq()
+    g = Groups.get_group(state.conv)
+    gid = gid(state, g.generation)
+    state = ensure_epoch(gid, Groups.epoch(state.conv), state)
+    envelope = %{"v" => 1, "type" => "delete", "targets" => targets}
+
+    aad =
+      <<0x01, ?D>> <>
+        (targets
+         |> Enum.map(fn t ->
+           {:ok, bin} = Ecto.UUID.dump(t)
+           bin
+         end)
+         |> Enum.sort()
+         |> Enum.join())
+
+    with {:ok, epoch} <- Mls.epoch(gid),
+         {:ok, ct} <- Mls.call(&Nif.encrypt(&1, gid, Jason.encode!(envelope), aad)) do
+      params = %{
+        "conversation_id" => state.conv,
+        "client_msg_id" => Ecto.UUID.generate(),
+        "scope" => "everyone",
+        "targets" => targets,
+        "ciphertext" => Base.encode64(ct),
+        "generation" => g.generation,
+        "epoch" => epoch,
+        "client_ts" => Messaging.iso(DateTime.utc_now())
+      }
+
+      case Messaging.Deletes.delete(Risi.user_id(), params, device_id: Risi.device_id()) do
+        {:error, :stale_epoch} when retries > 0 -> do_delete(targets, state, retries - 1)
+        {:error, reason, _failures} -> {{:error, reason}, state}
         result -> {result, state}
       end
     else

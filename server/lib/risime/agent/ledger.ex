@@ -224,7 +224,12 @@ defmodule RisiMe.Agent.Ledger do
         msgs = call.transcript
         senders = msgs |> Enum.map(& &1.sender_id) |> Enum.uniq()
 
-        opts = [call_id: call[:call_id], media: call[:media], duration_s: call[:duration_s]]
+        # v1.39 §36.7: the speech models (`also`), the call's majority language (`lang`) and
+        # each speaker's language (`langs`) of a transcribed call.
+        opts =
+          [call_id: call[:call_id], media: call[:media], duration_s: call[:duration_s]] ++
+            for k <- [:also, :lang, :langs], call[k] != nil, do: {k, call[k]}
+
         conv |> summarise(msgs, senders, :call, opts) |> done()
 
       true ->
@@ -338,11 +343,25 @@ defmodule RisiMe.Agent.Ledger do
     # v1.29 §30.2: the extraction gains topic and meetings when the chat has a notes user.
     notes? = Notes.users(Enum.map(members, & &1.user_id)) != []
 
+    system = if(notes?, do: Prompts.note_system(), else: Prompts.discussion_system())
+
+    # v1.39 §36.7: a transcribed call is summarised in its majority language.
+    system =
+      case opts[:lang] do
+        l when l in ["si", "ta", "en"] ->
+          system <>
+            "This is the transcript of a voice call; its main language is " <>
+            "#{RisiMe.Agent.Lang.name(l)}: write key_points and summary in it.\n"
+
+        _ ->
+          system
+      end
+
     req = %{
       task: "discussion_summarise",
       conversation_id: conv,
       chat_id: Secretary.chat_id(conv),
-      system: if(notes?, do: Prompts.note_system(), else: Prompts.discussion_system()),
+      system: system,
       user: text,
       schema_name: "discussion_summary",
       schema: if(notes?, do: Prompts.note_schema(), else: Prompts.discussion_schema()),
@@ -607,7 +626,9 @@ defmodule RisiMe.Agent.Ledger do
       items_count: length(found.items),
       call_ref: window.call_ref,
       made_by: RisiMe.Agent.MadeBy.build(window.call_ref, [], window[:also] || []),
-      created_at: Clock.usec(now)
+      created_at: Clock.usec(now),
+      lang: window[:lang],
+      langs: window[:langs]
     }
 
     with {:ok, discussion} <- Discussion.seal(discussion),

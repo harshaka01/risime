@@ -1,5 +1,17 @@
 # Android status — 0.2 nightlies
 
+## READY ownership quick fix (12 Oct, next nightly)
+- About: "© 2026 RisiCloud. All rights reserved." (`ABOUT_OWNER_LINE`; "Risi" stays the assistant's name).
+- Licences off every visible menu (About's "Open-source licences" button and Settings → Calls' "Show licences" are gone) →
+  Settings → About → **Legal** (only "Third-party notices"; ToS/Privacy come later, BACKLOG) → **Third-party notices**: the
+  bundled libraries grouped by licence (licence name, copyright lines, licence text once), no descriptions, nothing about
+  server/models/infrastructure (`noticeGroups()`).
+- Risi "Made by" sheet: "Made by Risi · hh:mm" only; model/provider and `also` lines kept as `MadeByLabels.developerTitle/
+  label/alsoLines` for a future Developer view (none shown yet). PDF: "Written by Risi" with no model name.
+- Tests: `OpenSourceLicencesTest` (grouping, owner line, no server/model words), `RisiMadeByTest` (gemma/qwen/faster-whisper
+  sample never rendered), `PdfContentTest`. `scripts/ui-entry-test --ledger` step 11 checks "Made by Risi" + About → Legal →
+  Third-party notices; shots `docs/status/screens/64-*.png`.
+
 ## READY P0 E (12 Oct): black screen after calls — fix + gate `scripts/call-back-test`
 **Reproduced on redroid (Android 15 and 14):** A calls B, B answers, A leaves the call screen with **Home** (or the screen goes
 off, as at the ear), B hangs up. The call is over but A's `CallActivity` stays alive in its own `ai.risicloud.risime.calls` task

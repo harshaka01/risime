@@ -112,12 +112,12 @@ object CallMicTap {
 
     /** Debug builds only (the caller checks `BuildConfig.DEBUG`): start or stop an injected source. */
     fun setInjecting(on: Boolean) {
-        injecting = on
+        injecting = on && ai.risicloud.risime.BuildConfig.DEBUG
     }
 
     /** Debug builds only: PCM from the injected source, in place of the microphone. */
     fun onInjected(data: ByteArray, length: Int, rate: Int, channels: Int) {
-        if (!injecting) return
+        if (!injecting || !ai.risicloud.risime.BuildConfig.DEBUG) return
         sink?.onPcm(data, length, rate, channels)
     }
 }

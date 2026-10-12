@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Contract v1.39 §36.4 gate driver: uploads Ogg/Opus clips as one participant's chunks of a live
+# call-transcription session, exactly as that phone would (POST /api/v1/calls/{id}/transcribe/chunks,
+# multipart, X-Device-Id = the phone's bound device). For device gates that need known Sinhala,
+# Tamil or English speech instead of a microphone (e.g. infra/whisper/testdata/*.ogg).
+#
+# Usage:
+#   transcribe-inject --server URL --token TOKEN --device DEVICE_ID --call CALL_ID \
+#       [--session SESSION_ID] [--seq N] [--offset-ms MS] [--duration-ms MS] [--gap S] FILE...
+#
+#   --session      default: the call's newest session (GET /api/v1/calls/{id}/transcribe); it
+#                  must be `on` and DEVICE_ID must be the device that sent this user's
+#                  request/allow, else the server answers 409/403 (printed).
+#   --seq          first seq (default 0); each file takes the next one.
+#   --offset-ms    the first chunk's start since `started_at` (default 0); each file moves it by
+#                  its duration.
+#   --duration-ms  each clip's duration (default 12000; the server only checks 1..20000).
+#   --gap          seconds between uploads (default 8: the server allows 8 chunks per 60 s with a
+#                  burst of 3).
+#
+# The token is read from the command line or $RISIME_TOKEN and never printed. Each line of output
+# is "seq=<n> status=<http> <reply json>".
+set -euo pipefail
+
+server="${RISIME_SERVER:-http://127.0.0.1:4000}"
+token="${RISIME_TOKEN:-}"
+device=""; call=""; session=""; seq=0; offset=0; duration=12000; gap=8
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --server) server="$2"; shift 2 ;;
+    --token) token="$2"; shift 2 ;;
+    --device) device="$2"; shift 2 ;;
+    --call) call="$2"; shift 2 ;;
+    --session) session="$2"; shift 2 ;;
+    --seq) seq="$2"; shift 2 ;;
+    --offset-ms) offset="$2"; shift 2 ;;
+    --duration-ms) duration="$2"; shift 2 ;;
+    --gap) gap="$2"; shift 2 ;;
+    --help|-h) sed -n '2,25p' "$0"; exit 0 ;;
+    --) shift; break ;;
+    -*) echo "unknown option $1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+
+[[ -n "$token" && -n "$device" && -n "$call" && $# -gt 0 ]] || { sed -n '2,25p' "$0" >&2; exit 2; }
+
+auth=(-H "Authorization: Bearer ${token}" -H "Accept: application/json")
+
+if [[ -z "$session" ]]; then
+  reply="$(curl -fsS "${auth[@]}" "${server}/api/v1/calls/${call}/transcribe")"
+  session="$(printf '%s' "$reply" | python3 -c 'import json,sys; s=json.load(sys.stdin)["session"]; print(s["session_id"] if s else "")')"
+  state="$(printf '%s' "$reply" | python3 -c 'import json,sys; s=json.load(sys.stdin)["session"]; print(s["state"] if s else "none")')"
+  [[ -n "$session" ]] || { echo "no session for call ${call}" >&2; exit 1; }
+  echo "session=${session} state=${state}"
+fi
+
+first=1
+for f in "$@"; do
+  [[ $first -eq 1 ]] || sleep "$gap"
+  first=0
+  out="$(curl -sS -w '\n%{http_code}' "${auth[@]}" -H "X-Device-Id: ${device}" \
+    -F "session_id=${session}" -F "seq=${seq}" -F "offset_ms=${offset}" \
+    -F "duration_ms=${duration}" -F "codec=ogg_opus" \
+    -F "audio=@${f};type=audio/ogg" \
+    "${server}/api/v1/calls/${call}/transcribe/chunks")"
+  status="$(printf '%s' "$out" | tail -n1)"
+  echo "seq=${seq} status=${status} $(printf '%s' "$out" | sed '$d')"
+  seq=$((seq + 1))
+  offset=$((offset + duration))
+done

@@ -81,6 +81,32 @@ defmodule RisiMeWeb.MeController do
   defp failure(conn, kind),
     do: RisiMe.AuthLog.failure(RisiMeWeb.ClientIP.from_conn(conn), kind, conn.request_path)
 
+  @doc "`GET /api/v1/me/risi/dev` (v1.39 §36.1): the developer's settings."
+  def risi_dev(conn, _params) do
+    user = conn.assigns.current_user
+
+    if RisiMe.Agent.CallTranscribe.dev?(user.id),
+      do: json(conn, %{transcribe_compare: RisiMe.Agent.CallTranscribe.dev_setting(user.id)}),
+      else: ApiError.send_error(conn, 403, :not_developer)
+  end
+
+  @doc "`PUT /api/v1/me/risi/dev` (v1.39 §36.1): `{\"transcribe_compare\": bool}`."
+  def put_risi_dev(conn, params) do
+    user = conn.assigns.current_user
+
+    cond do
+      not RisiMe.Agent.CallTranscribe.dev?(user.id) ->
+        ApiError.send_error(conn, 403, :not_developer)
+
+      not is_boolean(params["transcribe_compare"]) ->
+        ApiError.send_error(conn, 422, :bad_request)
+
+      true ->
+        :ok = RisiMe.Agent.CallTranscribe.put_dev_setting(user.id, params["transcribe_compare"])
+        json(conn, %{transcribe_compare: params["transcribe_compare"]})
+    end
+  end
+
   # v1.24 §24.11: `User` gains `tz` once set (absent: the server default).
   defp user_json(conn, user) do
     json = ApiJSON.user(user, Accounts.phone_verified?(user, conn.assigns.current_auth.kind))

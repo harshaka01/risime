@@ -240,6 +240,8 @@ defmodule RisiMe.Agent do
   commit lands.
   """
   def forget(conv) do
+    # v1.39 §36.2: a live call-transcription session of this chat stops (`official_off`).
+    RisiMe.Agent.CallTranscribe.official_off(conv)
     :ok = RisiMe.Agent.Secretary.forget(conv)
 
     %{"kind" => "forget", "conv" => conv}

@@ -62,7 +62,9 @@ defmodule RisiMe.Agent.Memory do
 
   @kinds ~w(person project decision promise meeting deadline open_question summary)
   # Risi posts that are not worth remembering (progress, card plumbing, errors).
-  @skip_kinds ~w(progress confirm_update error tool_call queued)
+  # v1.39 §36.5: the consent lines and the developer comparison are not memory.
+  @skip_kinds ~w(progress confirm_update error tool_call queued call_transcribe
+                 call_transcript_compare)
 
   @doc "The item kinds of §35.1."
   def kinds, do: @kinds

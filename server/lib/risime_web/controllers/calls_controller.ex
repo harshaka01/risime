@@ -72,4 +72,33 @@ defmodule RisiMeWeb.CallsController do
         ApiError.send_error(conn, 409, :too_many_for_video)
     end
   end
+
+  @doc "`GET /api/v1/calls/{call_id}/transcribe` (v1.39 §36.3): the newest session, or null."
+  def transcribe(conn, %{"call_id" => call_id}) do
+    case RisiMe.Agent.CallTranscribe.current(conn.assigns.current_user.id, call_id) do
+      {:ok, session} -> json(conn, %{session: session})
+      {:error, :not_found} -> ApiError.send_error(conn, 404, :not_found)
+    end
+  end
+
+  @doc """
+  `POST /api/v1/calls/{call_id}/transcribe/chunks` (v1.39 §36.4): one chunk of the uploader's
+  own microphone. The multipart body was read into memory by `RisiMeWeb.Plugs.MemoryMultipart`
+  (never a temp file); nothing about the audio is logged.
+  """
+  def transcribe_chunk(conn, %{"call_id" => call_id} = params) do
+    device_id = conn |> get_req_header("x-device-id") |> List.first()
+    user = conn.assigns.current_user.id
+
+    case RisiMe.Agent.CallTranscribe.upload(user, device_id, call_id, params) do
+      {:ok, reply} ->
+        conn |> put_status(202) |> json(reply)
+
+      {:error, 429, :rate_limited} ->
+        ApiError.send_error(conn, 429, :rate_limited, retry_after: 8)
+
+      {:error, status, code} ->
+        ApiError.send_error(conn, status, code)
+    end
+  end
 end

@@ -67,7 +67,9 @@ defmodule RisiMe.Application do
       # v1.23 §23.6: per-room locks and the tokens minted in the last 600 s.
       RisiMe.Calls.RoomMemory,
       # v1.19 §20.2: LiveKit RemoveParticipant calls off the group-lock path.
-      {Task.Supervisor, name: RisiMe.Calls.TaskSupervisor}
+      {Task.Supervisor, name: RisiMe.Calls.TaskSupervisor},
+      # v1.39 §36: call records (4 h, memory only) and the per-call transcription processes.
+      RisiMe.Agent.CallTranscribe.Supervisor
     ]
 
     # v1.24 S5: the Risi agent tree, only with RISI=on, the MLS NIF and its keys. Started after

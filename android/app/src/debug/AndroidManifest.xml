@@ -20,5 +20,14 @@
                 <action android:name="ai.risicloud.risime.debug.CALENDAR_SEED" />
             </intent-filter>
         </receiver>
+        <!-- v1.39 §36: the microphone seam for the call-transcribe gate (redroid has no microphone). Same protection. -->
+        <receiver
+            android:name="ai.risicloud.risime.debug.MicInjectReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="ai.risicloud.risime.debug.MIC_INJECT" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

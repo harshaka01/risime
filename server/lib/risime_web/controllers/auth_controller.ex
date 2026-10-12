@@ -40,6 +40,12 @@ defmodule RisiMeWeb.AuthController do
     body = if RisiMe.Risi.notes_on?(), do: Map.put(body, :risi_notes, "on"), else: body
     # v1.31 §31.1: `google_calendar: "on"` while RISI_GCAL=on and RISI_EVENTS=on (absent = off).
     body = if RisiMe.Risi.gcal_on?(), do: Map.put(body, :google_calendar, "on"), else: body
+    # v1.39 §36.1: `call_transcribe` "on" while RISI_CALL_TRANSCRIBE=on, Risi is up and the
+    # speech service is healthy; left out otherwise (absent = off, so older replies are unchanged).
+    body =
+      if RisiMe.Agent.CallTranscribe.config_on?(),
+        do: Map.put(body, :call_transcribe, "on"),
+        else: body
 
     json(conn, body)
   end

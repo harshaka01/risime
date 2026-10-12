@@ -467,7 +467,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     fun hasMicPermission(): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     /** The call button (RECORD_AUDIO already granted by the UI); [video] with [camera] = CAMERA granted (§19.6). */
-    fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video) {
+    fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video, official: Boolean = false) {
         // v1.33 §24.5: a 1:1's Official grp: (chat_kind dm) never takes the §20 path: its call is the
         // §16/§19 peer-to-peer call on the chat's dm: (the peer's name on the call screen, no Risi).
         val dm = runCatching { port.dmChatForCall(conversationId) }.getOrNull()
@@ -481,7 +481,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             scope.launch { _group.value?.start(conversationId, video, camera) }
             return
         }
-        scope.launch { _machine.value?.placeCall(conversationId, video, camera) }
+        // v1.39 §36.1: a 1:1's Official tab calls its dm: directly and says so ([official]).
+        scope.launch { _machine.value?.placeCall(conversationId, video, camera, official = official) }
     }
 
     /** §20.4 Join from a group call's line (the room is checked by `join`). */

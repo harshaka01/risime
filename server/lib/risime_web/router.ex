@@ -147,6 +147,11 @@ defmodule RisiMeWeb.Router do
     get "/contacts", ContactsController, :index
     get "/calls/turn", CallsController, :turn
     post "/calls/rooms", CallsController, :rooms
+    # v1.39 §36.1, §36.3, §36.4: call transcription.
+    get "/me/risi/dev", MeController, :risi_dev
+    put "/me/risi/dev", MeController, :put_risi_dev
+    get "/calls/:call_id/transcribe", CallsController, :transcribe
+    post "/calls/:call_id/transcribe/chunks", CallsController, :transcribe_chunk
   end
 
   # v1.11 §14.2: blob bytes are served to any `Accept` (no JSON content negotiation).
