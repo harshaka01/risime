@@ -143,6 +143,7 @@ class TranscribeUploader(
                 when (val a = UploadPolicy.classify(r)) {
                     UploadAction.Done -> {
                         accepted++
+                        log("transcribe: chunk ${c.seq} accepted (${c.durationMs} ms)")
                         remove(c)
                     }
                     is UploadAction.Drop -> {

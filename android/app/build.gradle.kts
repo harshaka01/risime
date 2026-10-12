@@ -491,7 +491,8 @@ abstract class CheckNoGcalSeam : DefaultTask() {
 
     @TaskAction
     fun check() {
-        val needles = listOf("GCAL_TEST", "GcalTestReceiver", "FakeGcalAuthorizer", "CALENDAR_SEED", "CalendarSeedReceiver")
+        // v1.39 §36: the microphone injection seam too (MIC_INJECT, MicInjectReceiver).
+        val needles = listOf("GCAL_TEST", "GcalTestReceiver", "FakeGcalAuthorizer", "CALENDAR_SEED", "CalendarSeedReceiver", "MIC_INJECT", "MicInjectReceiver")
         val patterns = needles.flatMap { listOf(it.toByteArray(Charsets.UTF_8), it.toByteArray(Charsets.UTF_16LE)) }
         val files = apks.get().asFile.walkTopDown().filter { it.isFile && it.name.endsWith(".apk") }.toList()
         if (files.isEmpty()) throw GradleException("no release APK to check under ${apks.get().asFile}")
