@@ -61,7 +61,7 @@ scrape_configs:
     metrics_path: /probe
     params: { module: [tcp_connect] }
     static_configs:
-      - targets: ["203.115.26.139:3478"]
+      - targets: ["203.189.69.76:3478"]
         labels: { path: public, service: turn }
       - targets: ["10.20.20.15:3478"]
         labels: { path: lan, service: turn }

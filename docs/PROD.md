@@ -330,10 +330,15 @@ sudo rm -rf /var/lib/tailscale
 ```
 
 ### Outside spark2 (ask)
-- **DNS:** `risime.risicloud.ai.  A  203.115.26.139` (TTL 300). Add `AAAA` only if spark2 gets
+- **Addresses (network team, 2026-10-12):** spark2's public **inbound** address is `203.189.69.76`
+  (NAT to `10.20.20.15`); **outbound** traffic still leaves as `203.115.26.139` (PTR still
+  `mail.codegen.net`, change requested). `risicloud.ai` (spark: Keycloak, `/app/risime/`) is
+  `203.189.69.77` -> `10.20.20.14`. The firewall does not hairpin `.76` from the LAN: check from outside.
+- **DNS:** `risime.risicloud.ai.  A  203.189.69.76` (TTL 300). Add `AAAA` only if spark2 gets
   public IPv6.
-- **Network firewall/NAT:** inbound **TCP 80 and 443** from anywhere to `203.115.26.139`, forwarded
-  to spark2 `10.20.20.15:80/443`.
+- **Network firewall/NAT:** inbound to `203.189.69.76`, forwarded to spark2 `10.20.20.15`:
+  **TCP 80, 443** (Caddy); **UDP+TCP 3478** (coturn STUN/TURN); **UDP 49152-49499** (coturn relay);
+  **UDP 49500-49999** (LiveKit group-call media). Nothing else (5349 stays closed until TURN/TLS has a cert).
 
 ### Checks
 ```bash

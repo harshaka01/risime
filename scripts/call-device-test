@@ -89,11 +89,11 @@ trap 'exit 130' INT TERM
 # ---------------------------------------------------------------- server
 ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
 # CALLTEST_TURN=1: the temp server hands out credentials for the LIVE coturn (decision 046), and a
-# last call runs relay-only through it (the phones' only path is turn:203.115.26.139:3478).
+# last call runs relay-only through it (the phones' only path is turn:203.189.69.76:3478).
 TURN_ENV=""
 if [ "${CALLTEST_TURN:-0}" = 1 ]; then
   ts="$(grep '^TURN_SECRET=' .env | cut -d= -f2-)"; [ -n "$ts" ] || { echo "CALLTEST_TURN=1 needs TURN_SECRET in .env"; exit 2; }
-  TURN_ENV="TURN_SECRET='$ts' TURN_URLS='turn:203.115.26.139:3478?transport=udp,turn:203.115.26.139:3478?transport=tcp'"
+  TURN_ENV="TURN_SECRET='$ts' TURN_URLS='turn:203.189.69.76:3478?transport=udp,turn:203.189.69.76:3478?transport=tcp'"
 fi
 # Call 15 (v1.33 D1): TABS=on and Risi on (Official needs Risi in the group, §24.2).
 [ "${CALLTEST_TABS_ONLY:-0}" = 1 ] && { CALLTEST_TABS=1; CALLTEST_FAST=1; CALLTEST_SWITCH_ONLY=1; }

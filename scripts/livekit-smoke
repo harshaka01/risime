@@ -13,7 +13,7 @@
 # `scripts/livekit-smoke --live`: checks the running risime-livekit container instead: up with
 # restart=unless-stopped, binds (7880 on 127.0.0.1 only, UDP only 49500-49999 on 10.20.20.15, no
 # 7881), health, token validation with .env's key (never printed), and a 10-s load test whose
-# media goes through the public 203.115.26.139 (hairpin NAT). Reachability from outside is
+# media goes through the public 203.189.69.76 (hairpin NAT). Reachability from outside is
 # separate (decision 046's method, scripts/udp-echo-probe before LiveKit starts).
 set -euo pipefail
 cd "$(dirname "$0")/.."

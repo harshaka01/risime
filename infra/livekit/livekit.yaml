@@ -6,7 +6,7 @@
 # Exposure (host networking, see infra/docker-compose.livekit.yml):
 #   127.0.0.1:7880/tcp       signalling + HTTP API; public only through Caddy at
 #                            wss://risime.risicloud.ai/livekit (infra/caddy/Caddyfile)
-#   10.20.20.15:49500-49999/udp  WebRTC media (NATed 1:1 from 203.115.26.139). coturn's relay
+#   10.20.20.15:49500-49999/udp  WebRTC media (NATed 1:1 from the inbound 203.189.69.76). coturn's relay
 #                            range is 49152-49499 (infra/coturn/turnserver.conf); never overlap.
 # Nothing else: no ICE-TCP (7881), no embedded TURN, no Prometheus, no debug port.
 
@@ -20,10 +20,10 @@ rtc:
   port_range_end: 49999
   # ICE-TCP off: 7881 is not open at the edge. Clients that can't do UDP use coturn (TCP 3478).
   tcp_port: 0
-  # The public address is set explicitly (1:1 NAT 203.115.26.139 -> 10.20.20.15); no STUN
+  # The public address is set explicitly (1:1 NAT inbound 203.189.69.76 -> 10.20.20.15 since 2026-10-12); no STUN
   # discovery. Host candidates on 10.20.20.15 are rewritten to it (NAT1To1).
   use_external_ip: false
-  node_ip: 203.115.26.139
+  node_ip: 203.189.69.76
   # Gather and bind on spark2's LAN address only (not loopback, Docker bridges, Tailscale, IPv6).
   ips:
     includes:
@@ -33,12 +33,12 @@ rtc:
   # (HMAC-SHA1 over "<expiry>:<id>") from the same TURN_SECRET coturn uses (decision 046);
   # ttl 5 h like the 1:1 credentials, longer than the 4-h maximum call.
   turn_servers:
-    - host: 203.115.26.139
+    - host: 203.189.69.76
       port: 3478
       protocol: udp
       secret_file: /tmp/livekit/turn-secret
       ttl: 18000
-    - host: 203.115.26.139
+    - host: 203.189.69.76
       port: 3478
       protocol: tcp
       secret_file: /tmp/livekit/turn-secret

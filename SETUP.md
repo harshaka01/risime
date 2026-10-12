@@ -1,7 +1,7 @@
 # RisiMe — Setup Guide (status as of today)
 
 ## Layout
-- **spark2** (DGX Spark, ARM64, `ssh spark2` = 203.115.26.139, hostname `gx10-e23a`): all
+- **spark2** (DGX Spark, ARM64, `ssh spark2` = inbound 203.189.69.76 since 2026-10-12 (was 203.115.26.139, which stays the outbound address; laptop `~/.ssh/config` HostName must change), hostname `gx10-e23a`): all
   development runs here as `harsha` in `/home/harsha/development/risime`.
 - **Laptop** (`/home/harsha/development/risime`): the Git mirror, emulator, USB phone and tunnel.
   Laptop CC can reach both `spark` and `spark2`.

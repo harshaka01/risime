@@ -3,7 +3,7 @@ You run on Harsha's **laptop** (Deepin 25, x86_64) in `/home/harsha/development/
 holds the RisiMe starter files. Read `CLAUDE.md` first.
 
 Two machines are reachable by SSH alias:
-- `spark2` (203.115.26.139, `harsha`, ARM64, hostname `gx10-e23a`) is the RisiMe dev box.
+- `spark2` (inbound 203.189.69.76, outbound 203.115.26.139, `harsha`, ARM64, hostname `gx10-e23a`) is the RisiMe dev box.
 - `spark` is NOT part of this project. Don't touch it.
 
 ## Already done on spark2 by Harsha (verify only, don't redo)

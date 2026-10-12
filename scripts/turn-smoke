@@ -6,7 +6,7 @@
 # Live mode (the default since 2026-10-07, when coturn went public, decision 046): checks the running
 # risime-turn container. It must be up with restart=unless-stopped (docker/containerd enabled at
 # boot), listen on 10.20.20.15 only, and give real REST credentials from .env's TURN_SECRET (never
-# printed) relays over UDP and TCP, on 10.20.20.15 and through the public 203.115.26.139 (hairpin),
+# printed) relays over UDP and TCP, on 10.20.20.15 and through the public 203.189.69.76 (hairpin),
 # relay to relay. A wrong secret must be refused. `scripts/turn-smoke --loopback` = the old test.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -32,8 +32,11 @@ if [ "${1:-}" != --loopback ]; then
   }
   check 10.20.20.15 "" "UDP relay on 10.20.20.15 (relay to relay)"
   check 10.20.20.15 "-t" "TCP to TURN, UDP relay, on 10.20.20.15"
-  check 203.115.26.139 "" "UDP relay through the public 203.115.26.139"
-  check 203.115.26.139 "-t" "TCP to TURN through the public 203.115.26.139"
+  # Since the 2026-10-12 move to 203.189.69.76 the firewall does not hairpin from the LAN: skip, the outside check covers it.
+  if timeout 3 bash -c '</dev/tcp/203.189.69.76/3478' 2>/dev/null; then
+    check 203.189.69.76 "" "UDP relay through the public 203.189.69.76"
+    check 203.189.69.76 "-t" "TCP to TURN through the public 203.189.69.76"
+  else echo "skip: no hairpin to 203.189.69.76 from the LAN (check from outside: check-host.net)"; fi
   read -r U2 P2 < <(creds "wrong-secret-$RANDOM")
   out="$(docker exec "$live" turnutils_uclient -y -n 2 -m 1 -u "$U2" -w "$P2" -p 3478 10.20.20.15 2>&1 || true)"
   if grep -q 'tot_recv_msgs=[1-9]' <<<"$out"; then echo "FAIL: wrong secret accepted" >&2; exit 1; fi

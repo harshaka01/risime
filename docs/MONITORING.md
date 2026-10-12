@@ -84,7 +84,7 @@ them in the rules and in `gen-dashboards.py` then. vLLM panels already show data
 ### Probes (blackbox)
 `https://risime.risicloud.ai/health` (body must contain `"status":"ok"`), `http://127.0.0.1:4000/health`,
 Keycloak `https://risicloud.ai/realms/aoa` (public) and the **LAN path** `https://10.20.20.14/realms/aoa` (Host/SNI
-`risicloud.ai`), TCP TURN `203.115.26.139:3478` (public) and `10.20.20.15:3478` (LAN), LiveKit `127.0.0.1:7880`.
+`risicloud.ai`), TCP TURN `203.189.69.76:3478` (public inbound since 2026-10-12; no hairpin from the LAN, so this probe needs an outside vantage) and `10.20.20.15:3478` (LAN), LiveKit `127.0.0.1:7880`.
 TLS expiry comes from the two HTTPS probes. Note: spark2 is behind the same firewall, so a "public" probe from here may
 be hairpinned and faster than a real outside client; Uptime Kuma (below) and an outside check catch what these cannot.
 
@@ -108,8 +108,8 @@ bridge falls back to e-mail (`SMTP_*` + `OPS_ALERT_EMAIL`, STARTTLS) when `sent 
 `.env`, alerts are only logged there.
 
 ### What Harsha must do (needs sudo, DNS or Keycloak)
-1. **DNS:** A records `monitor.risicloud.ai`, `uptime.risicloud.ai` and `status.risicloud.ai` -> `203.115.26.139`
-   (the same VIP as `risime.risicloud.ai`; the FortiGate already forwards 80/443 to spark2).
+1. **DNS:** A records `monitor.risicloud.ai`, `uptime.risicloud.ai` and `status.risicloud.ai` -> `203.189.69.76`
+   (the same inbound VIP as `risime.risicloud.ai`; outbound stays `203.115.26.139`; the FortiGate already forwards 80/443 to spark2).
 2. **Keycloak** (realm `aoa`): create group `risime-admins` and add yourself (and other admins). Create client `monitor`:
    OpenID Connect, client authentication ON (confidential), standard flow, valid redirect URIs
    `https://monitor.risicloud.ai/oauth2/callback` and `https://uptime.risicloud.ai/oauth2/callback`. Add a mapper to

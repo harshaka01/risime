@@ -14,7 +14,7 @@ An agent-native communication network ("Talk. Connect. Act.").
   - an own-model cascade (commercial LLM first, own L1/L2 models take over task by task).
 
 ## Roles, hosts, directories
-All three sessions run on **spark2** (DGX Spark, **ARM64**, 203.115.26.139) as user `harsha`,
+All three sessions run on **spark2** (DGX Spark, **ARM64**, LAN 10.20.20.15; public **inbound 203.189.69.76** since 2026-10-12, **outbound 203.115.26.139**) as user `harsha`,
 in one checkout: `/home/harsha/development/risime`, branch `main`.
 
 | Role | Owns (commit only these paths) |

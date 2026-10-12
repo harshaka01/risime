@@ -10,9 +10,9 @@ exits. It's a short probe you start and stop yourself, so CLAUDE.md rule 6 (bind
 doesn't apply; never leave it running.
 
 Test from outside spark2's network (laptop on phone hotspot / mobile data, not the office LAN):
-  printf 'ping\n' | nc -u -w 3 203.115.26.139 3478
+  printf 'ping\n' | nc -u -w 3 203.189.69.76 3478
   -> prints "risime-echo 3478 ping" when the port is reachable both ways.
-Or from a phone with any "UDP sender" app: send to 203.115.26.139:<port>, watch for the echo.
+Or from a phone with any "UDP sender" app: send to 203.189.69.76:<port>, watch for the echo.
 Nothing printed on spark2 = inbound blocked (edge firewall or ufw); printed here but no echo on
 the sender = outbound/NAT return path broken.
 The port must not be in use (stop coturn/LiveKit first).

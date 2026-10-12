@@ -1,7 +1,7 @@
 # /etc/caddy/Caddyfile on spark2 — public front of the RisiMe pilot (docs/decisions/023).
 # Works on Caddy 2.6.2 (Ubuntu) and 2.11 (official repo); validated against both.
 # Caddy terminates TLS (automatic HTTPS via Let's Encrypt: needs DNS A risime.risicloud.ai ->
-# 203.115.26.139 and inbound 80+443 reaching spark2) and proxies to Phoenix on 127.0.0.1:4000.
+# 203.189.69.76 (inbound since 2026-10-12) and inbound 80+443 reaching spark2) and proxies to Phoenix on 127.0.0.1:4000.
 # Phoenix never listens on a public interface. Install: see docs/PROD.md "Pilot on spark2".
 {
 	# No admin API on the network; local only (default 127.0.0.1:2019, kept explicit).
