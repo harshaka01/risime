@@ -133,6 +133,8 @@ defmodule RisiMeWeb.Router do
     delete "/risi/memory", RisiMemoryController, :delete
     put "/risi/learning", RisiMemoryController, :put_learning
     get "/risi/learning", RisiMemoryController, :learning
+    # Decision 084: read-only deep-agents view, RISI_DEV_USERS only (404 otherwise).
+    get "/risi/agents", RisiAgentsController, :show
     post "/blobs", BlobController, :create
     post "/backups", BackupController, :create
     get "/backups", BackupController, :index

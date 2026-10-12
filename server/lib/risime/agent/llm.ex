@@ -99,8 +99,11 @@ defmodule RisiMe.Agent.LLM do
         %{"role" => "user", "content" => req.user}
       ] ++ Map.get(req, :history, [])
 
+    # Decision 084: a task may name another loopback model (the router's risi-l2 later).
+    model_alias = Map.get(req, :model_alias) || @alias
+
     body = %{
-      "model" => @alias,
+      "model" => model_alias,
       "messages" => messages,
       "temperature" => 0.2,
       "top_p" => 0.8,
@@ -157,7 +160,7 @@ defmodule RisiMe.Agent.LLM do
       conversation_id: req.conversation_id,
       chat_id: req.chat_id,
       task: req.task,
-      model_alias: @alias,
+      model_alias: model_alias,
       provider: provider.name(),
       fallback: fallback,
       latency_ms: latency,
@@ -223,7 +226,9 @@ defmodule RisiMe.Agent.LLM do
       backoff_ms: config()[:backoff_ms] || 1_000,
       deadline_ms: Map.get(req, :deadline_ms),
       invalid: Map.get(req, :invalid_output, :retry),
-      chat: if(t = Map.get(req, :timeout_ms), do: [timeout: t], else: [])
+      chat:
+        if(t = Map.get(req, :timeout_ms), do: [timeout: t], else: []) ++
+          if(u = Map.get(req, :base_url), do: [base_url: u], else: [])
     ]
   end
 

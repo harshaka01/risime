@@ -206,6 +206,10 @@ defmodule RisiMe.Agent.Turn do
         lang: voice_lang(env) || Lang.detect(question)
       })
 
+    # Decision 084: the Fast router's shadow decision and this turn's timing row. Observes
+    # only: never changes the route, never raises; nothing with RISI_AGENTS=legacy.
+    RisiMe.Agents.Shadow.turn(question, intent, clarified, ctx)
+
     # P0 2026-10-09: the pending action draft and (in the Risi chat) the asker's promises.
     # v1.35 §34.2: a schedule question never sees the draft.
     draft_state =

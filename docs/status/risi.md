@@ -2,6 +2,68 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## PART 6 steps 0–2: deep agents (decision 084)
+
+**State:** green on `main` (full server suite, `MIX_TEST_PARTITION=da`). Server-only, fast-lane eligible
+(one additive migration `20261103100000_risi_agents`). Root deploys. **No behaviour change by default:**
+`RISI_AGENTS=on`, `RISI_AGENT_ROUTER=shadow` (rules only, no model call), every other agent `off`.
+Design, flags, budgets, GPU memory budget: `docs/decisions/084-deep-agents.md`. Scores: `docs/status/risi-scores.md`.
+
+### What is in
+- **Agents** (`server/lib/risime/agent/agents/`): behaviour `RisiMe.Agents.Agent`; registry `RisiMe.Agents`
+  (Fast router built; Planner, Ledger, Voice, Calendar, Memory, Summary, Marketplace, Twin declared,
+  `run` refuses → legacy); `RisiMe.Agents.Supervisor` (last child of the Risi tree: flag cache,
+  `Task.Supervisor`, one `Agents.Server` per agent); `Orchestrator.call/3` (off/shadow/canary/on, hard
+  budget, auto-fallback + incident); `Activity` (agent-activity-v1 on PubSub `risi:agent_activity` +
+  telemetry, no text); `Runs` (`risi_agent_runs`); `ToolRegistry` (MCP-style descriptors over today's
+  `Agent.Tools`, `call/3` = authorize + the same `run`).
+- **Flags without deploy:** `risi_agent_flags` table > env > default, 5-s cache.
+  `ERL_EPMD_ADDRESS=127.0.0.1 ~/risime-run/current/bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_AGENTS", "legacy")'`
+  (or the psql upsert in decision 084). `RISI_AGENTS=legacy` = every agent off, no shadow, no timing rows.
+- **Shadow (step 2):** `Agent.Turn` calls `RisiMe.Agents.Shadow.turn/4` once per turn after choosing its
+  route (an observer: rescue-wrapped, never changes the route). It logs the router's route vs today's
+  (`agreed`), and `TurnTiming` writes one `legacy_turn` row per finished turn (duration, typing time
+  `first_ms`, route, language). Router model: `RISI_ROUTER_MODEL=risi-l1` (flag table or env) asks
+  risi-l1 (tiny non-thinking prompt, ≤ 40 tokens, `risi_route` schema) only for low-confidence asks,
+  in the background; `RISI_ROUTER_URL` swaps in a loopback risi-l2 later (`LLM` takes `model_alias`,
+  `base_url`; defaults unchanged).
+- **Eval (step 1):** golden sets `server/test/risime/agent/golden/{router,ledger,summary}.jsonl`
+  (en/si/ta/Singlish; hallucination traps). `scripts/risi-eval` (fake) / `scripts/risi-eval --live`
+  (risi-l1, read-only, sequential). Daily scoreboard: `RisiMe.Agents.ScoreboardJob` (cron 00:20 UTC) →
+  `risi_agent_scores`; `scripts/risi-eval scores` → `docs/status/risi-scores.md`;
+  `GET /api/v1/risi/agents` (RISI_DEV_USERS only, 404 otherwise).
+- **Streaming:** typing/progress already exist (`risi_progress`); partial answer text needs a wire
+  change → `contract/proposals/2026-10-13-risi-streaming.md` (stopped there).
+- **Fix found by the parity tests:** `ActionItems.from_call` crashed when the item owner was the call's
+  only speaker (`LedgerOut.name_list([])`); the confirm card now says "From your call (HH:MM)".
+
+### Parity tests (tag `:risi_parity`, part of plain `mix test` → the blocking server gate)
+`server/test/risime/agent/parity/`, fake risi-l1, each with a < 3 s server-side timing bound:
+- `turn_parity_test.exs`: direct `final` (answer body, key set, message source, one call); tool step then
+  `final` (capabilities, two calls); schedule question forces `risi_calendar_check`; `risi_items` answered by
+  the server with no model call; `ScheduleIntent.classify` on today's phrases.
+- `ledger_parity_test.exs`: quiet discussion → one `discussion_summary` call, rows, copies, card; no items →
+  nothing posted; not quiet yet → no call.
+- `calendar_parity_test.exs`: event draft → `risi_calendar_add` confirm card, [Add] creates it with no model
+  call; model-chosen `risi_calendar_check` → the "Checked:" line and source.
+- `memory_parity_test.exs`: summarise this month (forced `summarise_range`, memory sources); what did I agree
+  with Upali (`memory_search` with people/range); nothing stored; nothing about that.
+- `summary_parity_test.exs`: summarise this chat; summarise today; nothing to summarise; the 23:35 day summary.
+- `action_items_parity_test.exs`: voice note; call; unclear note; clear note without items; owner as the only
+  speaker (the fix).
+- `call_summary_parity_test.exs`: ≥ 30 s from 2 speakers → summary, card, item; < 30 s → nothing.
+- Plus `server/test/risime/agent/agents/`: `agents_test.exs` (flags, orchestrator, fallback/incidents,
+  activity, tool registry, router, shadow beside a real turn, legacy switch), `eval_test.exs` (golden sets,
+  traps caught), `scoreboard_test.exs` (rows, Markdown, job, admin view); `eval_live_test.exs` (`:llm_live`).
+
+### Needs Harsha / root
+- Root: fast-lane deploy; then `scripts/risi-eval --live` at a quiet hour for the router's model numbers.
+- Root: the admin route (`GET /api/v1/risi/agents`, 1 router line + controller) and the cron line in
+  `config/config.exs` are outside the risi paths (authorised for this task); not app wire protocol.
+- Harsha: the streaming proposal (open questions inside). A risi-l2 model (≤ 10 GB all-in per the GPU
+  budget) needs a download OK (> 2 GB likely) — not needed yet.
+- Harsha: after 3 days of shadow rows, decide router canary (`RISI_AGENT_ROUTER=canary`).
+
 ## Step 2: long-term memory and retrieval (contract v1.36 §35.1–§35.3)
 
 **State:** green on `main` (`6edec63`; server suite 1185 tests, 0 failures; live risi-l1 memory checks 4/4). Root deployed it through the fast lane. The example now carries `turn_ref` (9ca479b) and is compared exactly. The hashing embeddings are recorded as decision 078.

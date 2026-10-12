@@ -14,7 +14,9 @@ defmodule RisiMe.Agent.Supervisor do
       RisiMe.Agent.Mls,
       RisiMe.Agent.KeyPackages,
       RisiMe.Agent.ConversationSup,
-      RisiMe.Agent.Inbox
+      RisiMe.Agent.Inbox,
+      # Decision 084: the deep agents (last, so a restart of theirs touches nothing above).
+      RisiMe.Agents.Supervisor
     ]
 
     Supervisor.init(children, strategy: :rest_for_one, max_restarts: 5, max_seconds: 60)

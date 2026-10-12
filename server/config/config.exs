@@ -99,7 +99,9 @@ config :risime, Oban,
        # v1.24 §24.11: Risi's 09:00-local digests (every 15 min covers :30 and :45 zones).
        {"*/15 * * * *", RisiMe.Workers.Risi, args: %{"kind" => "digest_sweep"}},
        # v1.25/v1.26: expired confirm cards, old tool-call rows (and S14+ activity, reminders).
-       {"7 * * * *", RisiMe.Workers.Risi, args: %{"kind" => "prune"}}
+       {"7 * * * *", RisiMe.Workers.Risi, args: %{"kind" => "prune"}},
+       # Decision 084: yesterday's deep-agents scoreboard (counts and timings only).
+       {"20 0 * * *", RisiMe.Agents.ScoreboardJob}
      ]}
   ]
 

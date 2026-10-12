@@ -22,7 +22,14 @@ defmodule RisiMe.Agent.LLM.Local do
 
   @impl true
   def chat(body, opts \\ []) do
-    with {:ok, base} <- base_url() do
+    # Decision 084: a caller may name another loopback endpoint (checked the same way).
+    base_result =
+      case Keyword.get(opts, :base_url) do
+        nil -> base_url()
+        url -> check_url(url)
+      end
+
+    with {:ok, base} <- base_result do
       req =
         Req.new(
           [

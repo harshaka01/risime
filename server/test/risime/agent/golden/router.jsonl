@@ -1,0 +1,63 @@
+{"id":"r-en-01","lang":"en","text":"what appointment do I have tomorrow","route":"calendar_read","src":"contract"}
+{"id":"r-en-02","lang":"en","text":"Check my calendar for Monday, October 12th","route":"calendar_read","src":"contract"}
+{"id":"r-en-03","lang":"en","text":"am I free on Wednesday afternoon?","route":"calendar_read","src":"contract"}
+{"id":"r-en-04","lang":"en","text":"what's on this week","route":"calendar_read","src":"contract"}
+{"id":"r-en-05","lang":"en","text":"do I have any meetings today","route":"calendar_read","src":"contract"}
+{"id":"r-si-01","lang":"si","text":"හෙට මට තියෙන appointments මොනවද?","route":"calendar_read","src":"contract"}
+{"id":"r-si-02","lang":"si","text":"අද මට meeting තියෙනවද?","route":"calendar_read","src":"contract"}
+{"id":"r-ta-01","lang":"ta","text":"நாளை எனக்கு என்ன சந்திப்புகள் உள்ளன?","route":"calendar_read","src":"contract"}
+{"id":"r-ta-02","lang":"ta","text":"இன்று நான் free-ஆ?","route":"calendar_read","src":"contract"}
+{"id":"r-sg-01","lang":"singlish","text":"heta mata meeting thiyenawada?","route":"calendar_read","src":"contract"}
+{"id":"r-sg-02","lang":"singlish","text":"ada mama free da?","route":"calendar_read","src":"contract"}
+{"id":"r-sg-03","lang":"singlish","text":"sanduda mokada thiyenne?","route":"calendar_read","src":"contract"}
+{"id":"r-en-06","lang":"en","text":"what have you set up for me?","route":"ledger_items","src":"contract"}
+{"id":"r-en-07","lang":"en","text":"show my reminders","route":"ledger_items","src":"contract"}
+{"id":"r-si-03","lang":"si","text":"ඔයා මට මොනවද set කරලා තියෙන්නේ?","route":"ledger_items","src":"contract"}
+{"id":"r-en-08","lang":"en","text":"add my interview with Shenika on Monday 12 Oct at 2pm to my calendar","route":"calendar_write","src":"contract"}
+{"id":"r-en-09","lang":"en","text":"remind me tomorrow at 9 to call Kamal","route":"reminder","src":"contract"}
+{"id":"r-en-10","lang":"en","text":"send Kumu good morning every day at 6","route":"message_write","src":"contract"}
+{"id":"r-en-11","lang":"en","text":"summarise this chat","route":"summary_chat","src":"contract"}
+{"id":"r-en-12","lang":"en","text":"summarise the work done this month","route":"memory","src":"risi.md"}
+{"id":"r-en-13","lang":"en","text":"what did I agree with Upali last week","route":"memory","src":"risi.md"}
+{"id":"r-en-14","lang":"en","text":"what's pending with Shenika","route":"memory","src":"risi.md"}
+{"id":"r-si-04","lang":"si","text":"මේ මාසේ කරපු වැඩ සාරාංශ කරන්න","route":"memory","src":"risi.md"}
+{"id":"r-si-05","lang":"si","text":"ගිය සතියේ Upali එක්ක මම මොනවද එකඟ වුණේ?","route":"memory","src":"risi.md"}
+{"id":"r-si-06","lang":"si","text":"Shenika එක්ක ඉතිරි වෙලා තියෙන වැඩ මොනවද?","route":"memory","src":"risi.md"}
+{"id":"r-ta-03","lang":"ta","text":"இந்த மாதம் செய்த வேலையைச் சுருக்கமாகச் சொல்லுங்கள்","route":"memory","src":"risi.md"}
+{"id":"r-ta-04","lang":"ta","text":"கடந்த வாரம் Upali உடன் நான் என்ன ஒப்புக்கொண்டேன்?","route":"memory","src":"risi.md"}
+{"id":"r-ta-05","lang":"ta","text":"Shenika உடன் நிலுவையில் உள்ளவை என்ன?","route":"memory","src":"risi.md"}
+{"id":"r-sg-04","lang":"singlish","text":"Upali ekka giya sathiye mokakda agree une?","route":"memory","src":"risi.md"}
+{"id":"r-en-15","lang":"en","text":"hi Risi","route":"chat","src":"new"}
+{"id":"r-en-16","lang":"en","text":"thanks!","route":"chat","src":"new"}
+{"id":"r-en-17","lang":"en","text":"what can you do?","route":"chat","src":"new"}
+{"id":"r-en-18","lang":"en","text":"good morning","route":"chat","src":"new"}
+{"id":"r-si-07","lang":"si","text":"ස්තූතියි","route":"chat","src":"new"}
+{"id":"r-si-08","lang":"si","text":"ආයුබෝවන්","route":"chat","src":"new"}
+{"id":"r-ta-06","lang":"ta","text":"நன்றி","route":"chat","src":"new"}
+{"id":"r-ta-07","lang":"ta","text":"வணக்கம்","route":"chat","src":"new"}
+{"id":"r-sg-05","lang":"singlish","text":"kohomada","route":"chat","src":"new"}
+{"id":"r-en-19","lang":"en","text":"remind us Tuesday 2pm to submit the tender","route":"reminder","src":"eval/risi"}
+{"id":"r-en-20","lang":"en","text":"set an alarm for 6am","route":"reminder","src":"eval/risi"}
+{"id":"r-en-21","lang":"en","text":"wake me up at 5:30 tomorrow","route":"reminder","src":"new"}
+{"id":"r-si-09","lang":"si","text":"හෙට උදේ 9ට Kamal ට call කරන්න මතක් කරන්න","route":"reminder","src":"new"}
+{"id":"r-ta-08","lang":"ta","text":"நாளை காலை 9 மணிக்கு Kamal-ஐ அழைக்க நினைவூட்டு","route":"reminder","src":"new"}
+{"id":"r-sg-06","lang":"singlish","text":"heta 9ta Kamal ta call karanna mathak karanna","route":"reminder","src":"new"}
+{"id":"r-en-22","lang":"en","text":"book a meeting with Shenika on Thursday at 3pm","route":"calendar_write","src":"new"}
+{"id":"r-en-23","lang":"en","text":"cancel my lunch with Upali on Friday","route":"calendar_write","src":"new"}
+{"id":"r-en-24","lang":"en","text":"move the design review meeting to Monday","route":"calendar_write","src":"new"}
+{"id":"r-si-10","lang":"si","text":"සිකුරාදා 3ට Shenika එක්ක රැස්වීමක් calendar එකට දාන්න","route":"calendar_write","src":"new"}
+{"id":"r-ta-09","lang":"ta","text":"வியாழன் மாலை 3 மணிக்கு Shenika உடன் கூட்டம் சேர்","route":"calendar_write","src":"new"}
+{"id":"r-sg-07","lang":"singlish","text":"Thursday 3ta meeting ekak calendar eke danna","route":"calendar_write","src":"new"}
+{"id":"r-en-25","lang":"en","text":"tell the team I'll be 10 minutes late","route":"message_write","src":"new"}
+{"id":"r-en-26","lang":"en","text":"schedule a message to Kamal at 8pm saying happy birthday","route":"message_write","src":"new"}
+{"id":"r-si-11","lang":"si","text":"Kamal ට සුබ උපන්දිනයක් කියලා පණිවිඩයක් යවන්න","route":"message_write","src":"new"}
+{"id":"r-sg-08","lang":"singlish","text":"Kamal ta happy birthday kiyala message ekak yawanna","route":"message_write","src":"new"}
+{"id":"r-en-27","lang":"en","text":"give me a quick recap of today's discussion here","route":"summary_chat","src":"new"}
+{"id":"r-si-12","lang":"si","text":"මේ chat එක සාරාංශ කරන්න","route":"summary_chat","src":"new"}
+{"id":"r-ta-10","lang":"ta","text":"இந்த உரையாடலைச் சுருக்கவும்","route":"summary_chat","src":"new"}
+{"id":"r-en-28","lang":"en","text":"check if I'm free Friday and then book lunch with Shenika","route":"planner","src":"eval/risi tool_multi"}
+{"id":"r-en-29","lang":"en","text":"remind me at 5 and also send Kamal the agenda","route":"planner","src":"new"}
+{"id":"r-en-30","lang":"en","text":"what's the capital of Australia?","route":"planner","src":"new"}
+{"id":"r-en-31","lang":"en","text":"ask RisiWork for the Q3 sales numbers","route":"planner","src":"eval/risi honest_unavailable"}
+{"id":"r-en-32","lang":"en","text":"send this as a PDF","route":"planner","src":"new"}
+{"id":"r-si-13","lang":"si","text":"ලංකාවේ අගනුවර මොකක්ද?","route":"planner","src":"new"}

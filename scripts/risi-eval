@@ -3,6 +3,12 @@
 # baseline, one candidate at a time, ASR, scoring and the report. NEVER touches live risi-l1
 # (risime-llm-vllm-1 on 127.0.0.1:8100): requests to it are read-only, sequential, light.
 #
+#   scripts/risi-eval [--live]              # deep agents (decision 084): the per-agent golden sets
+#                                           #   (server/test/risime/agent/golden/), fake model by default,
+#                                           #   --live = risi-l1 (read-only, sequential); results ->
+#                                           #   ~/risime-logs/risi-eval/agents-*/ + docs/status/risi-scores.md
+#   scripts/risi-eval scores                # the pilot's daily scoreboard (bin/risime rpc, read-only)
+#                                           #   -> docs/status/risi-scores.md
 #   scripts/risi-eval build                 # rebuild eval/risi/*.jsonl from eval/risi/build.py
 #   scripts/risi-eval dump                  # re-dump Risi's real prompts/schemas -> eval/risi/prompts.json
 #   scripts/risi-eval probe                 # live risi-l1 /health + 1-token completion + pilot /health
@@ -95,6 +101,25 @@ wait_health() {
 
 cmd=${1:-}; shift || true
 case "$cmd" in
+  ""|--live|agents)
+    live=0; [ "$cmd" = --live ] && live=1
+    for a in "$@"; do [ "$a" = --live ] && live=1; done
+    OUT="$HOME/risime-logs/risi-eval/agents-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT"
+    M="$HOME/.local/bin/mise exec --"
+    log "golden sets, fake model -> $OUT"
+    (cd "$REPO/server" && RISI_EVAL_OUT="$OUT" MIX_TEST_PARTITION=_eval $M mix test test/risime/agent/agents/eval_test.exs)
+    if [ "$live" = 1 ]; then
+      log "golden sets against risi-l1 (read-only, one call at a time)"
+      [ -n "${LLM_API_KEY:-}" ] || LLM_API_KEY="$(grep -m1 '^LLM_API_KEY=' "$REPO/.env" | cut -d= -f2- || true)"
+      (cd "$REPO/server" && LLM_API_KEY="$LLM_API_KEY" RISI_EVAL_OUT="$OUT" MIX_TEST_PARTITION=_eval \
+        $M mix test --only llm_live test/risime/agent/agents/eval_live_test.exs)
+    fi
+    python3 -I "$REPO/scripts/risi-eval-scores.py" golden "$OUT" "$REPO/docs/status/risi-scores.md" ;;
+  scores)
+    REL="${RISI_RELEASE:-$HOME/risime-run/current}"
+    TMP=$(mktemp)
+    ERL_EPMD_ADDRESS=127.0.0.1 "$REL/bin/risime" rpc 'IO.puts(RisiMe.Agents.Scoreboard.markdown(14))' > "$TMP"
+    python3 -I "$REPO/scripts/risi-eval-scores.py" daily "$TMP" "$REPO/docs/status/risi-scores.md"; rm -f "$TMP" ;;
   build) python3 -I "$EV/build.py" ;;
   dump)
     ERL_LIBS="$REPO/server/_build/dev/lib" ~/.local/bin/mise exec -C "$REPO/server" -- elixir "$EV/dump_prompts.exs" "$EV/prompts.json" ;;
