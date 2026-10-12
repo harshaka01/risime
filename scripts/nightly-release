@@ -66,7 +66,16 @@ trap '[ "$RELEASED" = 1 ] || git checkout -q -- VERSION 2>/dev/null || true' EXI
 echo "==> no hard-coded IP addresses (scripts/check-no-ip, decision 079)"
 scripts/check-no-ip || exit 1
 echo "==> Keycloak accepts the new app's sign-in redirects (scripts/check-oidc-redirect, decision 079)"
-scripts/check-oidc-redirect || { echo "Keycloak check failed (see above): not releasing"; exit 1; }
+if ! scripts/check-oidc-redirect; then
+  # OIDC_LEGACY_FALLBACK=1 (Harsha's hotfix 2026-10-12): while Keycloak lacks the ".app" URIs, build with nightly.1's
+  # scheme ai.risicloud.risime(.debug):// (accepted by Keycloak; Android may ask which app finishes sign-in when the
+  # old app is still installed). Never without the flag.
+  if [ "${OIDC_LEGACY_FALLBACK:-0}" = 1 ] && scripts/check-oidc-redirect "ai.risicloud.risime://callback"; then
+    export RISIME_OIDC_SCHEME=legacy
+    OIDC_NOTE="Sign-in uses nightly.1's scheme ai.risicloud.risime:// (OIDC_LEGACY_FALLBACK: Keycloak lacks the .app URIs)."
+    echo "OIDC_LEGACY_FALLBACK: building with ai.risicloud.risime(.debug)://"
+  else echo "Keycloak check failed (see above): not releasing"; exit 1; fi
+fi
 
 echo "==> server gate"
 # Own test DB and keyspace (risime_test_release): other sessions' concurrent `mix test` runs can't
@@ -375,6 +384,7 @@ if [ ! -f "$notes" ]; then
     echo; echo "## Changes since ${last:-the start}"; git log --no-merges --format='- %s' ${last:+$last..}HEAD; } > "$notes"
 fi
 [ -n "${OVERRIDE_NOTE:-}" ] && { echo; echo "## Release gate"; echo "- $OVERRIDE_NOTE"; } >> "$notes"
+[ -n "${OIDC_NOTE:-}" ] && { echo; echo "## Sign-in"; echo "- $OIDC_NOTE"; } >> "$notes"
 [ -n "${ANDROID_FLAKY:-}" ] && { echo; echo "## Flaky unit tests (passed on the one re-run)"; echo "- $ANDROID_FLAKY"; } >> "$notes"
 [ -n "$ROBOT_NOTE" ] && { echo; echo "## UI robot (non-blocking, Harsha 2026-10-11)"; echo "$ROBOT_NOTE"; } >> "$notes"
 if [ -n "${UIB_LOG:-}" ] && [ -f "$UIB_LOG" ]; then

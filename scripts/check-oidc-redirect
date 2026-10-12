@@ -31,7 +31,8 @@ echo "check-oidc-redirect: issuer from $src; client $CLIENT"
 enc() { python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
 rc=0
 for uri in "${URIS[@]}"; do
-  url="${issuer%/}/protocol/openid-connect/auth?client_id=$CLIENT&response_type=code&scope=openid&redirect_uri=$(enc "$uri")&code_challenge=x&code_challenge_method=S256"
+  url="${issuer%/}/protocol/openid-connect/auth?client_id=$CLIENT&response_type=code&scope=openid&redirect_uri=$(enc "$uri")&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256"
+  # ^ a valid 43-char S256 challenge (RFC 7636 example): "x" was refused with a redirect before any login page.
   body="$(mktemp)"
   code="$(curl -sS -m 15 -o "$body" -w '%{http_code}' "$url" 2>"$body.err" || true)"
   if [ -z "$code" ] || [ "$code" = 000 ]; then

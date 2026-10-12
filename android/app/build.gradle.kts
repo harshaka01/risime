@@ -106,6 +106,11 @@ val releaseKeystoreProps: Properties? =
     releaseKeystorePropsFile?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
 if (releaseKeystoreProps == null) logger.lifecycle("risime: no keystore.properties: the release APK is unsigned")
 
+// Decision 079 sign-in scheme. The old lk.codegen.risime app claims ai.risicloud.risime(.debug)://, so this app uses
+// ".app". RISIME_OIDC_SCHEME=legacy builds with nightly.1's scheme (only until Keycloak has the ".app" URIs).
+val oidcScheme: String =
+    if (System.getenv("RISIME_OIDC_SCHEME") == "legacy") "ai.risicloud.risime" else "ai.risicloud.risime.app"
+
 android {
     namespace = risiAppId
     compileSdk = 37
@@ -125,9 +130,10 @@ android {
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://risime.risicloud.ai\"")
         // Keycloak redirects (decisions 014, 079): custom scheme per build type so both can be installed. The old
         // lk.codegen.risime app already claims ai.risicloud.risime(.debug)://, so this app has its own ".app" scheme.
-        manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime.app"
-        buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime.app://callback\"")
-        buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime.app://logout\"")
+        // RISIME_OIDC_SCHEME=legacy (release gate fallback while Keycloak lacks the ".app" URIs): nightly.1's scheme.
+        manifestPlaceholders["appAuthRedirectScheme"] = oidcScheme
+        buildConfigField("String", "OIDC_REDIRECT_URI", "\"$oidcScheme://callback\"")
+        buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"$oidcScheme://logout\"")
         // In-app updater (decision 016): release only.
         buildConfigField("boolean", "UPDATER_ENABLED", "true")
         buildConfigField("String", "UPDATE_BASE_URL", "\"$updateBaseUrl\"")
@@ -173,9 +179,9 @@ android {
             applicationIdSuffix = ".debug"
             // Laptop tunnel port (emulator -> 10.0.2.2:4400 -> spark2 127.0.0.1:4000).
             buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:4400\"")
-            manifestPlaceholders["appAuthRedirectScheme"] = "ai.risicloud.risime.app.debug"
-            buildConfigField("String", "OIDC_REDIRECT_URI", "\"ai.risicloud.risime.app.debug://callback\"")
-            buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"ai.risicloud.risime.app.debug://logout\"")
+            manifestPlaceholders["appAuthRedirectScheme"] = "$oidcScheme.debug"
+            buildConfigField("String", "OIDC_REDIRECT_URI", "\"$oidcScheme.debug://callback\"")
+            buildConfigField("String", "OIDC_LOGOUT_REDIRECT_URI", "\"$oidcScheme.debug://logout\"")
             // Debug builds (.debug id, debug key) never self-update.
             buildConfigField("boolean", "UPDATER_ENABLED", "false")
         }
@@ -323,6 +329,7 @@ tasks.withType<Test>().configureEach {
     dependsOn("processDebugManifest", "processReleaseManifest")
     inputs.files(mergedManifestDebug, mergedManifestRelease).withPathSensitivity(PathSensitivity.NONE)
     inputs.dir(layout.projectDirectory.dir("src/main/res/values")).withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty("risime.oidcScheme", oidcScheme)
     systemProperty("risime.mergedManifest.debug", mergedManifestDebug.get().asFile.absolutePath)
     systemProperty("risime.mergedManifest.release", mergedManifestRelease.get().asFile.absolutePath)
     systemProperty("risime.schemas", layout.projectDirectory.dir("schemas").asFile.absolutePath)
