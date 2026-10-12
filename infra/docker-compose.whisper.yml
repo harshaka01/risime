@@ -16,7 +16,7 @@ services:
   whisper:
     build:
       context: whisper
-    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr4
+    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr5
     restart: unless-stopped
     ports:
       - "127.0.0.1:8200:8000"
@@ -59,6 +59,11 @@ services:
       WHISPER_TA_FALLBACK: ${WHISPER_TA_FALLBACK:-whisper-tamil-medium}
       WHISPER_KEEP: ${WHISPER_KEEP:-whisper-small-sinhala}
       WHISPER_SI_RETRY_ORDER: ${WHISPER_SI_RETRY_ORDER:-whisper-small-sinhala,qwen3-asr-0.6b-sinhala}
+      # Language hints (2026-10-13): language_hint on a request (the call's expected languages)
+      # steers routing: off (detection only) | prior (hinted si/ta unless en is very likely) |
+      # force (hinted si/ta always). docs/RISI-MODELS.md "Routing check and language hints".
+      WHISPER_HINT_MODE: ${WHISPER_HINT_MODE:-off}
+      WHISPER_HINT_EN_MIN_P: ${WHISPER_HINT_EN_MIN_P:-0.9}
       # Compare mode without a models list: per detected language (routed model first).
       WHISPER_COMPARE_SI: ${WHISPER_COMPARE_SI:-whisper-small-sinhala,omnilingual-ctc-1b}
       WHISPER_COMPARE_TA: ${WHISPER_COMPARE_TA:-whisper-tamil-medium,omnilingual-ctc-1b,faster-whisper-large-v3}

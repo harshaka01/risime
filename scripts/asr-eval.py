@@ -21,6 +21,10 @@ Manifest (JSONL, one clip per line):
          [--chunk-s 15]  clips longer than this are sent in chunks (cut at the quietest 20 ms
                          in the last 3 s), like the call path; the texts are joined
          [--no-force-lang]  (model=auto never gets a language)
+         [--hint si[,en]] [--hint-mode off|prior|force]  model=auto with a language_hint
+                         (2026-10-13); results are stored as model "auto[hint=si,force]"
+         [--min-avail-mb 4096]  memory guard: wait while host MemAvailable is below this
+                         (release gates run next to the eval; default 4096)
          Results are appended (resumable: a (model, clip) pair already in --out is skipped).
          A 503 (no memory to load the model) waits and retries for up to --wait-s seconds.
   score  --manifest M --results R [--langs ...] [--markdown] [--by kind]
@@ -191,11 +195,35 @@ def chunks(path, chunk_s):
     return out
 
 
+def mem_available_mb():
+    with open("/proc/meminfo") as f:
+        for line in f:
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    return 0
+
+
+def mem_guard(a):
+    """Never starve the release gates: wait while MemAvailable is under --min-avail-mb."""
+    waited = 0
+    while mem_available_mb() < a.min_avail_mb:
+        if waited % 300 == 0:
+            print(f"  memory guard: MemAvailable {mem_available_mb()} MB < {a.min_avail_mb} MB, "
+                  "waiting", file=sys.stderr)
+        time.sleep(15)
+        waited += 15
+
+
 def transcribe(a, key, model, file, lang):
     """One request with the 503 (no memory) wait. -> response dict or {"error": ...}."""
     fields = {"file": file, "model": model, "response_format": "verbose_json", "language": lang}
+    if model == "auto" and a.hint:
+        fields.update(language_hint=a.hint, hint_mode=a.hint_mode)
+    elif model == "auto" and a.hint_mode:
+        fields.update(hint_mode=a.hint_mode)
     deadline = time.monotonic() + a.wait_s
     while True:
+        mem_guard(a)
         try:
             return post(a.url, key, "/v1/audio/transcriptions", fields)
         except urllib.error.HTTPError as e:
@@ -226,8 +254,11 @@ def cmd_run(a):
     with open(a.out, "a") as out:
         for model in a.models:
             n = 0
+            label = model
+            if model == "auto" and a.hint:
+                label = f"auto[hint={a.hint},{a.hint_mode or 'env'}]"
             for c in clips:
-                if (model, c["id"]) in done:
+                if (label, c["id"]) in done:
                     continue
                 lang = None if (model == "auto" or a.no_force_lang) else base_lang(c["lang"])
                 t0 = time.monotonic()
@@ -237,7 +268,7 @@ def cmd_run(a):
                     parts.append(res)
                     if "error" in res:
                         break
-                rec = {"model": model, "id": c["id"], "lang": c["lang"],
+                rec = {"model": label, "id": c["id"], "lang": c["lang"],
                        "forced_language": lang, "wall_s": round(time.monotonic() - t0, 3),
                        "duration_s": c.get("duration_s"), "chunks": len(parts)}
                 bad = [p for p in parts if "error" in p]
@@ -254,6 +285,12 @@ def cmd_run(a):
                                retried_with=next((p["retried_with"] for p in parts
                                                   if p.get("retried_with")), None),
                                route=(first.get("routing") or {}).get("reason"),
+                               # Per chunk: detection and decision (no text), for the routing
+                               # check and offline hint simulation.
+                               routing=[{k: (p.get("routing") or {}).get(k) for k in
+                                         ("reason", "detected", "language", "probability",
+                                          "probs", "raw_probs", "whisper_top", "whisper_top_p")}
+                                        for p in parts if p.get("routing")] or None,
                                fallback=next(((p.get("routing") or {}).get("fallback")
                                               for p in parts
                                               if (p.get("routing") or {}).get("fallback")), None))
@@ -275,7 +312,8 @@ def score(clips, results, langs=None, by=None, include_trained=False):
         st = agg[(r["model"], group)]
         st["clips"] += 1
         excl = c["in_training_of"]
-        if "*" in excl or r["model"] in excl or (r["model"] == "auto" and r.get("served_by") in excl):
+        if "*" in excl or r["model"] in excl or (r["model"].startswith("auto") and
+                                                 set((r.get("served_by") or "").split(",")) & set(excl)):
             st["excluded"] += 1
             if not include_trained:
                 continue
@@ -317,7 +355,7 @@ def score(clips, results, langs=None, by=None, include_trained=False):
             st["fallback"] += 1
         st["proc_s"] += r.get("processing_s") or 0
         st["audio_s"] += c.get("duration_s") or 0
-        if r["model"] == "auto":
+        if r["model"].startswith("auto"):
             st[f"served:{r.get('served_by')}"] += 1
     return agg
 
@@ -405,6 +443,10 @@ def main():
     r.add_argument("--chunk-s", type=float, default=15.0,
                    help="clips longer than this go in chunks, like call audio (default 15)")
     r.add_argument("--wait-s", type=int, default=1800)
+    r.add_argument("--hint", help="model=auto: language_hint, e.g. si or si,en")
+    r.add_argument("--hint-mode", choices=("off", "prior", "force"))
+    r.add_argument("--min-avail-mb", type=int, default=int(os.environ.get("ASR_EVAL_MIN_AVAIL_MB",
+                                                                         "4096")))
     s = sub.add_parser("score")
     s.add_argument("--manifest", required=True)
     s.add_argument("--results", required=True, nargs="+")

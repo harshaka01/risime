@@ -9,8 +9,13 @@ large-v3) is loaded at start and never unloaded.
   POST /v1/audio/transcriptions    Bearer auth; multipart like OpenAI's endpoint:
        file (required), model, language, prompt, response_format (json|text|verbose_json),
        temperature, vad_filter (extension, default true)
-       model=auto routes by detected language: si -> whisper-small-sinhala,
-       ta -> tamil-asr-qwen3, en (and anything else) -> faster-whisper-large-v3
+       model=auto routes by detected language: si -> WHISPER_ROUTE_SI,
+       ta -> WHISPER_ROUTE_TA, en (and anything else) -> faster-whisper-large-v3;
+       language_hint (extension, comma list of si/ta/en: the languages expected on the call,
+       e.g. from the chat's and the participants' language) steers routing per WHISPER_HINT_MODE
+       (off | prior | force; hint_mode overrides it per request, for the eval)
+  POST /v1/audio/detect            Bearer auth; file, language_hint, hint_mode: the routing
+       decision only (no transcription), for the routing eval
   POST /v1/audio/compare           Bearer auth; file, language, models (comma list, optional):
        runs every candidate sequentially (one model resident at a time beyond the pool) and
        returns model, text, language, processing_s for each
@@ -66,6 +71,17 @@ ROUTE = {"si": os.environ.get("WHISPER_ROUTE_SI", "whisper-small-sinhala"),
 ROUTE_LANGS = tuple(ROUTE)
 # Below this (renormalised over si/ta/en) the chunk goes to the default model, which detects itself.
 MIN_ROUTE_P = float(os.environ.get("WHISPER_ROUTE_MIN_P", "0.5"))
+# Language hints (2026-10-13, docs/RISI-MODELS.md "Routing check and language hints"):
+#   off    the hint is ignored (detection only);
+#   prior  detection restricted to the hinted languages + en; a hinted si/ta wins unless the
+#          detector gives en at least HINT_EN_P (renormalised over the allowed languages);
+#   force  a hinted si/ta always routes to its model (si and ta both hinted: the likelier of
+#          the two); a hint of only en routes to en.
+HINT_MODES = ("off", "prior", "force")
+HINT_MODE = os.environ.get("WHISPER_HINT_MODE", "off")
+if HINT_MODE not in HINT_MODES:
+    raise SystemExit(f"WHISPER_HINT_MODE must be one of {HINT_MODES}")
+HINT_EN_P = float(os.environ.get("WHISPER_HINT_EN_MIN_P", "0.9"))
 # Short, neutral Sinhala sentence ("This is a Sinhala conversation."): steers Whisper decoders to
 # Sinhala script instead of a romanised (Latin) transcript. Not logged.
 SI_PROMPT = os.environ.get("WHISPER_SI_PROMPT", "මෙය සිංහල කතාබහකි.")
@@ -358,6 +374,37 @@ def detect(audio):
             "detect_s": round(time.monotonic() - t0, 3)}
 
 
+def parse_hint(raw):
+    """'si,en' -> ['si', 'en'] (route languages only, order kept, no duplicates)."""
+    out = []
+    for h in (raw or "").replace(" ", "").lower().split(","):
+        if h in ROUTE_LANGS and h not in out:
+            out.append(h)
+    return out
+
+
+def decide(det, hints=(), mode="off"):
+    """Routing decision from a detection (detect()) and the call's language hints.
+    -> (language or None for low confidence, reason). Pure: tested in scripts/asr-smoke."""
+    hints = [h for h in hints if h in ROUTE_LANGS]
+    probs = det.get("probs") or {}
+    if mode == "off" or not hints:
+        if det["probability"] < MIN_ROUTE_P:
+            return None, "low_confidence"
+        return det["language"], "detected"
+    local = [h for h in hints if h != "en"]
+    if not local:
+        return "en", f"hint_{mode}"
+    best_local = max(local, key=lambda h: probs.get(h, 0.0))
+    if mode == "force":
+        return best_local, "hint_force"
+    raw = det.get("raw_probs") or probs
+    allowed = {h: raw.get(h, 0.0) for h in set(hints) | {"en"}}
+    total = sum(allowed.values())
+    p_en = allowed["en"] / total if total > 0 else 0.0
+    return ("en" if p_en >= HINT_EN_P else best_local), "hint_prior"
+
+
 def run(name, audio, language=None, prompt=None, temperature=0.0, vad_filter=True,
         unload_after=False):
     """Transcribe with one model. Returns a result dict (no text is logged)."""
@@ -469,7 +516,8 @@ def models(request: Request):
     data.append({"id": "auto", "object": "model", "owned_by": "risime", "role": "router",
                  "routes": {k: v for k, v in ROUTE.items() if v in SPECS},
                  "compare_sets": {k: compare_set(k) for k in COMPARE_SETS},
-                 "si_retry_order": [n for n in SI_RETRY_ORDER if n in SPECS]})
+                 "si_retry_order": [n for n in SI_RETRY_ORDER if n in SPECS],
+                 "hint_mode": HINT_MODE, "hint_en_min_p": HINT_EN_P})
     return {"object": "list", "data": data,
             "memory": {"budget_mb": BUDGET_MB, "min_available_mb": MIN_AVAIL_MB,
                        "available_mb": mem_available_mb()}}
@@ -483,11 +531,16 @@ def transcriptions(request: Request,
                    prompt: str | None = Form(None),
                    response_format: str = Form("json"),
                    temperature: float = Form(0.0),
-                   vad_filter: bool = Form(True)):
+                   vad_filter: bool = Form(True),
+                   language_hint: str | None = Form(None),
+                   hint_mode: str | None = Form(None)):
     auth(request)
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
+    hints, mode = parse_hint(language_hint), hint_mode or HINT_MODE
+    if mode not in HINT_MODES:
+        return err(400, f"hint_mode must be one of {HINT_MODES}")
     if model_name not in ACCEPTED:
         return err(404, f"model not served; use one of {sorted(ACCEPTED)}")
     if response_format not in ("json", "text", "verbose_json"):
@@ -509,9 +562,12 @@ def transcriptions(request: Request,
                 if language in ROUTE:
                     routing = {"reason": "language_hint", "language": language}
                 else:
-                    routing = {"reason": "detected", **detect(audio)}
-                    if routing["probability"] < MIN_ROUTE_P:
-                        routing["reason"] = "low_confidence"
+                    routing = detect(audio)
+                    lang, reason = decide(routing, hints, mode)
+                    routing.update(detected=routing["language"], reason=reason, hint=hints,
+                                   hint_mode=mode)
+                    if lang is not None:
+                        routing["language"] = lang
                 lang = routing.get("language")
                 target = ROUTE.get(lang, DEFAULT) if routing["reason"] != "low_confidence" \
                     else DEFAULT
@@ -575,10 +631,18 @@ def transcriptions(request: Request,
     finally:
         del audio
     total = time.monotonic() - t_all
-    # Metrics only, never text (decision 066: learn and delete).
-    log.info("transcribed %.1fs audio in %.2fs model=%s req=%s lang=%s route=%s", duration, total,
-             res["model"], model_name, res.get("language"),
-             routing and routing.get("reason"))
+    # Metrics only, never text (decision 066: learn and delete). Per chunk: the detected
+    # language and probability (renormalised over si/ta/en), large-v3's own top language, the
+    # hint and the routing decision, and the model that answered (2026-10-13 routing check).
+    r = routing or {}
+    log.info("transcribed %.1fs audio in %.2fs model=%s req=%s lang=%s route=%s detected=%s "
+             "p=%s probs=%s top=%s/%s hint=%s mode=%s fallback=%s retried_with=%s", duration,
+             total, res["model"], model_name, res.get("language"), r.get("reason"),
+             r.get("detected"), r.get("probability"),
+             ",".join(f"{k}:{v}" for k, v in (r.get("probs") or {}).items()) or None,
+             r.get("whisper_top"), r.get("whisper_top_p"), ",".join(r.get("hint") or []) or None,
+             r.get("hint_mode"), r.get("fallback_model") or r.get("fallback"),
+             res.get("retried_with"))
     if response_format == "text":
         return PlainTextResponse(res["text"])
     if response_format == "json":
@@ -602,18 +666,51 @@ def transcriptions(request: Request,
     return body
 
 
+@app.post("/v1/audio/detect")
+def detect_only(request: Request,
+                file: UploadFile = File(...),
+                language_hint: str | None = Form(None),
+                hint_mode: str | None = Form(None)):
+    """The routing decision for a chunk without transcribing it (routing eval; metrics only)."""
+    auth(request)
+    loaded, _ = pool.status()
+    if DEFAULT not in loaded:
+        return err(503, "model loading")
+    hints, mode = parse_hint(language_hint), hint_mode or HINT_MODE
+    if mode not in HINT_MODES:
+        return err(400, f"hint_mode must be one of {HINT_MODES}")
+    audio, bad = read_audio(file)
+    if bad:
+        return bad
+    try:
+        if not has_speech(audio):
+            return {"reason": "no_speech", "language": None, "model": None}
+        det = detect(audio)
+    finally:
+        del audio
+    lang, reason = decide(det, hints, mode)
+    model = ROUTE.get(lang, DEFAULT) if lang else DEFAULT
+    return {**det, "detected": det["language"], "language": lang, "reason": reason,
+            "hint": hints, "hint_mode": mode, "model": model if model in SPECS else DEFAULT}
+
+
 @app.post("/v1/audio/compare")
 def compare(request: Request,
             file: UploadFile = File(...),
             language: str | None = Form(None),
             models: str | None = Form(None),
-            prompt: str | None = Form(None)):
+            prompt: str | None = Form(None),
+            language_hint: str | None = Form(None),
+            hint_mode: str | None = Form(None)):
     """Every candidate on the same chunk, one after another. Models outside the resident pool
     (compare-only ones) are unloaded right after use, so this never holds more than one extra."""
     auth(request)
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
+    hints, mode = parse_hint(language_hint), hint_mode or HINT_MODE
+    if mode not in HINT_MODES:
+        return err(400, f"hint_mode must be one of {HINT_MODES}")
     names = [n.strip() for n in models.split(",")] if models else None
     unknown = [n for n in names or [] if n not in SPECS]
     if unknown:
@@ -626,20 +723,22 @@ def compare(request: Request,
     try:
         with compare_lock:
             det = detect(audio)
-            routed = ROUTE.get(det["language"], DEFAULT) if det["probability"] >= MIN_ROUTE_P \
-                else DEFAULT
+            dlang, reason = decide(det, hints, mode)
+            det.update(reason=reason, hint=hints, hint_mode=mode)
+            if language in ROUTE:
+                dlang = language
+            routed = ROUTE.get(dlang, DEFAULT) if dlang else DEFAULT
             # Sinhala chunk: every model gets language=si and the Sinhala prompt, and each
             # result its script check (no retry here: compare shows each model as it is).
-            si = language == "si" or (language is None and det["language"] == "si" and
-                                      det["probability"] >= MIN_ROUTE_P)
+            # Every chunk with a confident language (or a forced one) runs each candidate with
+            # that language forced, e.g. large-v3 with "ta" next to the Tamil models.
+            si = dlang == "si"
             if names is None:
-                lang = language if language in COMPARE_SETS else (
-                    det["language"] if det["probability"] >= MIN_ROUTE_P else "en")
-                names = compare_set(lang)
+                names = compare_set(dlang or "en")
             results = []
             for n in names:
                 try:
-                    r = run(n, audio, language="si" if si else language,
+                    r = run(n, audio, language=dlang,
                             prompt=(prompt or SI_PROMPT) if si else prompt,
                             unload_after=SPECS[n]["role"] == "compare")
                     item = {"model": n, "text": r["text"], "language": r.get("language"),
@@ -656,8 +755,10 @@ def compare(request: Request,
                     results.append({"model": n, "error": type(e).__name__})
     finally:
         del audio
-    log.info("compared %.1fs audio on %d models in %.2fs", duration, len(names),
-             time.monotonic() - t_all)
+    log.info("compared %.1fs audio on %d models in %.2fs detected=%s p=%s top=%s/%s hint=%s "
+             "mode=%s route=%s lang=%s", duration, len(names), time.monotonic() - t_all,
+             det["language"], det["probability"], det["whisper_top"], det["whisper_top_p"],
+             ",".join(hints) or None, mode, reason, dlang)
     return {"duration": round(duration, 3), "detected": det, "routed_model": routed,
             "results": results, "processing_s": round(time.monotonic() - t_all, 3)}
 

@@ -13,6 +13,7 @@
 #     script (script_ok, not romanised, no retry); compare on the si clip carries script +
 #     romanised per model and both Sinhala-tuned models pass; the retry logic is exercised inside
 #     the container with a fake runner whose first output is forced Latin (no live hook exists);
+#   - language hints (2026-10-13): the pure decide() for off/prior/force; POST /v1/audio/detect;
 #   - no residual files: the container filesystem is unchanged by the run (docker diff) and its
 #     tmpfs mounts hold nothing but Triton's compiled kernels (no audio).
 # Per-model latency and the container's memory are printed. The key is never printed.
@@ -171,6 +172,18 @@ if out["text"].strip() or out.get("routing", {}).get("reason") != "no_speech":
     fail(f"silence: {out}")
 print(f"ok   silence: empty text, route no_speech, {dt:.2f}s")
 
+# Routing only (2026-10-13): /v1/audio/detect, without and with a forced Sinhala hint.
+en_audio = open(os.path.join(DATA, "en-jfk.ogg"), "rb").read()
+out, _ = post("/v1/audio/detect", en_audio, "en-jfk.ogg", {"hint_mode": "off"})
+if out.get("language") != "en" or out.get("model") != ROUTE["en"] or "probs" not in out:
+    fail(f"detect en: {out}")
+out2, _ = post("/v1/audio/detect", en_audio, "en-jfk.ogg", {"language_hint": "si",
+                                                            "hint_mode": "force"})
+if out2.get("language") != "si" or out2.get("reason") != "hint_force" or out2.get("detected") != "en":
+    fail(f"detect en with si hint (force): {out2}")
+print(f"ok   detect: en p={out['probability']} (top {out['whisper_top']}); hint si/force -> "
+      f"{out2['model']}; service hint_mode {router.get('hint_mode')}")
+
 # json (default) response for auto carries model + language for made_by.
 out, _ = post("/v1/audio/transcriptions", open(os.path.join(DATA, "en-jfk.ogg"), "rb").read(),
               "en-jfk.ogg", {"model": "auto"})
@@ -285,6 +298,26 @@ if lg in S.SPECS:
     check(S.DEFAULT, {S.DEFAULT: LATIN, lg: SI, sm: SI}, sm, sm, False, nomem=(lg,))
 else:
     check(S.DEFAULT, {S.DEFAULT: LATIN, sm: SI}, sm, sm, False)
+# Language hints (2026-10-13): decide() is pure; detections as large-v3 gives them.
+def det(lang, p, **raw):
+    probs = {k: raw.get(k, 0.0) for k in ("si", "ta", "en")}
+    return {"language": lang, "probability": p, "probs": probs, "raw_probs": probs}
+en_hi = det("en", 0.97, en=0.97, si=0.02, ta=0.01)
+en_mid = det("en", 0.7, en=0.7, si=0.25, ta=0.05)
+si_d = det("si", 0.8, si=0.8, en=0.15, ta=0.05)
+low = det("en", 0.4, en=0.4, si=0.35, ta=0.25)
+assert S.decide(en_mid) == ("en", "detected") and S.decide(low) == (None, "low_confidence")
+assert S.decide(en_mid, ["si"], "off") == ("en", "detected")
+assert S.decide(en_hi, ["si"], "force") == ("si", "hint_force")
+assert S.decide(low, ["si", "ta"], "force") == ("si", "hint_force")
+assert S.decide(en_hi, ["en"], "force") == ("en", "hint_force")
+assert S.decide(en_mid, ["si"], "prior") == ("si", "hint_prior")
+assert S.decide(en_hi, ["si"], "prior") == ("en", "hint_prior")
+assert S.decide(si_d, ["si", "en"], "prior") == ("si", "hint_prior")
+assert S.decide(low, ["ta"], "prior") == ("ta", "hint_prior")
+assert S.decide(si_d, [], "force") == ("si", "detected")
+assert S.parse_hint("si, EN,fr,si") == ["si", "en"]
+print("ok   hint fixture: decide() off/prior/force (mode now %s, en_min_p %s)" % (S.HINT_MODE, S.HINT_EN_P))
 print("FIXTURE PASS")
 ' 2>&1)" || fail "si retry fixture: $fx"
 grep -q '^FIXTURE PASS$' <<<"$fx" || fail "si retry fixture: $fx"
