@@ -167,7 +167,7 @@ defmodule RisiMe.Agent.CalendarCards do
   """
   def deliver_pending(user) do
     if Calendar.calendar_user?(user) and RisiChat.active_id(user) do
-      now = DateTime.utc_now()
+      now = Clock.now()
 
       Enum.count(pending(user), fn {id, reason} ->
         case Calendar.load(id) do
@@ -317,7 +317,7 @@ defmodule RisiMe.Agent.CalendarCards do
       lead =
         cond do
           e.all_day ->
-            today = NaiveDateTime.to_date(Clock.local(DateTime.utc_now(), tz))
+            today = NaiveDateTime.to_date(Clock.local(Clock.now(), tz))
             day = NaiveDateTime.to_date(Clock.local(e.start_at, tz))
             if Date.compare(day, today) == :gt, do: "Tomorrow", else: "Today"
 
