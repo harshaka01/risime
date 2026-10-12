@@ -143,10 +143,11 @@ defmodule RisiMe.Devices do
   # v1.29 §30.1: `risi_notes`, kept only with `risi_events`.
   # v1.31 §31.1: `google_calendar`, kept only with `risi_events`.
   # v1.34 §33.1: `files`; `pdf_export`, kept only with `risi_tools` (silently dropped otherwise).
+  # v1.41 §37.1: `voice` (voice notes; also "understands the `played` status").
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
                          risi_ledger risi_events risi_notes google_calendar files pdf_export
-                         risi_items call_transcribe)
+                         risi_items call_transcribe voice)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
@@ -513,6 +514,22 @@ defmodule RisiMe.Devices do
         distinct: true,
         select: d.user_id
     )
+  end
+
+  @doc """
+  v1.41 §37.1/§37.4: true if `device_id` (may be nil) names a current MLS device of the user that
+  advertises `voice` (it understands the `played` status).
+  """
+  def voice_device?(_user_id, nil), do: false
+
+  def voice_device?(user_id, device_id) do
+    case get(user_id, device_id) do
+      %Device{mls_signature_key: k, capabilities: caps} when is_binary(k) ->
+        "voice" in (caps || [])
+
+      _ ->
+        false
+    end
   end
 
   @doc "The device row of a user's device (or nil)."

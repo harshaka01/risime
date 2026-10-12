@@ -7,6 +7,10 @@ defmodule RisiMe.Messaging.GroupReceipts do
   at once when `all_delivered` or `all_read` turns true, otherwise at most one per message per
   10 s. `read` implies `delivered`; `of` counts the recipients at send time who are still active.
 
+  v1.41 §37.4: a `played` ack (a voice note's playback started) implies `read`. Once a message has
+  at least one played ack its receipts carry `played` / `all_played` (and `played_at` rows in
+  `list/3`); a receipt is also sent at once when `all_played` turns true.
+
   Aggregation state is cached per message in a partitioned set of GenServers (by message id),
   loaded from the store on a miss and dropped after 30 minutes idle, so an ack costs one cache
   update plus one row write instead of a partition read. Per node, like presence: a restart
@@ -42,7 +46,7 @@ defmodule RisiMe.Messaging.GroupReceipts do
   defp coalesce_ms, do: Application.get_env(:risime, :group_receipt_coalesce_ms, 10_000)
 
   @doc """
-  Applies a member's ack (`delivered` | `read`) to a group message (a `Store.message` with
+  Applies a member's ack (`delivered` | `read` | `played`) to a group message (a `Store.message` with
   `recipients`). Unknown members and repeats are no-ops.
   """
   def ack(%{recipients: recipients} = message, user_id, status) when is_list(recipients) do
@@ -60,7 +64,7 @@ defmodule RisiMe.Messaging.GroupReceipts do
       end
 
     case writes do
-      {d, r} -> store().put_group_receipt(message.message_id, user_id, d, r)
+      {d, r, p} -> store().put_group_receipt(message.message_id, user_id, d, r, p)
       nil -> :ok
     end
 
@@ -78,6 +82,7 @@ defmodule RisiMe.Messaging.GroupReceipts do
       active: active(message.conversation_id, message.recipients),
       delivered: for(%{delivered_at: t} = r <- rows, t != nil, into: %{}, do: {r.user_id, t}),
       read: for(%{read_at: t} = r <- rows, t != nil, into: %{}, do: {r.user_id, t}),
+      played: for(%{played_at: t} = r <- rows, t != nil, into: %{}, do: {r.user_id, t}),
       last: nil,
       last_emit: nil,
       timer: nil
@@ -109,17 +114,23 @@ defmodule RisiMe.Messaging.GroupReceipts do
       rows = Map.new(store().list_group_receipts(message_id), &{&1.user_id, &1})
       active = active(group_id, rs)
 
+      # v1.41 §37.4: rows carry `played_at` once the message has at least one played ack.
+      played? = Enum.any?(rows, fn {u, r} -> r[:played_at] != nil and u in rs end)
+
       receipts =
         for u <- Enum.sort(rs), MapSet.member?(active, u) do
           r = rows[u] || %{}
-          read = r[:read_at]
+          played = r[:played_at]
+          read = r[:read_at] || played
           delivered = r[:delivered_at] || read
 
-          %{
+          row = %{
             user_id: u,
             delivered_at: delivered && Messaging.iso(delivered),
             read_at: read && Messaging.iso(read)
           }
+
+          if played?, do: Map.put(row, :played_at, played && Messaging.iso(played)), else: row
         end
 
       {:ok, %{of: MapSet.size(active), receipts: receipts}}
@@ -185,23 +196,36 @@ defmodule RisiMe.Messaging.GroupReceipts do
     {:noreply, Map.reject(state, fn {_, e} -> e.timer == nil and e.touched < cutoff end)}
   end
 
-  # Returns the updated entry and the `{delivered_at, read_at}` to persist (nil = no change).
+  # Returns the updated entry and the `{delivered_at, read_at, played_at}` to persist (nil = no
+  # change). Status only moves forward: `played` implies `read` implies `delivered` (§37.4).
   defp apply_ack(e, user, status, at) do
     delivered? = Map.has_key?(e.delivered, user)
     read? = Map.has_key?(e.read, user)
+    played? = Map.has_key?(e.played, user)
 
     cond do
       not MapSet.member?(e.recipients, user) ->
         {e, nil}
 
       status == "delivered" and not delivered? and not read? ->
-        {%{e | delivered: Map.put(e.delivered, user, at)}, {at, nil}}
+        {%{e | delivered: Map.put(e.delivered, user, at)}, {at, nil, nil}}
 
       status == "read" and not read? ->
         d = if delivered?, do: nil, else: at
 
         {%{e | read: Map.put(e.read, user, at), delivered: Map.put_new(e.delivered, user, at)},
-         {d, at}}
+         {d, at, nil}}
+
+      status == "played" and not played? ->
+        d = if delivered? or read?, do: nil, else: at
+        r = if read?, do: nil, else: at
+
+        {%{
+           e
+           | played: Map.put(e.played, user, at),
+             read: Map.put_new(e.read, user, at),
+             delivered: Map.put_new(e.delivered, user, at)
+         }, {d, r, at}}
 
       true ->
         {e, nil}
@@ -210,18 +234,21 @@ defmodule RisiMe.Messaging.GroupReceipts do
 
   defp counts(e) do
     of = MapSet.size(e.active)
-    read = Enum.count(e.active, &Map.has_key?(e.read, &1))
+    played = Enum.count(e.active, &Map.has_key?(e.played, &1))
+    read = Enum.count(e.active, &(Map.has_key?(e.read, &1) or Map.has_key?(e.played, &1)))
     delivered = Enum.count(e.active, &(Map.has_key?(e.delivered, &1) or Map.has_key?(e.read, &1)))
-    {delivered, read, of, of > 0 and delivered == of, of > 0 and read == of}
+
+    {delivered, read, of, of > 0 and delivered == of, of > 0 and read == of, played,
+     of > 0 and played == of}
   end
 
   defp after_change(id, e) do
-    {_, _, _, all_d, all_r} = counts(e)
-    {_, _, _, was_d, was_r} = e.last || {0, 0, 0, false, false}
+    {_, _, _, all_d, all_r, _, all_p} = counts(e)
+    {_, _, _, was_d, was_r, _, was_p} = e.last || {0, 0, 0, false, false, 0, false}
     now = now_ms()
 
     cond do
-      (all_d and not was_d) or (all_r and not was_r) ->
+      (all_d and not was_d) or (all_r and not was_r) or (all_p and not was_p) ->
         emit(id, e, true)
 
       e.timer != nil ->
@@ -245,26 +272,30 @@ defmodule RisiMe.Messaging.GroupReceipts do
     e =
       if refresh?, do: %{e | active: active(e.conv, MapSet.to_list(e.recipients))}, else: e
 
-    {d, r, of, all_d, all_r} = c = counts(e)
+    {d, r, of, all_d, all_r, p, all_p} = c = counts(e)
 
     if c == e.last do
       e
     else
-      event = %{
-        event_id: TimeUUID.generate(),
-        kind: "group_receipt",
-        data: %{
-          "conversation_id" => e.conv,
-          "message_id" => id,
-          "client_msg_id" => e.client_msg_id,
-          "delivered" => d,
-          "read" => r,
-          "of" => of,
-          "all_delivered" => all_d,
-          "all_read" => all_r,
-          "at" => Messaging.iso(DateTime.utc_now())
-        }
+      data = %{
+        "conversation_id" => e.conv,
+        "message_id" => id,
+        "client_msg_id" => e.client_msg_id,
+        "delivered" => d,
+        "read" => r,
+        "of" => of,
+        "all_delivered" => all_d,
+        "all_read" => all_r,
+        "at" => Messaging.iso(DateTime.utc_now())
       }
+
+      # v1.41 §37.4: `played` / `all_played` only once the message has a played ack.
+      data =
+        if map_size(e.played) > 0,
+          do: Map.merge(data, %{"played" => p, "all_played" => all_p}),
+          else: data
+
+      event = %{event_id: TimeUUID.generate(), kind: "group_receipt", data: data}
 
       Messaging.publish_batch([{e.sender, event, [push: false]}])
       %{e | last: c, last_emit: now_ms()}

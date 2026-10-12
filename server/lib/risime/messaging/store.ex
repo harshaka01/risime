@@ -36,7 +36,8 @@ defmodule RisiMe.Messaging.Store do
   @type receipt :: %{
           user_id: uuid,
           delivered_at: DateTime.t() | nil,
-          read_at: DateTime.t() | nil
+          read_at: DateTime.t() | nil,
+          played_at: DateTime.t() | nil
         }
 
   @doc "The reply recorded for (sender, client_msg_id), if any."
@@ -87,12 +88,16 @@ defmodule RisiMe.Messaging.Store do
   """
   @callback append_call_signal(user_ids :: [uuid], event) :: :ok
 
-  @doc "Records a member's delivered and/or read time of a group message (v1.9 §12.7)."
+  @doc """
+  Records a member's delivered, read and/or played time of a group message (v1.9 §12.7; v1.41
+  §37.4 `played_at`). Nil columns are not written.
+  """
   @callback put_group_receipt(
               message_id :: uuid,
               user_id :: uuid,
               delivered_at :: DateTime.t() | nil,
-              read_at :: DateTime.t() | nil
+              read_at :: DateTime.t() | nil,
+              played_at :: DateTime.t() | nil
             ) :: :ok
 
   @doc "Every stored receipt of a group message."

@@ -973,7 +973,7 @@ defmodule RisiMe.ContractExamplesTest do
       assert keys(
                Map.drop(
                  view,
-                 ~w(images_ready missing_images deletes_ready missing_deletes files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+                 ~w(images_ready missing_images deletes_ready missing_deletes files_ready missing_files voice_ready missing_voice calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
                )
              ) ==
                keys(ex)
@@ -1764,7 +1764,7 @@ defmodule RisiMe.ContractExamplesTest do
       assert keys(
                Map.drop(
                  view,
-                 ~w(deletes_ready missing_deletes files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+                 ~w(deletes_ready missing_deletes files_ready missing_files voice_ready missing_voice calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
                )
              ) ==
                keys(ex)
@@ -1772,7 +1772,7 @@ defmodule RisiMe.ContractExamplesTest do
       assert_same_shape(
         Map.drop(
           view,
-          ~w(missing devices missing_images deletes_ready missing_deletes files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+          ~w(missing devices missing_images deletes_ready missing_deletes files_ready missing_files voice_ready missing_voice calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
         ),
         Map.drop(ex, ~w(missing devices missing_images))
       )
@@ -2158,14 +2158,14 @@ defmodule RisiMe.ContractExamplesTest do
       assert keys(
                Map.drop(
                  view,
-                 ~w(files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+                 ~w(files_ready missing_files voice_ready missing_voice calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
                )
              ) == keys(ex)
 
       assert_same_shape(
         Map.drop(
           view,
-          ~w(missing devices files_ready missing_files calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
+          ~w(missing devices files_ready missing_files voice_ready missing_voice calls_ready missing_calls video_ready missing_video group_calls_ready missing_group_calls)
         ),
         Map.drop(ex, ~w(missing devices))
       )
@@ -2658,11 +2658,19 @@ defmodule RisiMe.ContractExamplesTest do
       {200, view} = RisiMe.GroupHelpers.api(:get, "/api/v1/mls/groups/#{conv}", a.token)
       ex = example("mls_group_calls_ready.json")
       # v1.18 adds video_ready / missing_video (mls_group_video_ready.json).
-      assert keys(Map.drop(view, ~w(video_ready missing_video files_ready missing_files))) ==
+      assert keys(
+               Map.drop(
+                 view,
+                 ~w(video_ready missing_video files_ready missing_files voice_ready missing_voice)
+               )
+             ) ==
                keys(ex)
 
       assert_same_shape(
-        Map.drop(view, ~w(missing devices video_ready missing_video files_ready missing_files)),
+        Map.drop(
+          view,
+          ~w(missing devices video_ready missing_video files_ready missing_files voice_ready missing_voice)
+        ),
         Map.drop(ex, ~w(missing devices))
       )
 
@@ -2927,7 +2935,7 @@ defmodule RisiMe.ContractExamplesTest do
 
       {200, view} = RisiMe.GroupHelpers.api(:get, "/api/v1/mls/groups/#{conv}", a.token)
       ex = example("mls_group_video_ready.json")
-      view = Map.drop(view, ~w(files_ready missing_files))
+      view = Map.drop(view, ~w(files_ready missing_files voice_ready missing_voice))
       assert keys(view) == keys(ex)
       assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
       assert view["video_ready"] == true and view["calls_ready"] == true
@@ -3123,7 +3131,7 @@ defmodule RisiMe.ContractExamplesTest do
       ex = example("mls_group_group_calls_ready.json")
       # The deletes readiness (v1.12) is in every view; the example leaves it out.
       view = Map.drop(view, ~w(deletes_ready missing_deletes))
-      view = Map.drop(view, ~w(files_ready missing_files))
+      view = Map.drop(view, ~w(files_ready missing_files voice_ready missing_voice))
       assert keys(view) == keys(ex)
       assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
       assert view["group_calls_ready"] == true
@@ -3138,7 +3146,7 @@ defmodule RisiMe.ContractExamplesTest do
       Application.put_env(:risime, :livekit, cfg)
       ex = example("mls_group_group_calls_unavailable.json")
       view = Map.drop(view, ~w(deletes_ready missing_deletes))
-      view = Map.drop(view, ~w(files_ready missing_files))
+      view = Map.drop(view, ~w(files_ready missing_files voice_ready missing_voice))
       assert keys(view) == keys(ex)
       assert_same_shape(Map.drop(view, ~w(missing devices)), Map.drop(ex, ~w(missing devices)))
       assert view["group_calls_ready"] == false

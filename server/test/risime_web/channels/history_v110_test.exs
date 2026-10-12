@@ -52,7 +52,7 @@ defmodule RisiMeWeb.HistoryV110Test do
     @impl true
     defdelegate append_call_signal(us, e), to: Cassandra
     @impl true
-    defdelegate put_group_receipt(m, u, d, r), to: Cassandra
+    defdelegate put_group_receipt(m, u, d, r, p), to: Cassandra
     @impl true
     defdelegate list_group_receipts(m), to: Cassandra
     @impl true

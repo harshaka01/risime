@@ -191,10 +191,10 @@ defmodule RisiMe.Messaging.Store.Cassandra do
   end
 
   @impl true
-  def put_group_receipt(message_id, user_id, delivered_at, read_at) do
+  def put_group_receipt(message_id, user_id, delivered_at, read_at, played_at \\ nil) do
     # Only the given columns are written (no null cells).
     {sets, values} =
-      [{"delivered_at", delivered_at}, {"read_at", read_at}]
+      [{"delivered_at", delivered_at}, {"read_at", read_at}, {"played_at", played_at}]
       |> Enum.reject(fn {_, v} -> v == nil end)
       |> Enum.unzip()
 
@@ -211,10 +211,15 @@ defmodule RisiMe.Messaging.Store.Cassandra do
 
   @impl true
   def list_group_receipts(message_id) do
-    "SELECT user_id, delivered_at, read_at FROM group_receipts WHERE message_id = ?"
+    "SELECT user_id, delivered_at, read_at, played_at FROM group_receipts WHERE message_id = ?"
     |> run!([message_id])
     |> Enum.map(
-      &%{user_id: &1["user_id"], delivered_at: &1["delivered_at"], read_at: &1["read_at"]}
+      &%{
+        user_id: &1["user_id"],
+        delivered_at: &1["delivered_at"],
+        read_at: &1["read_at"],
+        played_at: &1["played_at"]
+      }
     )
   end
 

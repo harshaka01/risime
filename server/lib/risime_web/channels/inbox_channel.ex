@@ -367,6 +367,7 @@ defmodule RisiMeWeb.InboxChannel do
       risi_visible?(socket, event) and
       calendar_visible?(socket, event) and
       google_visible?(socket, event) and
+      played_visible?(socket, event) and
       agent_visible?(socket, event, agent_ok) and
       visible_v123?(socket, event)
   end
@@ -400,6 +401,16 @@ defmodule RisiMeWeb.InboxChannel do
            socket.assigns[:device_id]
          ))
   end
+
+  # v1.41 §37.4: a DM `status: "played"` only for the user's `voice` devices (the others got the
+  # `read` that precedes it).
+  defp played_visible?(socket, %{kind: "status", data: %{"status" => "played"}}),
+    do: RisiMe.Devices.voice_device?(socket.assigns.user_id, socket.assigns[:device_id])
+
+  defp played_visible?(socket, %{"kind" => "status", "data" => %{"status" => "played"}}),
+    do: RisiMe.Devices.voice_device?(socket.assigns.user_id, socket.assigns[:device_id])
+
+  defp played_visible?(_socket, _event), do: true
 
   defp kind(%{kind: k}), do: k
   defp kind(%{"kind" => k}), do: k

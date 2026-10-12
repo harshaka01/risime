@@ -15,7 +15,8 @@ defmodule RisiMe.Messaging do
   @max_page 500
   @send_limit 20
   @send_window :timer.seconds(10)
-  @status_rank %{"sent" => 0, "delivered" => 1, "read" => 2}
+  # v1.41 §37.4: `played` (a voice note's playback started) is above `read` and implies it.
+  @status_rank %{"sent" => 0, "delivered" => 1, "read" => 2, "played" => 3}
 
   @uuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   @timeuuid ~r/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -625,13 +626,15 @@ defmodule RisiMe.Messaging do
   ## Ack
 
   @doc """
-  Applies a `delivered` or `read` ack from the recipient. Unknown ids and messages the user
-  did not receive are ignored. Status only moves forward; each change is sent to the sender
-  as a `status` event.
+  Applies a `delivered`, `read` or `played` (v1.41 §37.4) ack from the recipient. Unknown ids and
+  messages the user did not receive are ignored. Status only moves forward; each change is sent
+  to the sender as a `status` event. A DM `played` is sent once, as a `status: "played"` event that
+  reaches only the sender's `voice` devices (see `RisiMeWeb.InboxChannel`), preceded by a `read`
+  event when the message wasn't read yet (`played` implies `read`).
   """
   @spec ack(String.t(), term, term) :: :ok | {:error, :bad_request}
   def ack(user_id, message_ids, status)
-      when is_list(message_ids) and status in ["delivered", "read"] and
+      when is_list(message_ids) and status in ["delivered", "read", "played"] and
              length(message_ids) <= @max_page do
     ids = for id <- message_ids, is_binary(id), do: String.downcase(id)
 
@@ -665,7 +668,7 @@ defmodule RisiMe.Messaging do
     end
 
     :telemetry.execute([:risime, :message, :ack], %{count: length(ids)}, %{
-      status: if(status == "read", do: :read, else: :delivered)
+      status: ack_metric(status)
     })
 
     :ok
@@ -673,30 +676,46 @@ defmodule RisiMe.Messaging do
 
   def ack(_user_id, _message_ids, _status), do: {:error, :bad_request}
 
+  defp ack_metric("read"), do: :read
+  defp ack_metric("played"), do: :played
+  defp ack_metric(_), do: :delivered
+
   defp advance(message, status, by) do
-    if @status_rank[status] > @status_rank[message.status] do
+    if @status_rank[status] > @status_rank[message.status || "sent"] do
       case store().compare_and_set_status(message.message_id, message.status, status) do
-        :ok -> publish_status(message, status, by)
-        {:conflict, current} -> advance(%{message | status: current}, status, by)
+        :ok ->
+          # §37.4: played implies read; devices without `voice` see that `read`.
+          if status == "played" and @status_rank[message.status || "sent"] < @status_rank["read"],
+            do: publish_status(message, "read", by)
+
+          publish_status(message, status, by)
+
+        {:conflict, current} ->
+          advance(%{message | status: current}, status, by)
       end
     end
 
     :ok
   end
 
+  # §37.4: a `played` status wakes nobody (it reaches only `voice` sockets when they sync).
   defp publish_status(message, status, by) do
-    publish(message.sender_id, %{
-      event_id: TimeUUID.generate(),
-      kind: "status",
-      data: %{
-        "message_id" => message.message_id,
-        "client_msg_id" => message.client_msg_id,
-        "conversation_id" => message.conversation_id,
-        "status" => status,
-        "by" => by,
-        "at" => iso(now())
-      }
-    })
+    publish(
+      message.sender_id,
+      %{
+        event_id: TimeUUID.generate(),
+        kind: "status",
+        data: %{
+          "message_id" => message.message_id,
+          "client_msg_id" => message.client_msg_id,
+          "conversation_id" => message.conversation_id,
+          "status" => status,
+          "by" => by,
+          "at" => iso(now())
+        }
+      },
+      push: status != "played"
+    )
   end
 
   ## Inbox
@@ -721,7 +740,7 @@ defmodule RisiMe.Messaging do
     end
   end
 
-  defp publish(user_id, event, opts \\ []) do
+  defp publish(user_id, event, opts) do
     :ok = store().append_event(user_id, event)
     broadcast(user_id, event)
     # Contract v1.5: a data-only wake-up if the user has no live inbox channel.
