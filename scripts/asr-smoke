@@ -310,7 +310,7 @@ assert S.decide(en_mid) == ("en", "detected") and S.decide(low) == (None, "low_c
 assert S.decide(en_mid, ["si"], "off") == ("en", "detected")
 assert S.decide(en_hi, ["si"], "force") == ("si", "hint_force")
 assert S.decide(low, ["si", "ta"], "force") == ("si", "hint_force")
-assert S.decide(en_hi, ["en"], "force") == ("en", "hint_force")
+assert S.decide(si_d, ["en"], "force") == ("si", "detected")  # en hint alone: no effect
 assert S.decide(en_mid, ["si"], "prior") == ("si", "hint_prior")
 assert S.decide(en_hi, ["si"], "prior") == ("en", "hint_prior")
 assert S.decide(si_d, ["si", "en"], "prior") == ("si", "hint_prior")

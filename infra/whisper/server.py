@@ -76,9 +76,9 @@ MIN_ROUTE_P = float(os.environ.get("WHISPER_ROUTE_MIN_P", "0.5"))
 #   prior  detection restricted to the hinted languages + en; a hinted si/ta wins unless the
 #          detector gives en at least HINT_EN_P (renormalised over the allowed languages);
 #   force  a hinted si/ta always routes to its model (si and ta both hinted: the likelier of
-#          the two); a hint of only en routes to en.
+#          the two). A hint without si/ta (only en) changes nothing.
 HINT_MODES = ("off", "prior", "force")
-HINT_MODE = os.environ.get("WHISPER_HINT_MODE", "off")
+HINT_MODE = os.environ.get("WHISPER_HINT_MODE", "prior")
 if HINT_MODE not in HINT_MODES:
     raise SystemExit(f"WHISPER_HINT_MODE must be one of {HINT_MODES}")
 HINT_EN_P = float(os.environ.get("WHISPER_HINT_EN_MIN_P", "0.9"))
@@ -386,15 +386,14 @@ def parse_hint(raw):
 def decide(det, hints=(), mode="off"):
     """Routing decision from a detection (detect()) and the call's language hints.
     -> (language or None for low confidence, reason). Pure: tested in scripts/asr-smoke."""
-    hints = [h for h in hints if h in ROUTE_LANGS]
+    # Only a si/ta hint steers: an "en" hint alone (e.g. a user who types Singlish in Latin
+    # letters) must never stop a Sinhala or Tamil chunk from being detected.
+    local = [h for h in hints if h in ROUTE_LANGS and h != "en"]
     probs = det.get("probs") or {}
-    if mode == "off" or not hints:
+    if mode == "off" or not local:
         if det["probability"] < MIN_ROUTE_P:
             return None, "low_confidence"
         return det["language"], "detected"
-    local = [h for h in hints if h != "en"]
-    if not local:
-        return "en", f"hint_{mode}"
     best_local = max(local, key=lambda h: probs.get(h, 0.0))
     if mode == "force":
         return best_local, "hint_force"

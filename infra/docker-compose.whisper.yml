@@ -61,8 +61,9 @@ services:
       WHISPER_SI_RETRY_ORDER: ${WHISPER_SI_RETRY_ORDER:-whisper-small-sinhala,qwen3-asr-0.6b-sinhala}
       # Language hints (2026-10-13): language_hint on a request (the call's expected languages)
       # steers routing: off (detection only) | prior (hinted si/ta unless en is very likely) |
-      # force (hinted si/ta always). docs/RISI-MODELS.md "Routing check and language hints".
-      WHISPER_HINT_MODE: ${WHISPER_HINT_MODE:-off}
+      # force (hinted si/ta always). prior won the eval (2026-10-13); without a hint every mode
+      # is plain detection. docs/RISI-MODELS.md "Routing check and language hints".
+      WHISPER_HINT_MODE: ${WHISPER_HINT_MODE:-prior}
       WHISPER_HINT_EN_MIN_P: ${WHISPER_HINT_EN_MIN_P:-0.9}
       # Compare mode without a models list: per detected language (routed model first).
       WHISPER_COMPARE_SI: ${WHISPER_COMPARE_SI:-whisper-small-sinhala,omnilingual-ctc-1b}

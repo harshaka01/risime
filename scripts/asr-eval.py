@@ -346,11 +346,9 @@ def decide(d, hints, mode, en_min_p):
     if d.get("reason") == "no_speech" or d.get("error"):
         return "none"
     probs, raw = d.get("probs") or {}, d.get("raw_probs") or d.get("probs") or {}
-    if mode == "off" or not hints:
-        return d["detected"] if d["probability"] >= MIN_ROUTE_P else "low"
     local = [h for h in hints if h != "en"]
-    if not local:
-        return "en"
+    if mode == "off" or not local:
+        return d["detected"] if d["probability"] >= MIN_ROUTE_P else "low"
     best = max(local, key=lambda h: probs.get(h, 0.0))
     if mode == "force":
         return best
