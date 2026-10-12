@@ -1,5 +1,21 @@
 # Android status — 0.2 nightlies
 
+## READY P0 2026-10-12 (Harsha's phone tests): B "Can't reach the server", C Official banner overlap
+**B** root cause: the login check (`LoginViewModel.loadChoice` → `api.authConfig()`) was ONE attempt (connect 5 s, no call bound, no
+retry) and any IOException became "Can't reach the server" (`AuthLogic.signInChoice`); it re-ran only on a URL change or Retry,
+never when a network came up. A slow first connection, a not-yet-validated network at first launch, or the system resolver's
+cached answer for the old IP (moved today; Chrome has its own resolver) failed it while the browser worked. Fix: `AppContainer.checkServer`
+(4 attempts, 1/2/4 s backoff, 10 s per attempt, attempts 2+ via `net/FreshDns` = DnsResolver FLAG_NO_CACHE_LOOKUP), "Slow connection,
+still trying…" while retrying, auto re-check when the default network comes up (`networkOnline`), one cause line ("This phone is
+offline" / DNS / timeout / TLS / refused / HTTP <code>, `net/ServerReach.kt`, `ServerReachTest`). Gate: `scripts/server-reach-test`
+(redroid, fake stalling server; eth0 down for offline) → SERVER REACH OK, shots 60-reach-*, 61-reach-offline, 62-reach-back-online.
+
+**C** root cause: `TabbedChatContent`'s tabBar lambda emitted three siblings (tab row, banner, notice) and ChatScreen/GroupScreens put it
+in `Box(Modifier.zIndex(1f)) { bar() }` (the a11y z-order hardening of 1df4ca7), so the banner was drawn at the top, on the tabs, OK over
+the search icon. Fix: one Column in the lambda, Column at both call sites (zIndex kept). `OfficialBannerLayoutTest` (384 dp, font 1.0/1.3;
+fails on the old code). Gate: `scripts/official-banner-check` (= `ui-entry-test --official-banner`, step 20: 720x1600 @300 dpi, A light 1.0,
+B dark 1.3, uiautomator bounds) → shots 63-official-banner-1.0 / -1.3.
+
 ## READY v1.35 §34 Risi P0, Phase 2 (JVM gate green: `assembleDebug testDebugUnitTest`, 1710 tests, 0 failed)
 Branch `phase2-android`, against contract a8e5488 (v1.35). No Room change (hard rule 9 untouched). The urgent decoder fix went straight to main first
 (a2daca5: the ten §34 examples in `ContractExamplesTest`, `PROTOCOL_VERSION` 1.35).

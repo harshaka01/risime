@@ -122,6 +122,10 @@
 #     "↪ Forwarded" on B in both; Risi answers with Sinhala and Tamil text (fake-llm) → Export PDF → Save to Downloads
 #     (Download/RisiMe) → adb pull → pdftotext -enc UTF-8 holds the exact strings, pdffonts lists NotoSans, NotoSansSinhala,
 #     NotoSansTamil with `emb yes`. Shots 58-messaging-*. A step that cannot run (no photo picker) prints UIENTRY SKIP.
+# 20. (--official-banner, implies --risi, runs alone: steps 1 and 20; P0 2026-10-12 bug C) both phones at 720x1600 @300 dpi,
+#     A light at font scale 1.0, B dark at 1.3: each opens the 1:1 Official for the first time (A starts it); the banner
+#     "Risi listens in Official …  OK" must not intersect the "🔒 Private" / "● Official" labels or the search icon and must
+#     lie below them (uiautomator bounds). Shots 63-official-banner-1.0 / -1.3. Standalone: scripts/official-banner-check.
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -134,7 +138,7 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=ai.risicloud.risime.debug
 CLS=ai.risicloud.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0; MSG=0
+APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0; MSG=0; OBANNER=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
   --skills) RISI=1; SKILLS=1; SKILLS_STEP=1; shift;; --ledger) RISI=1; LEDGER=1; shift;;
   --calendar) RISI=1; SKILLS=1; SKILLS_STEP=1; CALENDAR=1; shift;; --offers) RISI=1; SKILLS=1; OFFERS=1; shift;;
@@ -142,6 +146,7 @@ while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; s
   --google) RISI=1; SKILLS=1; GCAL=1; shift;;
   --ui-batch) RISI=1; SKILLS=1; UIBATCH=1; shift;;
   --messaging) RISI=1; SKILLS=1; MSG=1; shift;;
+  --official-banner) RISI=1; OBANNER=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 # --google alone: UITEST_GOOGLE_ONLY=1 = steps 1 and 17 (steps 2-16 are skipped through UITEST_RISI_ONLY, which only
 # the --risi-calendar/--risi-notes blocks and the google block look at).
@@ -719,6 +724,8 @@ pass "both opened the DM; it is e2ee"
 ONLY="${UITEST_SKILLS_ONLY:-0}${UITEST_LEDGER_ONLY:-0}${UITEST_CALENDAR_ONLY:-0}${UITEST_OFFERS_ONLY:-0}${UITEST_RISI_ONLY:-0}"
 [ "${UITEST_UIBATCH_ONLY:-0}" = 1 ] && ONLY=x
 [ "${UITEST_MESSAGING_ONLY:-0}" = 1 ] && ONLY=x
+# --official-banner (P0 2026-10-12 bug C) always runs alone: only steps 1 and 20 (each phone's FIRST Official open shows the banner).
+[ "$OBANNER" = 1 ] && ONLY=x
 if [ "$ONLY" = 00000 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
@@ -3543,6 +3550,86 @@ PY
   pass "messaging: no crash, no main-thread database work"
 }
 if [ "$MSG" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_MESSAGING_ONLY:-0}" = 1 ]; }; then messaging_section; fi
+
+# ---------------------------------------------------------------- 20. (--official-banner) the Official banner's own row
+# P0 2026-10-12 bug C: the 1:1 Official's banner "Risi listens in Official and helps with follow-ups. OK" was drawn ON the
+# "🔒 Private | ● Official" row, its OK over the search icon. Galaxy A15 class: 720x1600 at 300 dpi. A (light) checks at
+# font scale 1.0, B (dark) at 1.3: each phone's FIRST open of the Official tab shows the banner (it is seen at once).
+# uiautomator bounds: the banner (its text + OK) intersects neither tab label nor the search icon and lies below them.
+ob_check() {  # $1 = label; reads $WORK/ui-$DEV.xml
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+BANNER = "Risi listens in Official and helps with follow-ups."
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    print("no UI dump"); sys.exit(1)
+def b(n): return list(map(int, re.findall(r'\d+', n.get('bounds'))))
+def find(pred): return [b(n) for n in nodes if pred(n)]
+text = find(lambda n: (n.get('text') or '') == BANNER)
+if not text: print("the banner isn't on screen"); sys.exit(1)
+t = text[0]; cy = (t[1] + t[3]) / 2
+oks = sorted(find(lambda n: (n.get('text') or '') == 'OK'), key=lambda r: abs((r[1] + r[3]) / 2 - cy))
+if not oks: print("the banner has no OK"); sys.exit(1)
+ok = oks[0]
+banner = [min(t[0], ok[0]), min(t[1], ok[1]), max(t[2], ok[2]), max(t[3], ok[3])]
+others = {
+    "the Private tab": find(lambda n: (n.get('text') or '').endswith('Private') and '🔒' in (n.get('text') or '')),
+    "the Official tab": find(lambda n: (n.get('text') or '').endswith('Official') and '●' in (n.get('text') or '')),
+    "the search icon": find(lambda n: (n.get('content-desc') or '') == 'Search in Official'),
+}
+def hit(a, c): return a[0] < c[2] and c[0] < a[2] and a[1] < c[3] and c[1] < a[3]
+bad = []
+for name, rects in others.items():
+    if not rects: bad.append(f"{name} isn't on screen"); continue
+    for r in rects:
+        if hit(banner, r): bad.append(f"the banner {banner} overlaps {name} {r}")
+        if hit(ok, r): bad.append(f"OK {ok} overlaps {name} {r}")
+        if banner[1] < r[3]: bad.append(f"the banner (top {banner[1]}) isn't below {name} (bottom {r[3]})")
+if bad: print("; ".join(bad)); sys.exit(1)
+print(f"banner {banner}, OK {ok}; tabs/search {[r for v in others.values() for r in v]}")
+PY
+}
+official_banner_section() {
+  local d sc mode out peer
+  for d in A B; do
+    DEV=$d
+    A shell wm size 720x1600 >/dev/null; A shell wm density 300 >/dev/null
+    if [ "$d" = A ]; then sc=1.0; mode=no; else sc=1.3; mode=yes; fi
+    A shell settings put system font_scale "$sc"; A shell cmd uimode night "$mode" >/dev/null 2>&1 || true
+    A shell am force-stop "$PKG"
+  done
+  UIB_SCALE_SET=1
+  for d in A B; do
+    DEV=$d
+    if [ "$d" = A ]; then sc=1.0; peer="ZZ UI B"; else sc=1.3; peer="ZZ UI A"; fi
+    screen_wh; [ "$W" = 720 ] || fail "official banner [$sc]: the screen is ${W}x${H}, not 720 px wide"
+    open_chat "$peer" || fail "official banner [$sc]: open the DM with $peer"
+    wait_text "● Official" 30 || fail "official banner [$sc]: no '● Official' tab"
+    tap "● Official" || fail "official banner [$sc]: tap the Official tab"
+    # A starts Official (the first time); B's Official arrives from A's start (its tab may still show Start Official).
+    ok_b=""
+    for i in $(seq 1 120); do
+      # (exact text: the intro card's longer text starts with the same words)
+      [ -n "$(node_xy 'Risi listens in Official and helps with follow-ups.')" ] && { ok_b=1; break; }
+      has 'text="Start Official"' && { tap "Start Official" || true; sleep 2; continue; }
+      [ $((i % 15)) = 0 ] && { tap "● Official" || true; }
+      sleep 1
+    done
+    [ -n "$ok_b" ] || { shot "63-official-banner-missing-$sc"; fail "official banner [$sc]: the banner never showed on the first Official open"; }
+    sleep 1; dump
+    out="$(ob_check "$sc")" || { shot "63-official-banner-$sc"; fail "official banner [$sc]: $out"; }
+    echo "    bounds [$sc]: $out"
+    shot "63-official-banner-$sc"
+    pass "official banner [$sc, $([ "$d" = A ] && echo light || echo dark), 720x1600 @300dpi]: its own row below the tabs, OK clear of the search icon"
+    tap "OK" || true
+  done
+  for d in A B; do DEV=$d; A shell settings put system font_scale 1.0; A shell cmd uimode night no >/dev/null 2>&1 || true; A shell wm size reset >/dev/null; A shell wm density reset >/dev/null; done
+  UIB_SCALE_SET=0
+  DEV=A; logcat_ok "official banner"
+  DEV=B; logcat_ok "official banner"
+}
+if [ "$OBANNER" = 1 ]; then official_banner_section; fi
 
 DEV=A; logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"
