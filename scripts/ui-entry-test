@@ -126,6 +126,9 @@
 #     A light at font scale 1.0, B dark at 1.3: each opens the 1:1 Official for the first time (A starts it); the banner
 #     "Risi listens in Official …  OK" must not intersect the "🔒 Private" / "● Official" labels or the search icon and must
 #     lie below them (uiautomator bounds). Shots 63-official-banner-1.0 / -1.3. Standalone: scripts/official-banner-check.
+# 21. (--risi-reinstall, P0 D 2026-10-12; UITEST_REINSTALL_ONLY=1: only steps 1 and 21) A's Risi chat answers; A is
+#     uninstalled and installed again, signs in: one "Risi" row (no "Rejoining group…", no stray "Group"), the Risi chat
+#     opens as the Risi chat (no Official tab, encryption set up) and answers; the server keeps one Risi chat (same id).
 #  No crash, no main-thread database work (scripts/logcat-gate). A screenshot of each step goes to
 #  docs/status/screens/<nn>-<name>.png (downscaled). Prints "UIENTRY PASS|FAIL <step>", ends "UI ENTRY OK".
 #  Own instances: redroid -ui1/-ui2 on 5851/5852, server 127.0.0.1:4551, store risime_uientry. Never touches :4000.
@@ -138,7 +141,7 @@ REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 PKG=ai.risicloud.risime.debug
 CLS=ai.risicloud.risime
 SUF="${UITEST_INSTANCE:-}"; PORT="${UITEST_PORT:-4551}"
-APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0; MSG=0; OBANNER=0
+APK=""; KEEP=0; RISI=0; SKILLS=0; SKILLS_STEP=0; LEDGER=0; CALENDAR=0; OFFERS=0; RCAL=0; RNOTES=0; GCAL=0; UIBATCH=0; MSG=0; OBANNER=0; RREIN=0
 while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; --risi) RISI=1; shift;;
   --skills) RISI=1; SKILLS=1; SKILLS_STEP=1; shift;; --ledger) RISI=1; LEDGER=1; shift;;
   --calendar) RISI=1; SKILLS=1; SKILLS_STEP=1; CALENDAR=1; shift;; --offers) RISI=1; SKILLS=1; OFFERS=1; shift;;
@@ -147,6 +150,7 @@ while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; s
   --ui-batch) RISI=1; SKILLS=1; UIBATCH=1; shift;;
   --messaging) RISI=1; SKILLS=1; MSG=1; shift;;
   --official-banner) RISI=1; OBANNER=1; shift;;
+  --risi-reinstall) RISI=1; SKILLS=1; RREIN=1; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 # --google alone: UITEST_GOOGLE_ONLY=1 = steps 1 and 17 (steps 2-16 are skipped through UITEST_RISI_ONLY, which only
 # the --risi-calendar/--risi-notes blocks and the google block look at).
@@ -217,6 +221,9 @@ at, conv = sys.argv[3], sys.argv[4]
 cal_start, cal_end = sys.argv[5], sys.argv[6]
 final = lambda a: {"tool": "final", "answer": a, "sources": [], "next_steps": []}
 rules = [
+    # Step 20 (--risi-reinstall): one plain answer, asked before and after the reinstall.
+    {"name": "reinstall_ping", "task": "risi_next_action", "match": "(?i)reinstall ping",
+     "actions": [{"tool": "final", "answer": "REINSTALL pong from Risi.", "sources": [], "next_steps": []}]},
     # Step 18 (--ui-batch): an answer that carries next_steps; the app must not draw them as chips (UI batch item 7).
     # Step 19 (--messaging): answers in Sinhala and Tamil (the PDF is made on the phone from the card's text).
     {"name": "msg_pdf_si", "task": "risi_next_action", "match": "(?i)messaging sinhala pdf",
@@ -406,6 +413,15 @@ case mode do
   "conv" ->
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
     IO.puts("uientry: conv=#{RisiMe.Messaging.conversation_id(a.id, b.id)}")
+  "risichat" ->
+    # Step 20: A's Risi chat (id, state, generation, epoch) and how many groups A is an active member of.
+    import Ecto.Query
+    a = Repo.get_by!(User, phone: a_phone)
+    g = RisiMe.RisiChat.of_owner(a.id)
+    n = Repo.aggregate(from(m in RisiMe.Groups.Member, where: m.user_id == ^a.id and m.state == "active"), :count)
+    if g,
+      do: IO.puts("uientry: risichat id=#{g.id} state=#{g.state} gen=#{g.generation} epoch=#{inspect(RisiMe.Groups.epoch(g.id))} groups=#{n}"),
+      else: IO.puts("uientry: risichat none groups=#{n}")
 end
 EXS
 fx() { (cd server && $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^uientry:' || true); }
@@ -726,6 +742,7 @@ ONLY="${UITEST_SKILLS_ONLY:-0}${UITEST_LEDGER_ONLY:-0}${UITEST_CALENDAR_ONLY:-0}
 [ "${UITEST_MESSAGING_ONLY:-0}" = 1 ] && ONLY=x
 # --official-banner (P0 2026-10-12 bug C) always runs alone: only steps 1 and 20 (each phone's FIRST Official open shows the banner).
 [ "$OBANNER" = 1 ] && ONLY=x
+[ "${UITEST_REINSTALL_ONLY:-0}" = 1 ] && ONLY=x
 if [ "$ONLY" = 00000 ]; then
 # ---------------------------------------------------------------- 2. the tab row under the header, Start Official
 DEV=A
@@ -3630,6 +3647,81 @@ official_banner_section() {
   DEV=B; logcat_ok "official banner"
 }
 if [ "$OBANNER" = 1 ]; then official_banner_section; fi
+# ---------------------------------------------------------------- 21. (--risi-reinstall) the Risi chat survives a reinstall
+# P0 D (Harsha's phone, 12 Oct): after a reinstall the Risi chat showed "Rejoining group…" with 2 members and "Setting up
+# encryption on this phone…" for ever, its Official tab said "Couldn't start Official (risi_chat)", and a stray "Group" row
+# appeared. Nobody can re-add a reinstalled only device of a Risi chat (Risi never commits), so the app resets it at once
+# (§12.12.3 last resort; the server allows it for a Risi chat with no candidate) and rebuilds it as a Risi chat.
+# A asks Risi, is uninstalled (data gone) and installed again, signs in: the list has ONE "Risi" row and no "Rejoining
+# group…"/"Group" row; the Risi chat opens with "Ask Risi…" (no tab row, no Official, no "Setting up encryption" after
+# the rebuild); a new ask is answered; the server keeps ONE Risi chat for A (same id) and no other group.
+# Shots: docs/status/screens/59-risi-reinstall-{before,list,chat}.png. UITEST_REINSTALL_ONLY=1: steps 1 and 21.
+reinstall_section() {
+  DEV=A
+  open_risi_chat || fail "reinstall: A can't open its Risi chat"
+  for _ in $(seq 1 60); do has 'Only you and Risi' && break; sleep 1; done
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "reinstall%sping%sone"; sleep 0.5
+  tap "Send" || fail "reinstall: send the first ask"
+  wait_for 'REINSTALL pong from Risi.' 120 || fail "reinstall: Risi didn't answer before the reinstall"
+  shot "59-risi-reinstall-before"
+  local before; before="$(fx risichat)"
+  echo "    before: $before"
+  [[ "$before" == *"state=active"* ]] || fail "reinstall: A's Risi chat isn't active on the server ($before)"
+  local rid="${before#*id=}"; rid="${rid%% *}"
+  pass "reinstall: A's Risi chat answers before the reinstall"
+
+  A uninstall "$PKG" >/dev/null 2>&1 || true
+  A install "$APK" >/dev/null || fail "reinstall: install the APK again"
+  A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  A logcat -c || true
+  sign_in "+94770000981" "uientry81@example.com" || fail "reinstall: A couldn't sign in again"
+  pass "reinstall: A signed in again after the reinstall"
+
+  # The list, watched for 30 s from the sign-in (with an app restart half-way, before or after the rebuild):
+  # never a "Rejoining group…" or a "Group" row, and in the end exactly one "Risi" row.
+  local risi=0 pend=0 grp=0 bad="" i
+  for i in $(seq 1 30); do
+    if [ "$i" = 15 ]; then A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; wait_list 30 || true; fi
+    on_list || { back_to_list >/dev/null 2>&1 || true; dump; }
+    risi="$(count_text "Risi")"; pend="$(count_text "Rejoining group…")"; grp="$(count_text "Group")"
+    if [ "$pend" != 0 ] || [ "$grp" != 0 ]; then bad="sample $i: Risi=$risi 'Rejoining group…'=$pend 'Group'=$grp"; shot "59-risi-reinstall-list"; break; fi
+    sleep 1
+  done
+  [ -z "$bad" ] || fail "reinstall: a stray row in the chat list ($bad)"
+  shot "59-risi-reinstall-list"
+  [ "$risi" = 1 ] || fail "reinstall: the chat list has $risi 'Risi' rows (want 1)"
+  pass "reinstall: the chat list has one Risi row, never 'Rejoining group…' or a stray 'Group' (30 s, one restart)"
+
+  tap "Risi" || fail "reinstall: open the Risi chat"
+  wait_for 'text="Ask Risi…"' 60 || { shot "59-risi-reinstall-chat"; fail "reinstall: the Risi chat didn't open as the Risi chat (no 'Ask Risi…')"; }
+  dump
+  grep -qF "start Official" "$WORK/ui-$DEV.xml" && { shot "59-risi-reinstall-chat"; fail "reinstall: 'Couldn't start Official' in the Risi chat"; }
+  grep -qF 'text="Official"' "$WORK/ui-$DEV.xml" && { shot "59-risi-reinstall-chat"; fail "reinstall: the Risi chat shows an Official tab"; }
+  local ready=0
+  for _ in $(seq 1 120); do
+    dump
+    if ! grep -qF 'Setting up encryption' "$WORK/ui-$DEV.xml" && ! grep -qF 'Rejoining group' "$WORK/ui-$DEV.xml"; then ready=1; break; fi
+    sleep 1
+  done
+  [ "$ready" = 1 ] || { shot "59-risi-reinstall-chat"; fail "reinstall: the Risi chat still says 'Setting up encryption'/'Rejoining group' after 120 s"; }
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "reinstall%sping%stwo"; sleep 0.5
+  tap "Send" || fail "reinstall: send the ask after the reinstall"
+  wait_for 'REINSTALL pong from Risi.' 120 || { shot "59-risi-reinstall-chat"; fail "reinstall: Risi didn't answer after the reinstall"; }
+  shot "59-risi-reinstall-chat"
+  pass "reinstall: the Risi chat opens as the Risi chat (no Official, encryption set up) and Risi answers"
+
+  local after; after="$(fx risichat)"
+  echo "    after: $after"
+  [[ "$after" == *"id=$rid "* ]] || fail "reinstall: A's Risi chat changed on the server ($before -> $after)"
+  [[ "$after" == *"state=active"* ]] || fail "reinstall: A's Risi chat isn't active after the reinstall ($after)"
+  [[ "$after" == *"groups=1"* ]] || fail "reinstall: A is in another group on the server too ($after)"
+  logcat_ok "risi reinstall"
+  pass "reinstall: the server keeps one Risi chat for A (same id) and no stray group"
+}
+if [ "$RREIN" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_REINSTALL_ONLY:-0}" = 1 ]; }; then reinstall_section; fi
 
 DEV=A; logcat_ok "ui entry"
 DEV=B; logcat_ok "ui entry"

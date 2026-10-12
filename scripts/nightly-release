@@ -204,6 +204,22 @@ else
   echo "==> push-device-test: no redroid here (run it on spark2)"
 fi
 
+# Risi chat reinstall gate (P0 2026-10-12 bug D): A's Risi chat answers; A is uninstalled and installed again,
+# signs in: one "Risi" row (never "Rejoining group…" or a stray "Group", also across an app restart), the Risi
+# chat opens as the Risi chat (no Official tab), its encryption is rebuilt and Risi answers; the server keeps one
+# Risi chat (same id). Product safety (a chat lost after a reinstall), so it blocks. Its own instance and redroids
+# (ui-entry-test --risi-reinstall, steps 1 and 21, ~10 min). RISI_REINSTALL_SKIP=1: emergency only (say so in the notes).
+if [ -n "${RISI_REINSTALL_SKIP:-}" ]; then echo "==> risi reinstall gate SKIPPED (RISI_REINSTALL_SKIP)"
+elif scripts/android-target check >/dev/null 2>&1; then
+  echo "==> risi reinstall gate (ui-entry-test --risi-reinstall, redroid)"
+  UITEST_REINSTALL_ONLY=1 UITEST_INSTANCE=_relr UITEST_PORT=4556 UITEST_LLM_PORT=8393 UITEST_REDROID_A=-relr1 UITEST_REDROID_A_PORT=5873 \
+    UITEST_REDROID_B=-relr2 UITEST_REDROID_B_PORT=5874 STEP_T="${RISI_REINSTALL_TIMEOUT:-2400}" \
+    step scripts/ui-entry-test --risi-reinstall --apk android/app/build/outputs/apk/debug/app-debug.apk \
+    || { echo "RISI REINSTALL GATE FAILED: not releasing"; exit 1; }
+else
+  echo "==> risi reinstall gate: no redroid here (run it on spark2)"
+fi
+
 APK=android/app/build/outputs/apk/release/app-release.apk
 BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
 if [ -f "$PIN_FILE" ]; then
