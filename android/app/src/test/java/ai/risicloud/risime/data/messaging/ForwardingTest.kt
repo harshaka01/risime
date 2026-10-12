@@ -202,4 +202,61 @@ class ForwardingTest {
         assertEquals(6, uploads.size)
         assertNotEquals(srcBlob.cipherSize, 0L)
     }
+
+    /** v1.41 §37.3: a forwarded voice note keeps mime/duration/waveform, drops transcribe/request_id/reply_to, and is a fresh upload per target. */
+    @Test fun voiceForwardDropsOptOutsAndRotatesTheKeyPerTarget() = runTest {
+        val wave = java.util.Base64.getEncoder().encodeToString(ByteArray(64) { it.toByte() })
+        val meta = ai.risicloud.risime.data.media.VoiceMeta(ai.risicloud.risime.data.media.VoiceEnvelope.MIME_OGG_OPUS, 12_400, wave, transcribe = false, requestId = "8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f")
+        val src = row("v", kind = MessageEntity.KIND_VOICE, body = "", systemJson = meta.encode()).copy(replyToMessageId = "c1a2b3e1-a0b1-11f0-8000-0242ac120002", replyToFrom = kamal)
+        val spec = ForwardRules.build(src, me)!!
+        assertEquals(MessageEntity.KIND_VOICE, spec.kind)
+        assertEquals("v", spec.mediaSource)
+        assertEquals(1, spec.hops)
+        val fwdMeta = ai.risicloud.risime.data.media.VoiceMeta.decode(spec.systemJson)!!
+        assertEquals(12_400L, fwdMeta.durationMs)
+        assertEquals(wave, fwdMeta.waveform)
+        assertNull(fwdMeta.transcribe)
+        assertNull(fwdMeta.requestId)
+        // Not voice_ready: offered disabled with the notice (DM and group).
+        val cands = listOf(
+            ForwardCandidate("dm:x", "Kamal", official = false, risiChat = false, e2ee = true, activeMember = true, voiceReady = false),
+            ForwardCandidate("grp:g", "Team", official = false, risiChat = false, e2ee = true, activeMember = true, voiceReady = false),
+            ForwardCandidate("grp:h", "Ok", official = false, risiChat = false, e2ee = true, activeMember = true, voiceReady = true),
+        )
+        val t = ForwardRules.targets(cands, hasImage = false, hasFile = false, hasVoice = true).associateBy { it.conversationId }
+        assertEquals("Kamal needs to update RisiMe to get voice notes", t["dm:x"]!!.disabledReason)
+        assertEquals(ForwardRules.VOICE_GROUP_NOTICE, t["grp:g"]!!.disabledReason)
+        assertNull(t["grp:h"]!!.disabledReason)
+
+        // The re-upload: byte for byte (no re-encode), a fresh key per target, never the source's.
+        val messages = FakeMessageDao()
+        val media = FakeMediaDao(messages)
+        val files = MediaFiles(tmp.newFolder("vmedia"))
+        val sealer = MediaSealer { KvSealer(ByteArray(32) { 7 }) }
+        val crypto = FakeMediaCrypto()
+        val plain = tmp.newFile("ogg").apply { writeBytes("OggS".toByteArray() + ByteArray(4000) { 3 }) }
+        val srcBlob = crypto.encryptFile(plain, files.file("v.enc"))
+        messages.insert(src)
+        media.insert(
+            MediaEntity(
+                "v", conv, false, MediaState.CACHED.name, "blob-v", srcBlob.cipherSize, java.util.Base64.getEncoder().encodeToString(srcBlob.sha256), null,
+                sealer.sealEnc("v", ImageEnc(srcBlob.alg, srcBlob.key, srcBlob.plainSize)), null, meta.mime, 0, 0, "v.enc", expiresAtEst = Long.MAX_VALUE, lastAccess = 0,
+            ),
+        )
+        val uploads = mutableListOf<String>()
+        val job = ForwardMedia(media, messages, sealer, files, { crypto }, download = { false }, reencodeImage = { error("never re-encoded") }, enqueueUpload = { uploads += it })
+        val plan = Forwarder(messages, media, tx).persist(listOf(spec), listOf("grp:t1", "grp:t2", "dm:t3"), me, null)
+        for (id in plan.mediaJobs) job.run(id)
+        val rows = plan.mediaJobs.map { media.get(it)!! }
+        assertTrue(rows.all { it.state == MediaState.ENCRYPTED.name && it.mime == meta.mime && it.w == 0 })
+        val keys = rows.map { sealer.openEnc(it.clientMsgId, it.sealedEnc).key.toList() }
+        assertEquals("a fresh key per target", 3, keys.toSet().size)
+        assertTrue(keys.none { it == srcBlob.key.toList() })
+        assertEquals(3, uploads.size)
+        // The outbox rows: kind voice, no reply, the hops, the copied meta.
+        val out = plan.rows.filter { it.voice }
+        assertEquals(3, out.size)
+        assertTrue(out.all { it.replyToMessageId == null && it.forwardHops == 1 && it.systemJson == spec.systemJson })
+        assertTrue(files.tmp.listFiles()!!.isEmpty())
+    }
 }

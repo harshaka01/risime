@@ -285,6 +285,8 @@ object Quotes {
         m.image -> m.body.takeIf { it.isNotBlank() }?.let { "📷 " + firstLines(it) } ?: "📷 Photo"
         m.file -> "📄 " + (FileMeta.decode(m.systemJson)?.let { ai.risicloud.risime.data.media.FileEnvelope.displayName(it.name) } ?: "File")
         m.risiCtl -> CopyFormat.requestText(m)?.let(::firstLines) ?: ""
+        // §37.3 a reply quote: "🎤 Voice note 0:12".
+        m.voice -> ai.risicloud.risime.data.media.VoiceText.previewOf(m.systemJson)
         else -> firstLines(m.body)
     }
 
@@ -370,7 +372,7 @@ fun ForwardPickerSheet(
     onOneTarget: (String) -> Unit = {},
 ) {
     TargetPickerSheet(
-        c, hasImage = sources.any { it.image }, hasFile = sources.any { it.file }, max = ForwardRules.maxTargets(sources),
+        c, hasImage = sources.any { it.image }, hasFile = sources.any { it.file }, hasVoice = sources.any { it.voice }, max = ForwardRules.maxTargets(sources),
         sourcePrivate = sourcePrivate, title = ForwardRules.PICKER_TITLE, allowMessage = true,
         onSend = { targets, add -> c.forward(sources, targets, add, noteText) }, onDone = onDone, onDismiss = onDismiss, onOneTarget = onOneTarget,
     )
@@ -386,6 +388,8 @@ fun TargetPickerSheet(
     c: AppContainer,
     hasImage: Boolean,
     hasFile: Boolean,
+    /** v1.41 §37.3: a voice note is among the sources (targets that are not `voice_ready` are offered disabled). */
+    hasVoice: Boolean = false,
     max: Int,
     sourcePrivate: Boolean,
     title: String,
@@ -403,9 +407,9 @@ fun TargetPickerSheet(
     var snack by remember { mutableStateOf<String?>(null) }
     var hint by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
-    LaunchedEffect(hasImage, hasFile) {
-        val cands = c.forwardCandidates(hasImage = hasImage, hasFile = hasFile)
-        targets = ForwardRules.targets(cands, hasImage, hasFile)
+    LaunchedEffect(hasImage, hasFile, hasVoice) {
+        val cands = c.forwardCandidates(hasImage = hasImage, hasFile = hasFile, hasVoice = hasVoice)
+        targets = ForwardRules.targets(cands, hasImage, hasFile, hasVoice)
     }
     fun send() {
         sending = true

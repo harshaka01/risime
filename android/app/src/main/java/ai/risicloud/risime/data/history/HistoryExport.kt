@@ -163,6 +163,21 @@ object HistoryExport {
                     ai.risicloud.risime.data.media.FileEnvelope.validate(obj) ?: continue
                     obj
                 }
+                // v1.41 §37.5: `voice` by reference like an image (the key, never the audio).
+                m.voice -> {
+                    val meta = ai.risicloud.risime.data.media.VoiceMeta.decode(m.systemJson) ?: continue
+                    val row = media?.get(m.clientMsgId) ?: continue
+                    val s = sealer ?: continue
+                    val blobId = row.blobId ?: continue
+                    val enc = runCatching { s.openEnc(m.clientMsgId, row.sealedEnc) }.getOrNull() ?: continue
+                    val env = ai.risicloud.risime.data.media.VoiceEnvelope(
+                        ai.risicloud.risime.net.BlobRef(blobId, row.blobSize, row.blobSha256), enc, meta.mime, meta.durationMs, meta.levels,
+                        transcribe = meta.transcribe?.takeIf { !it }, extras = ai.risicloud.risime.data.mls.sendExtras(m),
+                    )
+                    val obj = json(env.encode())
+                    ai.risicloud.risime.data.media.VoiceEnvelope.validate(obj) ?: continue
+                    obj
+                }
                 // v1.34: `forwarded` and `reply_to` travel as part of the payload.
                 else -> json(MlsPayload.text(m.body, ai.risicloud.risime.data.mls.sendExtras(m)))
             }

@@ -93,7 +93,7 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (String) -> Unit, onBack: () -> Un
                 ListRow(
                     title = h.peerName,
                     // §24.9: with tabs on, every hit shows its tab icon.
-                    subtitle = ai.risicloud.risime.ui.chats.tabIcon(h.tab) + (if (h.message.outgoing) "You: " else "") + ai.risicloud.risime.push.bodyPreview(h.message.kind, h.message.body),
+                    subtitle = ai.risicloud.risime.ui.chats.tabIcon(h.tab) + (if (h.message.outgoing) "You: " else "") + ai.risicloud.risime.push.bodyPreview(h.message.kind, h.message.body, h.message.systemJson.takeIf { _ -> h.message.voice }),
                     leading = { InitialsAvatar(h.peerName, photoKey = h.peerId) },
                     meta = shortStamp(h.message.localTs),
                     onClick = { onOpen(h.openTarget) },

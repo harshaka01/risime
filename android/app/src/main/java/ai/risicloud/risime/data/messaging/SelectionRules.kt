@@ -56,7 +56,14 @@ object SelectionRules {
     }
 
     /** "This photo is no longer available" ("…file…"). */
-    fun goneText(m: MessageEntity): String = if (m.file) "This file is no longer available" else "This photo is no longer available"
+    fun goneText(m: MessageEntity): String = when {
+        m.file -> "This file is no longer available"
+        m.voice -> VOICE_GONE
+        else -> "This photo is no longer available"
+    }
+
+    /** §37.5 a restored (or old) voice note whose blob is past its TTL. */
+    const val VOICE_GONE = "This voice note is no longer available"
 
     /** §33.7 forwardable, or the reason it isn't (null: forwardable). */
     fun forwardBlock(m: MessageEntity, media: MediaEntity?, now: Long): String? {
@@ -70,6 +77,8 @@ object SelectionRules {
     /** §33.10 shareable: copyable (or media), and its media on the phone or still fetchable. */
     fun shareable(m: MessageEntity, media: MediaEntity?, now: Long): Boolean {
         if (!selectable(m)) return false
+        // §37.3: decrypted audio never leaves noBackupFilesDir, so a voice note is forwarded, never shared out of the app.
+        if (m.voice) return false
         if (m.media) return mediaAvail(m, media, now) != MediaAvail.GONE
         return CopyFormat.copyable(m)
     }

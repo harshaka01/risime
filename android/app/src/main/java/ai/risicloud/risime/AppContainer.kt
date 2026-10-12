@@ -1162,7 +1162,7 @@ class AppContainer(
      * §33.4 the picker's candidates: friends' DMs and my groups (each tab its own conversation) with
      * what the target rules need. Readiness of DMs for media is fetched only when [media] is set.
      */
-    suspend fun forwardCandidates(hasImage: Boolean, hasFile: Boolean): List<ai.risicloud.risime.data.messaging.ForwardCandidate> = withContext(Dispatchers.IO) {
+    suspend fun forwardCandidates(hasImage: Boolean, hasFile: Boolean, hasVoice: Boolean = false): List<ai.risicloud.risime.data.messaging.ForwardCandidate> = withContext(Dispatchers.IO) {
         val me = sessionStore.current()?.user?.id ?: return@withContext emptyList()
         val contacts = db.contacts().all().first()
         val groups = db.groups().allNow()
@@ -1184,8 +1184,9 @@ class AppContainer(
             val state = prefsNow[chat]?.officialState
             var images: Boolean? = null
             var files: Boolean? = null
-            if ((dm && (hasImage || hasFile)) || (!dm && hasFile)) {
-                (runCatching { api.mlsGroup(conv) }.getOrNull() as? ApiResult.Ok)?.value?.let { g -> images = g.imagesReady; files = g.filesReady }
+            var voice: Boolean? = null
+            if ((dm && (hasImage || hasFile)) || (!dm && hasFile) || hasVoice) {
+                (runCatching { api.mlsGroup(conv) }.getOrNull() as? ApiResult.Ok)?.value?.let { g -> images = g.imagesReady; files = g.filesReady; voice = g.voiceReady }
             }
             out += ai.risicloud.risime.data.messaging.ForwardCandidate(
                 conversationId = conv, name = name, official = official, risiChat = row?.risi == true,
@@ -1193,7 +1194,7 @@ class AppContainer(
                 activeMember = if (dm) true else group?.readOnly == false,
                 officialOff = official && (state == ai.risicloud.risime.data.tabs.OfficialState.OFF || state == ai.risicloud.risime.data.tabs.OfficialState.NONE),
                 blockedOrUnfriended = peer != null && peer in blocked,
-                imagesReady = images, filesReady = files, lastActivity = recent[conv] ?: 0,
+                imagesReady = images, filesReady = files, voiceReady = voice, lastActivity = recent[conv] ?: 0,
             )
         }
         out
@@ -1270,6 +1271,11 @@ class AppContainer(
     /** §14.7 Receiving 7: background downloads on unmetered networks (WorkManager), and now if the app is open on one. */
     fun scheduleImageDownloads() {
         ai.risicloud.risime.push.MediaDownloadWorker.enqueue(appContext)
+        // v1.41 §37.3: received voice notes auto-download on any network (they are small).
+        ai.risicloud.risime.push.VoiceDownloadWorker.enqueue(appContext)
+        if (foreground.value && ai.risicloud.risime.push.currentNetKind(appContext) != ai.risicloud.risime.data.media.NetKind.OFFLINE) {
+            scope.launch { downloadVoiceNotes() }
+        }
         if (foreground.value && ai.risicloud.risime.push.currentNetKind(appContext) == ai.risicloud.risime.data.media.NetKind.UNMETERED) {
             scope.launch { downloadAllImages() }
         }
@@ -1279,6 +1285,11 @@ class AppContainer(
     suspend fun downloadAllImages(): List<ai.risicloud.risime.data.media.DownloadOutcome> = kotlinx.coroutines.coroutineScope {
         val rows = db.media().downloadable()
         rows.map { r -> async { downloadImage(r.clientMsgId) } }.map { it.await() }.also { images.evict() }
+    }
+
+    /** §37.3 every received voice note not on the phone yet, newest first (any network; never evicted afterwards). */
+    suspend fun downloadVoiceNotes(): List<ai.risicloud.risime.data.media.DownloadOutcome> = kotlinx.coroutines.coroutineScope {
+        db.media().downloadableVoice().map { r -> async { downloadImage(r.clientMsgId) } }.map { it.await() }
     }
 
     /** One image now (tap, or visible in an open chat when the network allows it); a failed check gets one re-download. */

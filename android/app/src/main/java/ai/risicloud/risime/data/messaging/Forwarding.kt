@@ -62,12 +62,15 @@ data class ForwardCandidate(
     /** DMs: `images_ready` / `files_ready` (null: not known yet: allowed, the send re-checks). */
     val imagesReady: Boolean? = null,
     val filesReady: Boolean? = null,
+    /** v1.41 §37.1 `voice_ready` (null: not known yet). */
+    val voiceReady: Boolean? = null,
     val lastActivity: Long = 0,
 )
 
 object ForwardRules {
     const val MANY_TIMES_SNACKBAR = "Messages forwarded many times can be sent to one chat at a time"
     const val GROUP_FILES_NOTICE = "Some members need to update to see files"
+    const val VOICE_GROUP_NOTICE = "Some members need to update RisiMe to get voice notes"
     const val HINT_TITLE = "Forward to Official?"
     const val HINT_BODY = "Risi can read messages, photos and files in Official chats. What you forward there is no longer only in Private."
     const val HINT_FORWARD = "Forward"
@@ -90,13 +93,15 @@ object ForwardRules {
      * that are off/none and blocked/unfriended DMs are not offered; a DM that can't take the selection's
      * media is offered disabled with the reason.
      */
-    fun targets(candidates: List<ForwardCandidate>, hasImage: Boolean, hasFile: Boolean): List<ForwardTarget> =
+    fun targets(candidates: List<ForwardCandidate>, hasImage: Boolean, hasFile: Boolean, hasVoice: Boolean = false): List<ForwardTarget> =
         candidates.filter { !it.risiChat && it.e2ee && it.activeMember && !(it.official && it.officialOff) && !it.blockedOrUnfriended }
             .map { c ->
                 val dm = c.conversationId.startsWith("dm:")
                 val why = when {
                     dm && hasImage && c.imagesReady == false -> "${c.name} needs to update the app to receive photos"
                     dm && hasFile && c.filesReady == false -> "${c.name} needs to update the app to receive files"
+                    // §37.3: a target that is not `voice_ready` is skipped with the §33.4 notice (DMs and groups).
+                    hasVoice && c.voiceReady == false -> if (dm) "${c.name} needs to update RisiMe to get voice notes" else VOICE_GROUP_NOTICE
                     else -> null
                 }
                 // §33.1 groups: sending is allowed, with a one-line notice.
@@ -136,6 +141,11 @@ object ForwardRules {
             src.file -> {
                 val meta = FileMeta.decode(src.systemJson)?.takeIf { !it.parts } ?: return null
                 ForwardSpec(MessageEntity.KIND_FILE, src.body, hops, meta.encode(), mediaSource = src.clientMsgId)
+            }
+            // §37.3: `mime`, `duration_ms`, `waveform` copied; `transcribe`, `request_id`, `reply_to` dropped (fresh key per target, §33.5).
+            src.voice -> {
+                val meta = ai.risicloud.risime.data.media.VoiceMeta.decode(src.systemJson) ?: return null
+                ForwardSpec(MessageEntity.KIND_VOICE, "", hops, meta.copy(transcribe = null, requestId = null).encode(), mediaSource = src.clientMsgId)
             }
             src.kind == MessageEntity.KIND_TEXT -> src.body.takeIf { it.isNotBlank() }?.let { ForwardSpec(MessageEntity.KIND_TEXT, it, hops) }
             else -> null

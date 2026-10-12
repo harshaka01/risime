@@ -96,7 +96,7 @@ fun ChatSearchScreen(vm: ChatSearchViewModel, senderName: (MessageEntity) -> Str
             items(hits, key = { it.clientMsgId }) { m ->
                 ListRow(
                     title = if (m.outgoing) "You" else senderName(m),
-                    subtitle = ai.risicloud.risime.push.bodyPreview(m.kind, m.body),
+                    subtitle = ai.risicloud.risime.push.bodyPreview(m.kind, m.body, m.systemJson.takeIf { _ -> m.voice }),
                     meta = shortStamp(m.localTs),
                     onClick = onBack,
                 )

@@ -232,6 +232,7 @@ class BundleImporter(
         var callId: String? = null
         var image: ai.risicloud.risime.data.media.ImageEnvelope? = null
         var file: ai.risicloud.risime.data.media.FileEnvelope? = null
+        var voice: ai.risicloud.risime.data.media.VoiceEnvelope? = null
         var extras = ai.risicloud.risime.net.EnvelopeExtras.NONE
         when (payload) {
             is MlsPayload.Decoded.Text -> {
@@ -256,6 +257,15 @@ class BundleImporter(
                 file = payload.envelope.takeIf { !it.partsOnly }
                 extras = payload.envelope.extras
             }
+            // v1.41 §37.5: a `voice` by reference (the key, not the audio); after the blob's TTL it shows "no longer available".
+            is MlsPayload.Decoded.Voice -> {
+                if (images == null) return skip("images_unavailable")
+                kind = MessageEntity.KIND_VOICE
+                body = ""
+                systemJson = ai.risicloud.risime.data.media.VoiceMeta.of(payload.envelope).encode()
+                voice = payload.envelope
+                extras = payload.envelope.extras
+            }
             is MlsPayload.Decoded.Call -> {
                 val end = payload.env as? ai.risicloud.risime.calls.CallEnvelope.End ?: return skip("malformed")
                 if (messages.callLine(conv, end.callId) != null) return skip("existing_row")
@@ -274,17 +284,26 @@ class BundleImporter(
             else -> return skip("malformed")
         }
         if (id == null && kind != MessageEntity.KIND_CALL) return skip("malformed")
+        // §37.5: incoming: when this user first played it; outgoing `status: "played"`: the blue mic (time unknown: the note's).
+        val playedAt = if (!outgoing) e.playedAt?.let { BackupTime.ms(it) } else if (e.status == "played") ts else null
         val row = MessageEntity(
             clientMsgId = e.clientMsgId, messageId = id, conversationId = conv, from = from, to = to, body = body,
             serverTs = e.serverTs, localTs = ts,
             status = if (outgoing) outgoingStatus(e.status) else MessageStatus.READ.name,
-            outgoing = outgoing, ackedStatus = if (outgoing) null else MessageStatus.READ.name,
-            kind = kind, systemJson = systemJson, blobId = image?.blob?.blobId ?: file?.blob?.blobId, callId = callId,
+            outgoing = outgoing,
+            // §37.5: a note played before the backup keeps no unplayed dot and owes no second `played` ack.
+            ackedStatus = if (outgoing) null else if (voice != null && playedAt != null) MessageEntity.ACKED_PLAYED else MessageStatus.READ.name,
+            kind = kind, systemJson = systemJson, blobId = image?.blob?.blobId ?: file?.blob?.blobId ?: voice?.blob?.blobId, callId = callId,
             origin = e.origin ?: ORIGIN_BACKUP, sharedBy = e.sharedBy?.lowercase(), fromDevice = e.fromDevice?.lowercase(),
             forwardHops = extras.forwardHops, replyToMessageId = extras.replyTo?.messageId, replyToFrom = extras.replyTo?.from,
             viewOnce = if (extras.viewOnce) true else null,
+            playedAt = if (voice != null) playedAt else null,
         )
         if (messages.insert(row) == -1L) return skip("existing_row")
+        voice?.let {
+            images?.storedVoice(row, it)
+            anyImage = true
+        }
         image?.let {
             images?.stored(row, it)
             anyImage = true
@@ -301,7 +320,7 @@ class BundleImporter(
     }
 
     private fun outgoingStatus(s: String?): String = when (s) {
-        "read" -> MessageStatus.READ.name
+        "read", "played" -> MessageStatus.READ.name
         "delivered" -> MessageStatus.DELIVERED.name
         else -> MessageStatus.SENT.name
     }

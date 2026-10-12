@@ -126,18 +126,18 @@ fun planChatNotifications(
                     conversationId = conv,
                     peerId = peer,
                     title = groupNames[conv] ?: ai.risicloud.risime.data.groups.GROUP_NAME_PENDING,
-                    lines = shown.map { "${who(it.from)}: ${preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file }, it.forwardHops))}" },
+                    lines = shown.map { "${who(it.from)}: ${preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file || it.voice }, it.forwardHops))}" },
                     count = sorted.size,
                     newestTs = sorted.last().localTs,
                     group = true,
-                    messages = shown.map { NotifLine(who(it.from), preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file }, it.forwardHops)), it.localTs) },
+                    messages = shown.map { NotifLine(who(it.from), preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file || it.voice }, it.forwardHops)), it.localTs) },
                 ).let(::titled)
             }
             ChatNotification(
                 conversationId = conv,
                 peerId = peer,
                 title = names[peer.lowercase()] ?: "New message",
-                lines = sorted.takeLast(MAX_LINES).map { preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file }, it.forwardHops)) },
+                lines = sorted.takeLast(MAX_LINES).map { preview(bodyPreview(it.kind, it.body, it.systemJson.takeIf { _ -> it.file || it.voice }, it.forwardHops)) },
                 count = sorted.size,
                 newestTs = sorted.last().localTs,
             ).let(::titled)
@@ -152,6 +152,8 @@ fun bodyPreview(kind: String, body: String, systemJson: String? = null, forwardH
         // v1.34 §33.13: "📄 <name>" (never the file itself).
         kind == ai.risicloud.risime.data.db.MessageEntity.KIND_FILE ->
             "📄 " + (ai.risicloud.risime.data.media.FileMeta.decode(systemJson)?.let { ai.risicloud.risime.data.media.FileEnvelope.displayName(it.name) } ?: "File")
+        // v1.41 §37.3: "🎤 Voice note 0:12" (never the audio).
+        kind == ai.risicloud.risime.data.db.MessageEntity.KIND_VOICE -> ai.risicloud.risime.data.media.VoiceText.previewOf(systemJson)
         kind != ai.risicloud.risime.data.db.MessageEntity.KIND_IMAGE -> body
         body.isBlank() -> "📷 Photo"
         else -> "📷 $body"
@@ -201,7 +203,7 @@ fun mergeReactionNotifications(
         .mapNotNull { r -> myMessage(r.targetMessageId)?.takeIf { it.outgoing && !it.showsAsDeleted }?.let { r to it } }
         .sortedBy { it.first.localTs }
         .forEach { (r, target) ->
-            val line = "${nameOf(r.reactorUserId)} reacted ${r.emoji} to: ${preview(bodyPreview(target.kind, target.body))}"
+            val line = "${nameOf(r.reactorUserId)} reacted ${r.emoji} to: ${preview(bodyPreview(target.kind, target.body, target.systemJson.takeIf { _ -> target.file || target.voice }))}"
             val cur = byConv[r.conversationId]
             byConv[r.conversationId] = if (cur == null) {
                 ChatNotification(r.conversationId, r.reactorUserId, nameOf(r.reactorUserId), listOf(line), 1, r.localTs)

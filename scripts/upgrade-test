@@ -661,6 +661,9 @@ extra = {
     "reactions": n("SELECT COUNT(*) FROM reactions WHERE op = 'add' AND pending = 0"),
     "deleted": n("SELECT COUNT(*) FROM messages WHERE kind = 'deleted'"),
     "images_sent": n("SELECT COUNT(*) FROM messages WHERE kind = 'image' AND outgoing = 1 AND message_id IS NOT NULL"),
+    # v1.41 §37.5 (hard rule 9): voice notes and their cached ciphertext (never evicted while the message exists).
+    "voices": n("SELECT COUNT(*) FROM messages WHERE kind = 'voice'"),
+    "voice_cached": n("SELECT COUNT(*) FROM media x JOIN messages m ON m.client_msg_id = x.client_msg_id WHERE m.kind = 'voice' AND x.file_name IS NOT NULL"),
     "resets": n("SELECT COUNT(*) FROM messages WHERE kind = 'system' AND body LIKE 'Encryption was reset%'"),
     "locked_msgs": n("SELECT COUNT(*) FROM messages WHERE body LIKE 'upgrade-test D%'"),
     "chat_tabs": n("SELECT COUNT(*) FROM chat_tabs") if has_tabs else "none",
@@ -1038,6 +1041,12 @@ PY
 )"
   [ -z "$lost" ] || fail "messages lost per conversation/kind after the upgrade: $lost"
   echo "    per-conversation counts kept ($(python3 -I -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$WORK/counts-before.json") conversation/kind pairs)"
+  # v1.41 §37.5: voice notes (per conversation they are the "voice" kind above) and their cached ciphertext.
+  for k in voices voice_cached; do
+    [ "$(field "$DB_AFTER" "$k")" -ge "$(field "$DB_BEFORE" "$k")" ] 2>/dev/null \
+      || fail "voice notes: $k dropped across the update ($(field "$DB_BEFORE" "$k") -> $(field "$DB_AFTER" "$k"))"
+  done
+  echo "    voice notes kept: $(field "$DB_AFTER" voices) ($(field "$DB_AFTER" voice_cached) cached)"
   chat_checks "after the update"
   if [ "$LK_STEP" = yes ]; then
     [ "$(field "$DB_AFTER" locked_msgs)" -ge "$(field "$DB_BEFORE" locked_msgs)" ] 2>/dev/null \

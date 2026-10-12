@@ -88,6 +88,25 @@ class MediaDownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWor
     }
 }
 
+/** v1.41 §37.3: received voice notes download on any network (a connected-network constraint only). */
+class VoiceDownloadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): Result {
+        val c = (applicationContext as RisiMeApp).container
+        val outcomes = c.downloadVoiceNotes()
+        return if (outcomes.any { it is DownloadOutcome.Retry }) Result.retry() else Result.success()
+    }
+
+    companion object {
+        fun enqueue(context: Context) {
+            val req = OneTimeWorkRequestBuilder<VoiceDownloadWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork("voice-download", ExistingWorkPolicy.APPEND_OR_REPLACE, req)
+        }
+    }
+}
+
 /** The current network for the auto-download policy: Data Saver and roaming are tap-only. */
 fun currentNetKind(context: Context): NetKind {
     val cm = context.getSystemService(ConnectivityManager::class.java) ?: return NetKind.OFFLINE

@@ -75,6 +75,8 @@ object CopyFormat {
                 val name = FileMeta.decode(m.systemJson)?.let { ai.risicloud.risime.data.media.FileEnvelope.displayName(it.name) } ?: "file"
                 if (single) cap else if (cap == null) "<File: $name>" else "<File: $name> $cap"
             }
+            // §37.3: "<Voice note 0:12>" in a multi-message copy; a single note has nothing to copy.
+            m.voice -> if (single) null else ai.risicloud.risime.data.media.VoiceText.copyLine(ai.risicloud.risime.data.media.VoiceMeta.decode(m.systemJson)?.durationMs)
             m.risiCtl -> requestText(m)?.let(::normalise)
             else -> {
                 val note = if (isNoteCard(m)) noteText(m) else null

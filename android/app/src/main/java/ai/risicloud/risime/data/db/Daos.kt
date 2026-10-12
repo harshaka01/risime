@@ -57,7 +57,7 @@ interface MessageDao {
      */
     @Query(
         "SELECT m.* FROM messages m LEFT JOIN media x ON x.client_msg_id = m.client_msg_id " +
-            "WHERE m.outgoing = 1 AND m.status = 'PENDING' AND (m.kind NOT IN ('image', 'file') OR x.state = 'UPLOADED') ORDER BY m.local_ts ASC",
+            "WHERE m.outgoing = 1 AND m.status = 'PENDING' AND (m.kind NOT IN ('image', 'file', 'voice') OR x.state = 'UPLOADED') ORDER BY m.local_ts ASC",
     )
     suspend fun pendingOutbox(): List<MessageEntity>
 
@@ -796,7 +796,7 @@ interface HistoryDao {
 
     /** Candidate rows of one conversation, newest first (filtered further in Kotlin, android R2). */
     @Query(
-        "SELECT * FROM messages WHERE conversation_id = :conv AND message_id IS NOT NULL AND kind IN ('text', 'image', 'file', 'call') " +
+        "SELECT * FROM messages WHERE conversation_id = :conv AND message_id IS NOT NULL AND kind IN ('text', 'image', 'file', 'voice', 'call') " +
             "ORDER BY local_ts DESC",
     )
     suspend fun exportCandidates(conv: String): List<MessageEntity>

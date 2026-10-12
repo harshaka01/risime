@@ -160,6 +160,8 @@ class BundleExporter(
             }.let { viewOnce(m, it) }
             MessageEntity.KIND_IMAGE -> imagePayload(m)?.let { viewOnce(m, it) } ?: return null
             MessageEntity.KIND_FILE -> filePayload(m)?.let { viewOnce(m, it) } ?: return null
+            // v1.41 §37.5: a voice note by reference like an image (the backup holds the key, not the audio).
+            MessageEntity.KIND_VOICE -> voicePayload(m)?.let { viewOnce(m, it) } ?: return null
             MessageEntity.KIND_CALL -> callPayload(m) ?: return null
             else -> return null
         }
@@ -167,7 +169,8 @@ class BundleExporter(
         return BackupMessageLine(
             conversationId = conv, messageId = id, clientMsgId = m.clientMsgId, from = m.from.lowercase(), fromDevice = m.fromDevice?.lowercase(),
             serverTs = m.serverTs, payload = payload, origin = m.origin, sharedBy = m.sharedBy?.lowercase(),
-            status = if (m.outgoing) statusName(m.status) else null,
+            status = if (m.outgoing) (if (m.voice && m.playedAt != null) "played" else statusName(m.status)) else null,
+            playedAt = if (!m.outgoing && m.voice) m.playedAt?.let { BackupTime.iso(it) } else null,
             starredAt = id?.let { stars[it] }?.let { BackupTime.iso(it) },
         )
     }
@@ -190,6 +193,22 @@ class BundleExporter(
         )
         val obj = json(env.encode())
         ai.risicloud.risime.data.media.FileEnvelope.validate(obj) ?: return null
+        return obj
+    }
+
+    /** v1.41 §37.5: a `voice` by reference with `enc` (validated like a received note; expired notes still go). */
+    private suspend fun voicePayload(m: MessageEntity): JsonObject? {
+        val meta = ai.risicloud.risime.data.media.VoiceMeta.decode(m.systemJson) ?: return null
+        val row = media?.get(m.clientMsgId) ?: return null
+        val s = sealer ?: return null
+        val blobId = row.blobId ?: m.blobId ?: return null
+        val enc = runCatching { s.openEnc(m.clientMsgId, row.sealedEnc) }.getOrNull() ?: return null
+        val env = ai.risicloud.risime.data.media.VoiceEnvelope(
+            BlobRef(blobId, row.blobSize, row.blobSha256), enc, meta.mime, meta.durationMs, meta.levels,
+            transcribe = meta.transcribe?.takeIf { !it }, requestId = meta.requestId, extras = ai.risicloud.risime.data.mls.sendExtras(m),
+        )
+        val obj = json(env.encode())
+        ai.risicloud.risime.data.media.VoiceEnvelope.validate(obj) ?: return null
         return obj
     }
 
