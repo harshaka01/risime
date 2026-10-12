@@ -2,16 +2,22 @@
 # Talking to Risi gate (PART 4, Harsha 2026-10-12; §25.2 Risi chat, §24.11 @Risi in Official). Two redroid phones on
 # spark2 against a temp server from THIS checkout (TABS + Risi with the pilot's switches: TOOLS, SKILLS, LEDGER, NOTES,
 # EVENTS), fresh installs, a model behind a local proxy that the gate can take down:
-#   scripts/risi-chat-test [--apk app-debug.apk] [--live] [--keep] [--shots] [--soft]
+#   scripts/risi-chat-test [--apk app-debug.apk] [--live] [--keep] [--shots] [--soft] [--no-voice]
 #   --live   the real risi-l1 (127.0.0.1:8100, read-only use: the container is never touched) instead of scripts/fake-llm
 #            --script; answers are then checked by "a Risi message arrived" (server), not by their words.
 #   --soft   keep going after a failed check (a full matrix); the result is still FAIL.
+#   --no-voice  skip step 4b (it needs the local speech service, RC_SPEECH_URL default 127.0.0.1:8200, read-only use,
+#            WHISPER_API_KEY from .env, and gst-launch-1.0 to decode the clip); the result says voice=off.
 #  1. A, B sign in through the real login UI; friends (fixture).
 #  2. A's Risi chat, empty: the "What can Risi do?" card with its 4 examples; a tap on "Remind me tomorrow at 9 to
 #     call …" fills the composer (cursor at the name), nothing is sent.            shots 66-risi-empty-card, -example-tap
 #  3. A asks in the Risi chat: "Risi is typing…" shows, the reply is on screen within 10 s.  shots 66-risi-typing, -reply
 #  4. The model goes down (the proxy stops): A asks; "Risi is offline, I'll reply when I'm back." within 20 s; the model
 #     comes back; the reply arrives by itself.                                       shots 66-risi-offline, -back
+# 4b. PART 4d: A holds the mic in the Risi chat (the clip en-tts.ogg replaces the microphone through the debug-only
+#     VOICE_INJECT seam, as scripts/voice-note-test): "Risi is typing…" shows, Risi's transcript appears under the
+#     note, and Risi's reply arrives (server count; with fake-llm its words when the model was asked).
+#                                                                                    shots 66-risi-voice-typing, -reply
 #  5. A group A+B, Official: B's plain message gets no Risi reply (server count, 25 s); A types "@", the picker offers
 #     Risi, A asks; the answer shows on A AND on B (visible agent).                  shots 66-risi-group-*
 #  6. The 1:1 A↔B Official: "Risi, <question>" without the chip is answered.       shot 66-risi-dm-official
@@ -27,10 +33,12 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 SUF="${RC_INSTANCE:-_rc}"; PORT="${RC_PORT:-4166}"; LLM_PORT="${RC_LLM_PORT:-8166}"; PROXY_PORT="${RC_PROXY_PORT:-8167}"
 LIVE_URL="${RC_LIVE_URL:-http://127.0.0.1:8100}"
-APK=""; KEEP=0; SHOTS=0; LIVE=0; SOFT=0; VERSION=""; COMMIT=""
+SPEECH_URL="${RC_SPEECH_URL:-http://127.0.0.1:8200}"; CLIP_PORT="${RC_CLIP_PORT:-8169}"
+APK=""; KEEP=0; SHOTS=0; LIVE=0; SOFT=0; VOICE=1; VERSION=""; COMMIT=""
 while [ $# -gt 0 ]; do case "$1" in
   --apk) APK="$2"; shift 2;; --version) VERSION="$2"; shift 2;; --commit) COMMIT="$2"; shift 2;;
   --keep) KEEP=1; shift;; --shots) SHOTS=1; shift;; --live) LIVE=1; shift;; --soft) SOFT=1; shift;;
+  --no-voice) VOICE=0; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
 case "$APK" in /*) ;; *) APK="$CALLER_PWD/$APK";; esac
@@ -55,7 +63,7 @@ RESULT=FAIL; REASON="not finished"; CHECKS=""; FAILED=""; TIMINGS=""
 write_result() {
   { echo "result=$RESULT"; echo "version=$VERSION"; echo "commit=$COMMIT"; echo "package=$PKG"; echo "apk_sha256=$APK_SHA"
     echo "host=$(hostname)"; echo "device=redroid"; echo "model=$([ "$LIVE" = 1 ] && echo live || echo fake-llm)"
-    echo "time=$(date -u +%s)"; echo "checks=${CHECKS# }"; echo "failed=${FAILED# }"; echo "timings=${TIMINGS# }"
+    echo "voice=$([ "$VOICE" = 1 ] && echo on || echo off)"; echo "time=$(date -u +%s)"; echo "checks=${CHECKS# }"; echo "failed=${FAILED# }"; echo "timings=${TIMINGS# }"
     echo "reason=$REASON"; } > "$OUTDIR/v$VERSION.result"
   echo "==> result: $OUTDIR/v$VERSION.result ($RESULT)"
 }
@@ -84,6 +92,7 @@ cleanup() {
   tmux kill-session -t "risime-rctest$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-rctest-llm$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-rctest-proxy$SUF" 2>/dev/null || true
+  tmux kill-session -t "risime-rctest-clips$SUF" 2>/dev/null || true
   if [ "$KEEP" = 0 ]; then
     REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
     REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
@@ -95,8 +104,19 @@ trap 'exit 130' INT TERM
 echo "==> Risi chat test: $PKG $VN ($(basename "$APK"), sha256 ${APK_SHA:0:12}), commit ${COMMIT:0:12}, model $([ "$LIVE" = 1 ] && echo "LIVE $LIVE_URL" || echo fake-llm)"
 
 # ---------------------------------------------------------------- the model: fake-llm (or live) behind a proxy
-for p in "$PORT" "$LLM_PORT" "$PROXY_PORT"; do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy (RC_PORT / RC_LLM_PORT / RC_PROXY_PORT)"; exit 1; }; done
+for p in "$PORT" "$LLM_PORT" "$PROXY_PORT" $([ "$VOICE" = 1 ] && echo "$CLIP_PORT"); do ss -ltnH "sport = :$p" | grep -q . && { echo "port $p busy (RC_PORT / RC_LLM_PORT / RC_PROXY_PORT / RC_CLIP_PORT)"; exit 1; }; done
 [ -d server/deps ] || { echo "server/deps missing in $REPO (mix deps.get)"; exit 1; }
+if [ "$VOICE" = 1 ]; then
+  curl -sf -o /dev/null --max-time 5 "$SPEECH_URL/health" || { echo "the speech service ($SPEECH_URL) is not up (or run with --no-voice)"; exit 2; }
+  command -v gst-launch-1.0 >/dev/null || { echo "gst-launch-1.0 (opus plugins) needed to decode the voice clip (or --no-voice)"; exit 2; }
+  grep -qE '^WHISPER_API_KEY=.' "$REPO/.env" 2>/dev/null || { echo "WHISPER_API_KEY missing from .env (or --no-voice)"; exit 2; }
+  # The clip, as the PCM16 WAV the VOICE_INJECT seam takes (memory only on the phone).
+  mkdir -p "$WORK/clips"
+  gst-launch-1.0 -q filesrc location="$REPO/android/testdata/transcribe/en-tts.ogg" ! oggdemux ! opusdec ! audioconvert ! audioresample \
+    ! "audio/x-raw,format=S16LE,rate=48000,channels=1" ! wavenc ! filesink location="$WORK/clips/en.wav" || { echo "couldn't decode the voice clip"; exit 1; }
+  tmux new -d -s "risime-rctest-clips$SUF" "python3 -I -m http.server $CLIP_PORT --bind 127.0.0.1 --directory '$WORK/clips' > '$WORK/clips.out' 2>&1"
+  for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$CLIP_PORT/en.wav" && break; sleep 0.5; done
+fi
 # Deterministic answers: each question carries a marker rcqN, its answer starts with rcaN (§25.1 next-action finals).
 python3 -I - "$WORK/script.json" <<'PY'
 import json, sys
@@ -107,6 +127,8 @@ rules = [
     {"name": "q3", "task": "risi_next_action", "match": "rcq3", "actions": [final("rca3 You decided the venue.")]},
     {"name": "q4", "task": "risi_next_action", "match": "rcq4", "actions": [final("rca4 The review is on Tuesday.")]},
     {"name": "q5", "task": "risi_next_action", "match": "rcq5", "actions": [final("rca5 Moved to Official and answered.")]},
+    # 4b: the voice clip says "Let's meet at the office tomorrow at ten. We will send the revised quote on Friday."
+    {"name": "voice", "task": "risi_next_action", "match": "(?i)office|quote", "actions": [final("rcv1 I heard your voice note.")]},
     {"name": "other", "task": "risi_next_action", "actions": [final("rcax Done.")]},
 ]
 json.dump({"v": 1, "rules": rules}, open(sys.argv[1], "w"))
@@ -162,6 +184,8 @@ umask 077
   echo "RISI_MLS_NIF=$WORK/librisime_mls_nif"; echo "RISI_LLM_URL=http://127.0.0.1:$PROXY_PORT/v1"; echo "RISI_FALLBACK=off"
   echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"
   echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/risi.env"
+# 4b: §37.8 voice notes in the Risi chat (the local speech service; the key is copied, never printed).
+[ "$VOICE" = 1 ] && { echo "RISI_VOICE_TRANSCRIBE=on"; echo "RISI_SPEECH_URL=$SPEECH_URL"; grep -E '^WHISPER_API_KEY=' "$REPO/.env" | tail -1; } >> "$WORK/risi.env"
 umask 022
 cat > "$WORK/fixtures.exs" <<'EXS'
 alias RisiMe.{Accounts, Repo}
@@ -239,6 +263,7 @@ install_fresh() {
   A uninstall "$PKG" >/dev/null 2>&1 || true
   A install "$APK" >/dev/null || fail "$DEV: fresh install of $PKG"
   A shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+  A shell pm grant "$PKG" android.permission.RECORD_AUDIO 2>/dev/null || true
   A shell pm disable-user com.android.inputmethod.latin >/dev/null 2>&1 || true
   A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
   A logcat -G 16M >/dev/null 2>&1 || true
@@ -457,6 +482,53 @@ done
 TIMINGS+=" later_reply_ms=$([ -n "$back" ] && echo $(( $(now_ms) - t1 )) || echo none)"
 shot back
 [ -n "$back" ] && pass later_reply || bad later_reply "no reply within 90 s after the model came back"
+
+# ---------------------------------------------------------------- 4b. a voice note in the Risi chat (PART 4d)
+if [ "$VOICE" = 1 ]; then
+  DEV=A
+  cfg="$(curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" || true)"
+  grep -q '"voice_transcribe":"on"' <<<"$cfg" || bad voice_config "the temp server's /auth/config doesn't say voice_transcribe: on"
+  A reverse "tcp:$CLIP_PORT" "tcp:$CLIP_PORT" >/dev/null
+  armed0="$(A logcat -d 2>/dev/null | grep -c 'RisiMe debug: voice inject armed' || true)"
+  A shell am broadcast -a ai.risicloud.risime.debug.VOICE_INJECT -p "$PKG" --es url "http://127.0.0.1:$CLIP_PORT/en.wav" >/dev/null
+  ok=""; for _ in $(seq 1 20); do [ "$(A logcat -d 2>/dev/null | grep -c 'RisiMe debug: voice inject armed' || true)" -gt "$armed0" ] && { ok=1; break; }; sleep 1; done
+  [ -n "$ok" ] || fail "voice: A's microphone seam was not armed (debug build?)"
+  open_risi_chat || fail "A: the Risi chat (voice)"
+  clear_field; hide_keyboard
+  mic=""; for _ in $(seq 1 30); do mic="$(node_xy "@Record voice note")"; [ -n "$mic" ] && break; sleep 1; done
+  if [ -z "$mic" ]; then
+    bad voice_mic "no mic in the Risi chat's composer (voice_ready?)"
+  else
+    n0="$(risi_msgs A risi)"; v0="$(asked_model 'office')"
+    # Hold to record (the clip is 5 s), release to send.
+    # shellcheck disable=SC2086
+    A shell input swipe $mic $mic 6000
+    t0="$(now_ms)"; typing=""; transcript=""; answered=""
+    for _ in $(seq 1 120); do
+      dump
+      [ -z "$typing" ] && grep -qF 'Risi is typing' "$WORK/ui-$DEV.xml" && { typing="$(( $(now_ms) - t0 ))"; shot voice-typing; }
+      grep -qE 'text="(Transcript|Couldn.t transcribe)' "$WORK/ui-$DEV.xml" && transcript=1
+      # The transcript is one Risi message, the reply another.
+      [ "$(risi_msgs A risi)" -ge "$(( n0 + 2 ))" ] 2>/dev/null && { answered="$(( $(now_ms) - t0 ))"; break; }
+      sleep 0.5
+    done
+    sleep 2; dump
+    grep -qE 'text="(Transcript|Couldn.t transcribe)' "$WORK/ui-$DEV.xml" && transcript=1
+    shot voice-reply
+    TIMINGS+=" voice_typing_ms=${typing:-none} voice_reply_ms=${answered:-none}"
+    [ -n "$typing" ] && pass "voice_typing_state(${typing}ms)" || bad voice_typing_state "no 'Risi is typing…' after the voice note"
+    [ -n "$transcript" ] && pass voice_transcript_shown || bad voice_transcript_shown "no transcript under the Risi-chat voice note"
+    if [ -n "$answered" ]; then pass "voice_reply(${answered}ms)"; else bad voice_reply "no reply to the voice note within 60 s"; fi
+    if [ "$LIVE" = 0 ]; then
+      # With fake-llm: the transcript reached the model as the question and its answer is on screen (a deterministic
+      # route, e.g. a calendar card for "meet … tomorrow at ten", answers without the model; then this is a note).
+      if [ "$(asked_model 'office')" -gt "$v0" ]; then
+        has "rcv1" && pass voice_reply_from_model || bad voice_reply_from_model "the model was asked but 'rcv1' isn't on screen"
+      else echo "    note: the voice question was answered without the model (deterministic route)"; fi
+    fi
+  fi
+  A shell am broadcast -a ai.risicloud.risime.debug.VOICE_INJECT -p "$PKG" --ez stop true >/dev/null 2>&1 || true
+fi
 
 # ---------------------------------------------------------------- 5. a group's Official: quiet without @Risi, @ picker
 DEV=A; back_to_list || fail "A: back to the list"

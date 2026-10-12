@@ -189,7 +189,25 @@ can ship through the fast lane (483b14d); the client part needs the next APK. Ga
   the later reply within the 15-s retry after the model came back.
 
 ### TODO
-- **(d) Voice to Risi:** not part of this gate. Voice notes (v1.41 §37) are being built separately; once a
-  voice ask in the Risi chat exists, add a step to `scripts/risi-chat-test` (a voice note → transcript → reply
-  ≤ 10 s, offline notice when the speech or model service is down).
+- **(d) Voice to Risi: done (PART 4d, below).**
+
+## PART 4d: a voice note in the Risi chat gets a reply (12 Oct; contract §37.8, no wire change)
+
+**State:** green; server-only (fast lane), no APK needed (the app already sends Risi-chat notes with a
+`request_id`, 663c43f9). Server gate 1337 tests, 0 failures. `scripts/risi-chat-test` step 4b (debug app
+09f4e4b5, fake-llm, speech service 127.0.0.1:8200): `RCTEST OK`, every check passed; after the 6-s hold,
+"Risi is typing…" in 2.2 s, the transcript under the note, the model's reply in 3.5 s.
+
+- **Already there (§37.8):** transcribe (model=auto, §36.11 script check), the `voice_transcript` card, the text
+  buffered as a `risi_request` `ask` (`via: voice`, `lang`), so the §25 turn answers in the note's language;
+  the model down → the request job's offline notice (same as typed).
+- **What was missing:** no "Risi is typing" while the note was transcribed; and silence in the Risi chat when
+  `RISI_VOICE_TRANSCRIBE` was off, the speech health check failed, the note was over 5 min, or the task crashed.
+- **Fixes (`Agent.Voice`):** `risi_progress` `working` as soon as the note arrives; the switch off → "I can't
+  listen to voice notes right now. Please type it."; over 5 min → a "too long" answer; an unhealthy-looking speech
+  service is still tried (down → the §37.8 `failed` card + "couldn't hear" answer); an exception or a missing
+  working copy → "couldn't hear". Each fixed answer ends the bubble (`done`). Audio handling unchanged (§37.6).
+- **Gate:** `scripts/risi-chat-test` now needs the speech service, `WHISPER_API_KEY` in `.env` and gst-launch
+  (`--no-voice` skips 4b; `RC_SPEECH_URL`, `RC_CLIP_PORT` default 8169).
+- **Backlog:** spoken replies from Risi (BACKLOG.md).
 - `--live` (risi-l1 through the same proxy) is implemented but not run in this session.

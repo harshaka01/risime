@@ -44,3 +44,4 @@
   - twin in draft mode, with per-category autonomy levels.
 - **Later:** SMS OTP via Notify.lk · iOS (Kotlin Multiplatform) · calls via LiveKit ·
   A2A/MCP agent marketplace.
+- **Spoken replies from Risi** (PART 4d, Harsha 2026-10-12): Risi answers a Risi-chat voice note with a voice note too (local TTS in si/ta/en; today the answer is text in the note's language, §37.8; needs a contract proposal).
