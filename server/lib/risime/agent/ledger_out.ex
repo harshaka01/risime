@@ -356,10 +356,20 @@ defmodule RisiMe.Agent.LedgerOut do
         "cancelled" -> "#{who} cancelled '#{text}'"
         "done" -> "#{who} marked '#{text}' done"
         "reopened" -> "#{who} reopened '#{text}'"
+        # v1.43 §38.9 point 1: a member claimed an unowned action item ("It's mine").
+        "claimed" -> "#{who} took '#{text}'"
       end
 
-    # v1.29 §30.5: a reopened item is back in its tracked state (the wire `state`).
-    state = if state == "reopened", do: c.item_state, else: state
+    # v1.29 §30.5: a reopened item is back in its tracked state (the wire `state`); a claimed
+    # one is the claimer's proposal (v1.43).
+    shown = state
+
+    state =
+      case state do
+        "reopened" -> c.item_state
+        "claimed" -> "proposed"
+        s -> s
+      end
 
     risi = %{
       "kind" => "item_update",
@@ -374,21 +384,61 @@ defmodule RisiMe.Agent.LedgerOut do
       "notify" => []
     }
 
-    result =
-      for u <- Devices.risi_ledger_users(d.recipients), rc = RisiChat.active_id(u) do
+    # v1.43 §38.9 point 4: a §38 item's update reaches every member (their Official card).
+    risi = if c.kind, do: Map.put(risi, "owner", c.owner_id), else: risi
+    recipients = Devices.risi_ledger_users(d.recipients)
+
+    others =
+      if c.kind,
+        do:
+          d.conversation_id
+          |> Secretary.members()
+          |> Enum.map(& &1.user_id)
+          |> Kernel.--(d.recipients)
+          |> Devices.risi_ledger_users(),
+        else: []
+
+    mine =
+      for u <- recipients, rc = RisiChat.active_id(u) do
         tz = Clock.user_tz(u)
         item = item_json(c)
         due = if state in ~w(confirmed edited), do: due_part(item, tz), else: ""
-
-        case Out.post(rc, body <> due <> ".", risi) do
-          {:ok, _} -> :ok
-          {:error, :rate_limited} -> {:snooze, 10}
-          {:error, _} -> :ok
-        end
+        post_update(rc, body <> due <> ".", risi)
       end
+
+    # Members who aren't recipients get the state only: no text, no due (an edit never leaks).
+    state_only = %{risi | "text" => nil, "due" => nil, "all_day" => nil}
+    other_body = "#{who} #{verb(shown)} an item from #{source_name(d, names)}."
+
+    result =
+      mine ++
+        for u <- others, rc = RisiChat.active_id(u), do: post_update(rc, other_body, state_only)
 
     Enum.find(result, :ok, &match?({:snooze, _}, &1))
   end
+
+  defp post_update(rc, body, risi) do
+    case Out.post(rc, body, risi) do
+      {:ok, _} -> :ok
+      {:error, :rate_limited} -> {:snooze, 10}
+      {:error, _} -> :ok
+    end
+  end
+
+  defp verb("confirmed"), do: "confirmed"
+  defp verb("edited"), do: "confirmed"
+  defp verb("declined"), do: "declined"
+  defp verb("cancelled"), do: "cancelled"
+  defp verb("done"), do: "finished"
+  defp verb("reopened"), do: "reopened"
+  defp verb("claimed"), do: "took"
+
+  defp source_name(%Discussion{source: "call"}, _names), do: "the call"
+
+  defp source_name(%Discussion{source: "voice_note", participants: [p | _]}, names),
+    do: "#{names[p] || "a member"}'s voice note"
+
+  defp source_name(_d, _names), do: "the chat"
 
   @doc "v1.27 §27.3: an owner-fallback (v1.24) card changed state: the copies hear about it."
   def legacy_update(%Commitment{summary_id: sid} = c, state, by) when is_binary(sid) do

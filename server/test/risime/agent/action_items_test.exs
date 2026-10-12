@@ -185,13 +185,15 @@ defmodule RisiMe.Agent.ActionItemsTest do
       assert keys(promise["source_ref"]) == keys(ex["risi"]["source_ref"])
 
       {_, cbody, confirm} = post_in(out, w.rc, "action_confirm")
-      exc = example("envelope_risi_action_confirm.json")
+      exc = example("envelope_risi_action_confirm_v143.json")
       assert keys(confirm) == keys(exc["risi"])
       assert confirm["for"] == [w.harsha.id] and confirm["notify"] == [w.harsha.id]
       assert [%{"item_id" => pid, "buttons" => buttons}] = confirm["items"]
       assert pid == promise["item_id"]
-      # No due: no calendar button; no Reminders skill: no remind button.
-      assert buttons == ["add_promise", "not_mine", "edit"]
+      # v1.43 §38.9: no due → [Add to calendar] (the phone asks with its picker); [Remind me]
+      # always, with the Reminders skill state for the phone's note.
+      assert buttons == ["add_promise", "add_calendar", "remind", "not_mine", "edit"]
+      assert confirm["reminders_skill"] == "off"
       assert cbody =~ "From your voice note" and cbody =~ "• Send the quotation"
 
       # Stored: the ledger item (sealed, kind, source_ref), the number as an extra (30 days).
@@ -229,7 +231,9 @@ defmodule RisiMe.Agent.ActionItemsTest do
       assert %{"status" => "unclear", "reason" => "script_check", "items" => [], "lang" => "si"} =
                card
 
-      assert body =~ "couldn't hear Harsha's voice note clearly"
+      # v1.43 §38.9 point 6: "I couldn't hear this clearly", in the source's language.
+      assert body == example("envelope_risi_action_items_unclear_v143.json")["body"]
+      assert body == ActionItems.unclear_text("si")
       assert llm_requests() == []
     end
 
@@ -354,7 +358,8 @@ defmodule RisiMe.Agent.ActionItemsTest do
       assert :ok = ActionItems.from_call(w.og, s, low)
       {_, body, card} = post_in(posts(), w.og, "action_items")
       assert %{"status" => "unclear", "reason" => "low_confidence", "items" => []} = card
-      assert body == "Risi couldn't hear this call clearly, so it made no action items."
+      assert body == "I couldn't hear this clearly."
+      assert ActionItems.unclear_text("ta") == "இதை என்னால் தெளிவாகக் கேட்க முடியவில்லை."
 
       si =
         for {u, n} <- [{w.harsha, 1}, {w.kamal, 2}, {w.harsha, 3}, {w.kamal, 4}],
@@ -514,6 +519,198 @@ defmodule RisiMe.Agent.ActionItemsTest do
              |> put_req_header("authorization", "Bearer " <> u.token)
              |> get("/api/v1/risi/commitments?source=nope")
              |> json_response(400)
+    end
+  end
+
+  describe "v1.43 §38.9 ask, never guess" do
+    test "an unowned task: Risi asks; any member claims it, the first wins; nothing tracked yet",
+         w do
+      ledger_devices!([w.kamal])
+      rc_k = own_risi_chat!(w.kamal)
+
+      llm!(fn body ->
+        [
+          it(body, "promise", "Send the quotation", "Harsha", "I'll send the quotation",
+            due: "2099-10-13T17:00"
+          ),
+          it(body, "task", "Book the van", nil, "someone books the van",
+            due: "2099-10-16",
+            to: ["Harsha"]
+          )
+        ]
+      end)
+
+      id =
+        voice!(w, w.harsha, [
+          %{"o" => 0, "t" => "I'll send the quotation"},
+          %{"o" => 5200, "t" => "someone books the van"}
+        ])
+
+      :ok = run_voice!(w, id)
+      out = posts()
+      {_, body, card} = post_in(out, w.og, "action_items")
+      ex = example("envelope_risi_action_items_v143.json")
+      assert keys(card) == keys(ex["risi"])
+      assert body =~ ~s(Who's taking "Book the van"? Tap "It's mine" on the card.)
+      task = Enum.find(card["items"], &(&1["kind"] == "task"))
+      ex_task = Enum.find(ex["risi"]["items"], &(&1["claim"] == true))
+      assert keys(task) == keys(ex_task)
+      assert %{"owner" => nil, "state" => nil, "claim" => true} = task
+      promise = Enum.find(card["items"], &(&1["kind"] == "promise"))
+      refute Map.has_key?(promise, "claim")
+      item = task["item_id"]
+      refute Repo.get(Commitment, item)
+
+      # Not from someone else's Risi chat; not from a non-member.
+      act!(w, w.kamal, w.rc, "item_claim", item)
+      refute Repo.get(Commitment, item)
+      outsider = RisiMe.GroupHelpers.fast_user!("Out")
+      ledger_devices!([outsider])
+      act!(w, outsider, own_risi_chat!(outsider), "item_claim", item)
+      refute Repo.get(Commitment, item)
+
+      act!(w, w.kamal, rc_k, "item_claim", item)
+      c = Repo.get!(Commitment, item)
+      assert c.owner_id == w.kamal.id and c.item_state == "proposed" and c.kind == "task"
+      assert c.all_day and c.due
+      assert c.counterpart_ids == [w.harsha.id]
+
+      out = posts()
+      {_, cbody, confirm} = post_in(out, rc_k, "action_confirm")
+      assert confirm["for"] == [w.kamal.id]
+      assert [%{"item_id" => ^item, "state" => "proposed", "owner" => owner}] = confirm["items"]
+      assert owner == w.kamal.id
+      assert cbody =~ "From Harsha's voice note"
+
+      # Every member hears it: the state and the owner.
+      for rc <- [w.rc, rc_k] do
+        {_, _, upd} = post_in(out, rc, "item_update")
+        assert %{"state" => "proposed", "owner" => o, "by" => o, "item_id" => ^item} = upd
+        assert o == w.kamal.id
+        assert keys(upd) == keys(example("envelope_risi_item_update_v143.json")["risi"])
+      end
+
+      # The first claim wins.
+      act!(w, w.harsha, w.rc, "item_claim", item)
+      assert Repo.get!(Commitment, item).owner_id == w.kamal.id
+      assert posts() == []
+
+      # Nothing is tracked until the claimer confirms.
+      act!(w, w.kamal, rc_k, "item_confirm", item)
+      assert Repo.get!(Commitment, item).item_state == "confirmed"
+    end
+
+    test "a claim after 48 h is ignored", w do
+      llm!(fn body -> [it(body, "task", "Book the van", nil, "book the van")] end)
+      id = voice!(w, w.harsha, [%{"o" => 0, "t" => "book the van"}])
+      :ok = run_voice!(w, id)
+      {_, _, card} = post_in(posts(), w.og, "action_items")
+      [%{"item_id" => item}] = card["items"]
+
+      Repo.update_all(
+        from(d in RisiMe.Agent.Discussion, where: d.summary_id == ^card["summary_id"]),
+        set: [created_at: DateTime.add(DateTime.utc_now(), -49 * 3600, :second)]
+      )
+
+      act!(w, w.harsha, w.rc, "item_claim", item)
+      refute Repo.get(Commitment, item)
+    end
+
+    test "an undated item: confirming asks for the date (item_clarify), never a guess", w do
+      llm!(fn body ->
+        [it(body, "promise", "Send the photos", "Harsha", "I'll send the photos")]
+      end)
+
+      id = voice!(w, w.harsha, [%{"o" => 0, "t" => "I'll send the photos"}])
+      :ok = run_voice!(w, id)
+      {_, _, card} = post_in(posts(), w.og, "action_items")
+      [%{"item_id" => item}] = card["items"]
+
+      act!(w, w.harsha, w.rc, "item_confirm", item)
+      c = Repo.get!(Commitment, item)
+      assert c.item_state == "confirmed" and c.due == nil
+      out = posts()
+      {_, q, clarify} = post_in(out, w.rc, "item_clarify")
+      assert clarify["item_id"] == item and clarify["buttons"] == ["new_date"]
+      assert q =~ ~s(When is "Send the photos" due?)
+
+      # [Remind me] with no date: no reminder, and no second question.
+      act!(w, w.harsha, w.rc, "item_remind", item)
+      refute post_in(posts(), w.rc, "item_clarify")
+
+      assert all_enqueued(
+               worker: Job,
+               args: %{"kind" => "item_reminder", "commitment_id" => item}
+             ) ==
+               []
+
+      # [Add to calendar] without a time creates nothing.
+      act!(w, w.harsha, w.rc, "item_calendar", item)
+
+      assert Repo.aggregate(
+               from(e in "risi_events", where: e.source_item_id == type(^item, :binary_id)),
+               :count
+             ) == 0
+    end
+
+    test "an all-day item: item_calendar adds one all-day event on that date", w do
+      RisiMe.CalendarHelpers.events_on!()
+      RisiMe.CalendarHelpers.calendar_device!(w.harsha)
+
+      llm!(fn body ->
+        [it(body, "promise", "Send the report", "Harsha", "by Friday", due: "2099-10-16")]
+      end)
+
+      id = voice!(w, w.harsha, [%{"o" => 0, "t" => "by Friday"}])
+      :ok = run_voice!(w, id)
+      out = posts()
+      {_, _, confirm} = post_in(out, w.rc, "action_confirm")
+      [%{"item_id" => item, "all_day" => true, "buttons" => buttons}] = confirm["items"]
+      assert "add_calendar" in buttons and "remind" in buttons
+
+      act!(w, w.harsha, w.rc, "item_calendar", item)
+      act!(w, w.harsha, w.rc, "item_calendar", item)
+
+      [e] =
+        Repo.all(
+          from(e in "risi_events",
+            where: e.source_item_id == type(^item, :binary_id),
+            select: %{all_day: e.all_day, start_at: e.start_at, end_at: e.end_at}
+          )
+        )
+
+      assert e.all_day
+      assert NaiveDateTime.diff(e.end_at, e.start_at) == 86_400
+      assert Repo.get!(Commitment, item).item_state == "confirmed"
+      refute post_in(posts(), w.rc, "item_clarify")
+    end
+
+    test "a member who wasn't a recipient gets the state only (no text, no due)", w do
+      ledger_devices!([w.kamal])
+      rc_k = own_risi_chat!(w.kamal)
+
+      llm!(fn body ->
+        [
+          it(body, "promise", "Send the quotation", "Harsha", "I'll send it",
+            due: "2099-10-13T17:00"
+          )
+        ]
+      end)
+
+      id = voice!(w, w.harsha, [%{"o" => 0, "t" => "I'll send it"}])
+      :ok = run_voice!(w, id)
+      {_, _, card} = post_in(posts(), w.og, "action_items")
+      [%{"item_id" => item}] = card["items"]
+
+      act!(w, w.harsha, w.rc, "item_edit", item, %{"text" => "Send the secret quote"})
+      out = posts()
+      {_, mine_body, mine} = post_in(out, w.rc, "item_update")
+      assert mine["text"] == "Send the secret quote" and mine_body =~ "secret"
+      {_, other_body, other} = post_in(out, rc_k, "item_update")
+      assert %{"state" => "edited", "text" => nil, "due" => nil, "all_day" => nil} = other
+      assert other["owner"] == w.harsha.id
+      assert other_body == "Harsha confirmed an item from Harsha's voice note."
+      refute inspect(other) =~ "secret"
     end
   end
 

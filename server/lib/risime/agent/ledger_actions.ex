@@ -27,14 +27,21 @@ defmodule RisiMe.Agent.LedgerActions do
 
   # v1.42 §38.4: `item_calendar`, `item_remind`, `item_not_mine` (owner only, the action items'
   # confirm card; `RisiMe.Agent.ActionItems`).
+  # v1.43 §38.9: `item_claim` (any member, an unowned action item; `ActionItems.claim/3`).
   @actions ~w(item_confirm item_edit item_decline done item_reopen item_calendar item_remind
-              item_not_mine)
+              item_not_mine item_claim)
   @reopen_s 7 * 86_400
 
   @doc "The actions handled here (from a Risi chat)."
   def actions, do: @actions
 
   @doc "Handles one item action from `user` in the Risi chat `conv`. Oban result."
+  def act(conv, user, %{"target" => target, "action" => "item_claim"}) when is_binary(target) do
+    if RisiChat.owner(conv) == user,
+      do: RisiMe.Agent.ActionItems.claim(conv, user, target),
+      else: :ok
+  end
+
   def act(conv, user, %{"target" => target, "action" => action} = env) when action in @actions do
     with {:ok, _} <- Ecto.UUID.cast(target),
          true <- RisiChat.owner(conv) == user,
@@ -213,7 +220,9 @@ defmodule RisiMe.Agent.LedgerActions do
   `item_confirm` of a proposed item by its owner before it expires: `confirmed`, tracked, the
   `item_update`s. `:ok`, or `:error` when it can't be confirmed (v1.42 §38.4 reuses it).
   """
-  def confirm(%Commitment{item_state: "proposed"} = c, d, user) do
+  def confirm(c, d, user, opts \\ [])
+
+  def confirm(%Commitment{item_state: "proposed"} = c, d, user, opts) do
     if c.owner_id == user and not expired?(d) do
       c =
         c
@@ -226,7 +235,7 @@ defmodule RisiMe.Agent.LedgerActions do
         )
         |> Repo.update!()
 
-      tracked(c)
+      tracked(c, opts)
       LedgerOut.item_update(c, d, "confirmed", user)
       :ok
     else
@@ -234,7 +243,7 @@ defmodule RisiMe.Agent.LedgerActions do
     end
   end
 
-  def confirm(_c, _d, _user), do: :error
+  def confirm(_c, _d, _user, _opts), do: :error
 
   # §27.5: `edit.text` 1–200 characters (absent: unchanged); `due` a future ts or null (absent:
   # unchanged); `all_day` a boolean (absent: unchanged).
@@ -285,7 +294,7 @@ defmodule RisiMe.Agent.LedgerActions do
   end
 
   # A tracked item (confirmed or edited): its facts and its reminders (§27.6).
-  defp tracked(c) do
+  defp tracked(c, opts \\ []) do
     Commitments.cancel_timers(c.id)
     Commitments.learn(c)
     RisiMe.Agent.LedgerReminders.schedule(c)
@@ -293,6 +302,11 @@ defmodule RisiMe.Agent.LedgerActions do
     # v1.42 §38.4: not for an action item: its confirm card's own buttons are the offers, and
     # nothing proactive runs without the owner's tap.
     if c.kind == nil, do: RisiMe.Agent.Offers.consider(c)
+
+    # v1.43 §38.9 point 2: an action item tracked without a usable date: Risi asks when (once).
+    if c.kind != nil and c.needs_clarification and Keyword.get(opts, :ask_date, true),
+      do: RisiMe.Agent.Offers.ask_date(c)
+
     :ok
   end
 end

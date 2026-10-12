@@ -161,10 +161,15 @@ defmodule RisiMe.Agent.Parity.ActionItemsTest do
     assert %{"kind" => "number", "owner" => nil, "state" => nil} = number
 
     {_, cbody, confirm} = post_in(out, w.rc, "action_confirm")
-    assert keys(confirm) == keys(example("envelope_risi_action_confirm.json")["risi"])
+    assert keys(confirm) == keys(example("envelope_risi_action_confirm_v143.json")["risi"])
     assert confirm["for"] == [w.harsha.id] and confirm["notify"] == [w.harsha.id]
 
-    assert [%{"item_id" => pid, "buttons" => ["add_promise", "not_mine", "edit"]}] =
+    assert [
+             %{
+               "item_id" => pid,
+               "buttons" => ["add_promise", "add_calendar", "remind", "not_mine", "edit"]
+             }
+           ] =
              confirm["items"]
 
     assert pid == promise["item_id"]
@@ -273,7 +278,7 @@ defmodule RisiMe.Agent.Parity.ActionItemsTest do
     assert %{"status" => "unclear", "reason" => "script_check", "items" => [], "lang" => "si"} =
              card
 
-    assert body =~ "couldn't hear Harsha's voice note clearly"
+    assert body == RisiMe.Agent.ActionItems.unclear_text(card["lang"])
     assert llm_requests() == []
   end
 

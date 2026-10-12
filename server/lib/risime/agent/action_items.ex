@@ -520,9 +520,10 @@ defmodule RisiMe.Agent.ActionItems do
 
   defp extra_rows(d, items, now) do
     Seal.open_each(items, fn i ->
-      case Seal.seal_text(@extras, i.item_id, "text", i.text) do
-        {:ok, sealed} ->
-          {:ok,
+      with {:ok, sealed} <- Seal.seal_text(@extras, i.item_id, "text", i.text),
+           {:ok, claim} <- claim_fields(i) do
+        {:ok,
+         Map.merge(
            %{
              id: Ecto.UUID.dump!(i.item_id),
              summary_id: Ecto.UUID.dump!(d.summary_id),
@@ -533,17 +534,41 @@ defmodule RisiMe.Agent.ActionItems do
              source_ref: i.source_ref,
              expires_at: DateTime.add(now, @extra_s, :second),
              inserted_at: now
-           }}
-
-        _ ->
-          :error
+           },
+           claim
+         )}
+      else
+        _ -> :error
       end
     end)
   end
 
-  @doc "The wire `ActionItem` of a found item (§38.3)."
+  # v1.43 §38.9: an unowned promise/task/meeting keeps what its claimer's ledger item needs.
+  defp claim_fields(%{kind: k} = i) when k in @ledger_kinds do
+    case Seal.seal_text(@extras, i.item_id, "due_text", i.due_text) do
+      {:ok, sealed} ->
+        {:ok,
+         %{
+           due: i.due && Clock.usec(i.due),
+           all_day: i.all_day == true,
+           due_text_sealed: sealed,
+           counterpart_ids: Enum.map(i.counterpart, &Ecto.UUID.dump!/1),
+           confidence: i.confidence
+         }}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp claim_fields(_i), do: {:ok, %{}}
+
+  @doc "True for an item any member may claim (v1.43 §38.9): promise/task/meeting, no owner."
+  def claimable?(%{kind: k, owner: o}), do: k in @ledger_kinds and o == nil
+
+  @doc "The wire `ActionItem` of a found item (§38.3; v1.43 `claim` on unowned ones)."
   def item_json(i) do
-    %{
+    base = %{
       "item_id" => i.item_id,
       "kind" => i.kind,
       "text" => i.text,
@@ -556,6 +581,8 @@ defmodule RisiMe.Agent.ActionItems do
       "state" => if(ledger_item?(i), do: "proposed"),
       "source_ref" => i.source_ref
     }
+
+    if claimable?(i), do: Map.put(base, "claim", true), else: base
   end
 
   defp publish(d, found, src) do
@@ -603,7 +630,16 @@ defmodule RisiMe.Agent.ActionItems do
     tail =
       if d.source == "call", do: " Owners confirm theirs in their Risi chat.", else: ""
 
-    {"Risi found #{n} #{noun} in #{place}: #{tally(items)}.#{tail}", risi}
+    {"Risi found #{n} #{noun} in #{place}: #{tally(items)}.#{tail}#{ask_owner(items)}", risi}
+  end
+
+  # v1.43 §38.9 point 1: Risi asks who takes an unowned item (never guesses a name).
+  defp ask_owner(items) do
+    case Enum.filter(items, &claimable?/1) do
+      [] -> ""
+      [i] -> " Who's taking \"#{i.text}\"? Tap \"It's mine\" on the card."
+      l -> " #{length(l)} items have no owner yet: tap \"It's mine\" on yours."
+    end
   end
 
   defp place(%{source: "call"}, _names), do: "this call"
@@ -632,16 +668,7 @@ defmodule RisiMe.Agent.ActionItems do
 
   @doc "The `status: \"unclear\"` card (§38.2): `%{body, risi}`."
   def unclear_card(src, reason) do
-    names = Map.new(Secretary.members(src.conv), &{&1.user_id, &1.name})
-
-    body =
-      case src.source do
-        "call" ->
-          "Risi couldn't hear this call clearly, so it made no action items."
-
-        _ ->
-          "Risi couldn't hear #{names[src.speaker] || "a member"}'s voice note clearly, so it made no action items."
-      end
+    body = unclear_text(src.lang)
 
     risi = %{
       "kind" => "action_items",
@@ -661,6 +688,14 @@ defmodule RisiMe.Agent.ActionItems do
 
     %{body: body, risi: risi}
   end
+
+  @doc """
+  v1.43 §38.9 point 6: the unclear card's text, for every reason, in the source's language
+  (English for any other).
+  """
+  def unclear_text("si"), do: "මට මෙය පැහැදිලිව ඇසුණේ නැහැ."
+  def unclear_text("ta"), do: "இதை என்னால் தெளிவாகக் கேட்க முடியவில்லை."
+  def unclear_text(_), do: "I couldn't hear this clearly."
 
   @doc "The card an extraction would post (the dev preview: nothing stored): `%{body, risi}`."
   def preview_card(src, found) do
@@ -687,7 +722,6 @@ defmodule RisiMe.Agent.ActionItems do
   def confirm_card(d, owner, items, src, names) do
     tz = Clock.user_tz(owner)
     expires = DateTime.add(d.created_at, Ledger.expire_s(), :second)
-    remind? = remind_button?(owner)
 
     risi = %{
       "kind" => "action_confirm",
@@ -698,8 +732,10 @@ defmodule RisiMe.Agent.ActionItems do
       "source_ref" => d.source_ref,
       "for" => [owner],
       "lang" => d.lang || "en",
-      "items" => Enum.map(items, &Map.put(item_json(&1), "buttons", buttons(&1, remind?))),
+      "items" => Enum.map(items, &Map.put(item_json(&1), "buttons", buttons(&1))),
       "expires_at" => Clock.ts(expires),
+      # v1.43 §38.9 point 5: informative; [Remind me] never turns the skill on.
+      "reminders_skill" => reminders_skill(owner),
       "call_ref" => d.call_ref,
       "made_by" => d.made_by,
       "notify" => [owner]
@@ -733,22 +769,30 @@ defmodule RisiMe.Agent.ActionItems do
      risi}
   end
 
-  # §38.4: `add_calendar` only for a meeting or a future timed due; `remind` only while the
-  # Reminders skill is `ask`/`allowed`.
-  defp buttons(i, remind?) do
-    timed? =
-      i.due != nil and not i.all_day and DateTime.compare(i.due, Clock.now()) == :gt
+  # v1.43 §38.9: `add_calendar` for a meeting, an undated item (the phone asks with its picker)
+  # and a due not in the past, timed or all-day; `remind` always (the §27.6 reminder in the Risi
+  # chat needs no skill).
+  defp buttons(i) do
+    calendar? =
+      i.kind == "meeting" or i.due == nil or
+        DateTime.compare(i.due, Clock.now()) == :gt
 
     ["add_promise"] ++
-      if(i.kind == "meeting" or timed?, do: ["add_calendar"], else: []) ++
-      if(remind?, do: ["remind"], else: []) ++ ["not_mine", "edit"]
+      if(calendar?, do: ["add_calendar"], else: []) ++ ["remind", "not_mine", "edit"]
   end
 
-  defp remind_button?(owner) do
-    RisiMe.Agent.Skills.gated?(owner) and
-      RisiMe.Agent.Skills.state(owner, "reminders") in ~w(ask allowed)
+  # The owner's §26.2 Reminders skill state ("off" | "ask" | "allowed"); nil when unknown.
+  defp reminders_skill(owner) do
+    if RisiMe.Agent.Skills.gated?(owner) do
+      case RisiMe.Agent.Skills.state(owner, "reminders") do
+        s when s in ~w(ask allowed) -> s
+        _ -> "off"
+      end
+    else
+      "off"
+    end
   rescue
-    _ -> false
+    _ -> nil
   end
 
   ## Owner actions (§38.4): `item_calendar`, `item_remind`, `item_not_mine`
@@ -760,8 +804,19 @@ defmodule RisiMe.Agent.ActionItems do
   sends `edit` from its picker).
   """
   def calendar(rc, %Commitment{} = c, d, user, edit) do
-    with {:ok, wire} <- event_wire(c, edit, user),
-         :ok <- confirm(c, d, user, "item_calendar") do
+    case event_wire(c, edit, user) do
+      {:ok, wire} ->
+        add_event(rc, c, d, user, wire)
+
+      :error ->
+        # v1.43 §38.9 point 2: no usable time and no picker answer: never guessed, Risi asks.
+        RisiMe.Agent.Offers.ask_date(c)
+        :ok
+    end
+  end
+
+  defp add_event(rc, c, d, user, wire) do
+    with :ok <- confirm(c, d, user, ask_date: false) do
       unless event_exists?(c.id, user) do
         with true <- RisiMe.Agent.Calendar.calendar_user?(user) || {:error, :off},
              {:ok, attrs} <- RisiMe.Agent.Calendar.parse_new(user, wire),
@@ -792,6 +847,12 @@ defmodule RisiMe.Agent.ActionItems do
 
         {nil, %DateTime{} = due} when not c.all_day ->
           {Clock.ts(due), Clock.ts(DateTime.add(due, 3600, :second)), false}
+
+        # v1.43 §38.9 point 3: an all-day due → an all-day event on that date (owner's zone).
+        {nil, %DateTime{} = due} ->
+          day = due |> Clock.local(tz) |> NaiveDateTime.to_date()
+          at = fn d -> d |> NaiveDateTime.new!(~T[00:00:00]) |> Clock.to_utc(tz) |> Clock.ts() end
+          {at.(day), at.(Date.add(day, 1)), true}
 
         _ ->
           {nil, nil, false}
@@ -845,12 +906,16 @@ defmodule RisiMe.Agent.ActionItems do
           if c.due, do: {:ok, DateTime.add(c.due, -3600, :second)}, else: {:ok, nil}
       end
 
+    # v1.43 §38.9 point 2: no date and no time chosen → confirmed, no reminder, and (when the
+    # item is still undated after a confirm that didn't ask already) Risi asks for the date.
     with {:ok, at} <- at || :error,
-         :ok <- confirm(c, d, user, "item_remind") do
+         :ok <- confirm(c, d, user, []) do
       c = Repo.get(Commitment, c.id)
 
       if at && DateTime.compare(at, Clock.now()) == :gt,
         do: RisiMe.Agent.LedgerReminders.remind_at(c, at)
+
+      if (at == nil and c) && c.due == nil, do: ask_date(c)
 
       feedback(c, user, "remind")
     else
@@ -858,15 +923,128 @@ defmodule RisiMe.Agent.ActionItems do
     end
   end
 
-  # Confirms a proposed item (as `item_confirm`); a tracked one stays as it is.
-  defp confirm(%Commitment{item_state: "proposed"} = c, d, user, _action) do
-    RisiMe.Agent.LedgerActions.confirm(c, d, user)
+  defp ask_date(%Commitment{} = c) do
+    case Commitment.open(c) do
+      {:ok, c} -> RisiMe.Agent.Offers.ask_date(c)
+      _ -> 0
+    end
   end
 
-  defp confirm(%Commitment{item_state: s}, _d, _user, _action) when s in ~w(confirmed edited),
+  # Confirms a proposed item (as `item_confirm`); a tracked one stays as it is.
+  defp confirm(%Commitment{item_state: "proposed"} = c, d, user, opts) do
+    RisiMe.Agent.LedgerActions.confirm(c, d, user, opts)
+  end
+
+  defp confirm(%Commitment{item_state: s}, _d, _user, _opts) when s in ~w(confirmed edited),
     do: :ok
 
-  defp confirm(_c, _d, _user, _action), do: :error
+  defp confirm(_c, _d, _user, _opts), do: :error
+
+  ## Claiming (v1.43 §38.9 point 1)
+
+  @doc """
+  `item_claim` from `user` (in their own Risi chat): an unowned promise/task/meeting of an
+  extraction becomes `user`'s **proposed** ledger item. Any active human member of the Official
+  conversation with a `risi_ledger` device, before the extraction + 48 h; the first claim wins
+  (the extras row is taken once), later ones are ignored. Then: the claimer's `action_confirm`
+  for that item, an `item_update` (`owner`) to every member, `action_feedback` `claim`. Nothing is
+  tracked until the claimer confirms.
+  """
+  def claim(_rc, user, item_id) do
+    now = Clock.usec(Clock.now())
+
+    with {:ok, _} <- Ecto.UUID.cast(item_id),
+         %{} = x <- claim_row(item_id),
+         true <- x.kind in @ledger_kinds,
+         %Discussion{} = d <- Repo.get(Discussion, x.summary_id),
+         false <- claim_closed?(d),
+         true <- Secretary.active_human?(d.conversation_id, user),
+         [^user] <- Devices.risi_ledger_users([user]),
+         {:ok, text} <- Seal.open_text(@extras, item_id, "text", x.text_sealed),
+         {:ok, due_text} <- Seal.open_text(@extras, item_id, "due_text", x.due_text_sealed),
+         item = claimed_item(x, item_id, text, due_text, user),
+         {:ok, [row]} <- ledger_rows(d, [item], now),
+         {:ok, d} <- take(d, item_id, row, user) do
+      %{"kind" => "item_expire", "conv" => d.conversation_id, "item_id" => item_id}
+      |> Job.new(
+        queue: :risi_timers,
+        scheduled_at: DateTime.add(d.created_at, Ledger.expire_s(), :second)
+      )
+      |> Oban.insert!()
+
+      names = Map.new(Secretary.members(d.conversation_id), &{&1.user_id, &1.name})
+
+      src = %{
+        source: d.source,
+        participants: d.participants,
+        speaker: if(d.source == "voice_note", do: List.first(d.participants))
+      }
+
+      {body, risi} = confirm_card(d, user, [item], src, names)
+      LedgerOut.deliver_or_hold(d, user, body, risi)
+
+      {:ok, c} = Commitment.open(Repo.get!(Commitment, item_id))
+      feedback(c, user, "claim")
+      LedgerOut.item_update(c, d, "claimed", user)
+    else
+      _ -> :ok
+    end
+  end
+
+  defp claim_row(item_id) do
+    Repo.one(
+      from x in @extras,
+        where: x.id == type(^item_id, :binary_id),
+        select: %{
+          kind: x.kind,
+          summary_id: type(x.summary_id, :binary_id),
+          text_sealed: x.text_sealed,
+          due_text_sealed: x.due_text_sealed,
+          due: type(x.due, :utc_datetime_usec),
+          all_day: x.all_day,
+          counterpart_ids: type(x.counterpart_ids, {:array, :binary_id}),
+          confidence: x.confidence,
+          lang: x.lang,
+          source_ref: x.source_ref
+        }
+    )
+  end
+
+  defp claim_closed?(%Discussion{created_at: at}),
+    do: DateTime.compare(Clock.now(), DateTime.add(at, Ledger.expire_s(), :second)) != :lt
+
+  defp claimed_item(x, item_id, text, due_text, user) do
+    %{
+      item_id: item_id,
+      kind: x.kind,
+      text: text,
+      owner: user,
+      counterpart: (x.counterpart_ids || []) -- [user],
+      due: x.due,
+      all_day: x.all_day == true,
+      due_text: due_text,
+      lang: x.lang,
+      source_ref: x.source_ref,
+      confidence: x.confidence || 0.0
+    }
+  end
+
+  # The first claim wins: the extras row is deleted once, in the same transaction as the insert.
+  defp take(d, item_id, row, user) do
+    Repo.transaction(fn ->
+      case Repo.delete_all(from x in @extras, where: x.id == type(^item_id, :binary_id)) do
+        {1, _} ->
+          Repo.insert!(row)
+
+          d
+          |> Ecto.Changeset.change(recipients: Enum.uniq(d.recipients ++ [user]))
+          |> Repo.update!()
+
+        _ ->
+          Repo.rollback(:taken)
+      end
+    end)
+  end
 
   ## Cancelling (§38.6)
 

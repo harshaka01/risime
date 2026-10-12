@@ -260,9 +260,22 @@ defmodule RisiMe.Agent.Offers do
 
   ## The clarification question (item 10)
 
-  defp clarify(%Commitment{owner_id: owner} = c) do
+  @doc """
+  v1.43 §38.9 point 2: a §38 action item was confirmed without a usable date: its owner gets the
+  one `item_clarify` question (once per item), whatever the Skills switch. The number of cards
+  posted (0 or 1); never raises.
+  """
+  def ask_date(%Commitment{} = c) do
+    if is_binary(c.text), do: clarify(c, false), else: 0
+  rescue
+    e ->
+      Logger.warning("Risi date question failed: #{inspect(e.__struct__)}")
+      0
+  end
+
+  defp clarify(%Commitment{owner_id: owner} = c, gated? \\ true) do
     with true <- Secretary.active_human?(c.conversation_id, owner),
-         true <- Skills.gated?(owner),
+         true <- not gated? or Skills.gated?(owner),
          rc when is_binary(rc) <- RisiChat.active_id(owner),
          :ok <- claim(c.id, owner, "clarify") do
       q = question(c)
