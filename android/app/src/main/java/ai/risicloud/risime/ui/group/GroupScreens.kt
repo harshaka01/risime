@@ -397,6 +397,11 @@ fun GroupChatScreen(
                             else ai.risicloud.risime.ui.tabs.RisiChipRow(risiChip) { risiChip = it }
                         }
                     }) else null,
+                    // v1.41 §37.3 / §37.8: the mic in Send's place (groups, both tabs, and the Risi chat: a note is a request there).
+                    voice = if (encrypted == true && vm.imgs.available) ai.risicloud.risime.ui.chat.rememberVoiceComposer(
+                        vm.container, vm.conversationId, ai.risicloud.risime.ui.chat.voiceNotReadyText(dm = false, name = name),
+                        reply = { vm.messaging.takeReply() }, toast = { vm.imgs.toast.value = it },
+                    ) else null,
                 )
             }
             reactionsFor?.let { target -> ReactionsSheet(reactions[target].orEmpty(), vm::nameOf) { reactionsFor = null } }
@@ -585,21 +590,25 @@ private fun GroupBubble(
         onMenu = { if (sel?.selecting == true) sel.onToggle() else sheet = true },
         selected = sel?.selected == true || (x?.flash != null && x.flash == m.clientMsgId),
         noteIsInfo = !failed,
-        footer = { ReactionChipsRow(chips, onOpenReactions) },
+        footer = { ai.risicloud.risime.ui.chat.VoiceFooter(m, x); ReactionChipsRow(chips, onOpenReactions) },
         sender = sender,
         senderColor = memberColor(m.from),
         image = if (m.image) ({ ai.risicloud.risime.ui.chat.ImageBubbleContent(media, loader, onImageVisible, send = send, onRetry = retryPhoto) }) else null,
         imageStatus = if (m.image) send?.let { ai.risicloud.risime.ui.chat.photoSendText(it) } ?: ai.risicloud.risime.ui.chat.imageStatusText(media) else null,
         imageAction = retryPhoto?.let { ai.risicloud.risime.ui.chat.PHOTO_RETRY to it },
-        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else if (m.file && x != null) ({ x.files.tap(context, m, media) }) else null,
-        tapLabel = if (m.image) ai.risicloud.risime.ui.chat.imageTapLabel(ai.risicloud.risime.ui.chat.imageTap(media)) else if (m.file) ai.risicloud.risime.ui.chat.FileStrings.OPEN else null,
+        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else if (m.file && x != null) ({ x.files.tap(context, m, media) })
+            else if (m.voice && x != null) ({ ai.risicloud.risime.ui.chat.voiceTap(x.c, m) }) else null,
+        tapLabel = if (m.image) ai.risicloud.risime.ui.chat.imageTapLabel(ai.risicloud.risime.ui.chat.imageTap(media)) else if (m.file) ai.risicloud.risime.ui.chat.FileStrings.OPEN
+            else if (m.voice) ai.risicloud.risime.ui.chat.VoiceStrings.PLAY else null,
         tail = tail,
         forwardHops = extras?.forwardHops,
         quote = extras?.quote?.let { q -> { ai.risicloud.risime.ui.chat.QuoteBlock(q, extras.onQuoteTap) } },
         quoteLabel = extras?.quote?.let(ai.risicloud.risime.ui.chat.Quotes::label),
         starred = extras?.starred == true,
-        attachment = if (m.file && x != null) ({ ai.risicloud.risime.ui.chat.FileCard(x.c, m, media) }) else null,
-        attachmentLabel = if (m.file) "File, " + (ai.risicloud.risime.data.media.FileMeta.decode(m.systemJson)?.let { ai.risicloud.risime.data.media.FileEnvelope.displayName(it.name) } ?: "") else null,
+        attachment = if (m.file && x != null) ({ ai.risicloud.risime.ui.chat.FileCard(x.c, m, media) })
+            else if (m.voice && x != null) ({ ai.risicloud.risime.ui.chat.VoiceBubbleContent(x.c, m, media) }) else null,
+        attachmentLabel = if (m.file) "File, " + (ai.risicloud.risime.data.media.FileMeta.decode(m.systemJson)?.let { ai.risicloud.risime.data.media.FileEnvelope.displayName(it.name) } ?: "")
+            else if (m.voice) ai.risicloud.risime.ui.chat.VoiceStrings.label(m, ai.risicloud.risime.data.media.VoiceMeta.decode(m.systemJson)) else null,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {

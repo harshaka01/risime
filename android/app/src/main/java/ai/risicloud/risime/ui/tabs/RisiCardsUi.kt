@@ -103,6 +103,14 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
         Box(Modifier.testTag("risi_call_transcribe")) { SystemLineText(l?.let { ai.risicloud.risime.data.tabs.RisiTranscriptLines.consent(it, ctx.nameOf, zone, row.body) } ?: row.body) }
         return
     }
+    // v1.41 §37.6: a voice note's transcript is drawn under the note's bubble (collapsed); without the note, a small line.
+    if (r.kind == ai.risicloud.risime.net.RisiKinds141.VOICE_TRANSCRIPT) {
+        if (!ai.risicloud.risime.ui.chat.transcriptHasNote(row, ctx.messages)) {
+            val t = remember(row.systemJson) { ai.risicloud.risime.net.RisiVoiceTranscript.parse(row.systemJson) }
+            Box(Modifier.testTag("risi_voice_transcript_line")) { SystemLineText(if (t?.ok == true) row.body else ai.risicloud.risime.ui.chat.VoiceStrings.COULDNT) }
+        }
+        return
+    }
     if (r.kind == ai.risicloud.risime.net.RisiKinds139.CALL_TRANSCRIPT) {
         CallTranscriptLine(row, ctx, modifier)
         return

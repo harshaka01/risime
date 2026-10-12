@@ -20,6 +20,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- v1.15 §17.16: the history export worker runs in the foreground (dataSync). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- v1.41 §37.3: a voice note keeps playing with the screen off (mediaPlayback service, only while one plays). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- P0 background delivery: Settings → Notifications health asks (on a tap, never in a loop) to
@@ -91,6 +93,11 @@
             android:name=".calls.CallService"
             android:exported="false"
             android:foregroundServiceType="phoneCall|microphone|mediaProjection" />
+        <!-- v1.41 §37.3 voice-note playback with the screen off (a media session; started only while a note plays). -->
+        <service
+            android:name=".voice.VoicePlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
         <receiver
             android:name=".calls.CallActionReceiver"
             android:exported="false" />

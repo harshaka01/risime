@@ -286,6 +286,11 @@ fun ChatScreen(
                 }),
                 placeholder = if (encrypted) "Encrypted message" else "Message",
                 topSlot = replyTo?.let { t -> { ReplyComposerBar(t, x.nameOf(t.from).ifBlank { peerName }) { vm.messaging.replyTo.value = null } } },
+                // v1.41 §37.3: the mic in Send's place while the box is empty (only on an encrypted chat).
+                voice = if (encrypted && vm.imgs.available) rememberVoiceComposer(
+                    vm.container, vm.conversationId, voiceNotReadyText(dm = true, name = peerName),
+                    reply = { vm.messaging.takeReply() }, toast = { vm.imgs.toast.value = it },
+                ) else null,
                 value = draftValue,
                 onValue = {
                     draftValue = it
@@ -397,19 +402,21 @@ internal fun Bubble(
         onMenu = { if (sel?.selecting == true) sel.onToggle() else sheet = true },
         selected = sel?.selected == true || (x?.flash != null && x.flash == m.clientMsgId),
         noteIsInfo = !failed,
-        footer = { ReactionChipsRow(chips, onOpenReactions) },
+        footer = { VoiceFooter(m, x); ReactionChipsRow(chips, onOpenReactions) },
         image = if (m.image) ({ ImageBubbleContent(media, loader, onImageVisible, send = send, onRetry = retryPhoto) }) else null,
         imageStatus = if (m.image) send?.let { photoSendText(it) } ?: imageStatusText(media) else null,
         imageAction = retryPhoto?.let { PHOTO_RETRY to it },
-        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else if (m.file && x != null) ({ x.files.tap(context, m, media) }) else null,
-        tapLabel = if (m.image) imageTapLabel(imageTap(media)) else if (m.file) FileStrings.OPEN else null,
+        onTap = if (sel?.selecting == true) sel.onToggle else if (m.image) onImageTap else if (m.file && x != null) ({ x.files.tap(context, m, media) })
+            else if (m.voice && x != null) ({ voiceTap(x.c, m) }) else null,
+        tapLabel = if (m.image) imageTapLabel(imageTap(media)) else if (m.file) FileStrings.OPEN else if (m.voice) VoiceStrings.PLAY else null,
         tail = tail,
         forwardHops = extras?.forwardHops,
         quote = extras?.quote?.let { q -> { QuoteBlock(q, extras.onQuoteTap) } },
         quoteLabel = extras?.quote?.let(Quotes::label),
         starred = extras?.starred == true,
-        attachment = if (m.file && x != null) ({ FileCard(x.c, m, media) }) else null,
-        attachmentLabel = if (m.file) "File, " + (ai.risicloud.risime.data.media.FileMeta.decode(m.systemJson)?.let { ai.risicloud.risime.data.media.FileEnvelope.displayName(it.name) } ?: "") else null,
+        attachment = if (m.file && x != null) ({ FileCard(x.c, m, media) }) else if (m.voice && x != null) ({ VoiceBubbleContent(x.c, m, media) }) else null,
+        attachmentLabel = if (m.file) "File, " + (ai.risicloud.risime.data.media.FileMeta.decode(m.systemJson)?.let { ai.risicloud.risime.data.media.FileEnvelope.displayName(it.name) } ?: "")
+            else if (m.voice) VoiceStrings.label(m, ai.risicloud.risime.data.media.VoiceMeta.decode(m.systemJson)) else null,
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
@@ -493,6 +500,8 @@ internal fun Composer(
     emojiPicker: (@Composable (onPick: (String) -> Unit) -> Unit)? = null,
     /** §24.9 above the field: the Official composer's @Risi chip (null: nothing; Private never passes one). */
     topSlot: (@Composable () -> Unit)? = null,
+    /** v1.41 §37.3 the mic in Send's place while the text box is empty, and the recording strip (null: no voice notes). */
+    voice: VoiceComposerSlot? = null,
 ) {
     // The emoji panel takes the keyboard's place (WhatsApp-style): same height as the last keyboard.
     var panel by remember { mutableStateOf(false) }
@@ -530,7 +539,12 @@ internal fun Composer(
             }
             topSlot?.invoke()
             Row(verticalAlignment = Alignment.Bottom) {
-                Surface(
+                if (voice?.recording == true) Surface(
+                    shape = RisiShapes.input,
+                    color = if (dark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest,
+                    shadowElevation = if (dark) 0.dp else 1.dp,
+                    modifier = Modifier.weight(1f),
+                ) { voice.bar(Modifier.fillMaxWidth()) } else Surface(
                     shape = RisiShapes.input,
                     color = if (dark) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest,
                     shadowElevation = if (dark) 0.dp else 1.dp,
@@ -562,7 +576,7 @@ internal fun Composer(
                 }
                 Spacer(Modifier.width(Spacing.xs + Spacing.xxs))
                 val canSend = text.isNotBlank() && limits?.tooLong != true
-                androidx.compose.material3.FilledIconButton(
+                if (voice != null && text.isBlank()) voice.button(Sizes.minTouch + 4.dp) else androidx.compose.material3.FilledIconButton(
                     onClick = onSend,
                     enabled = canSend,
                     shape = androidx.compose.foundation.shape.CircleShape,

@@ -103,6 +103,8 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                     // v1.29 §30.6 Settings → Risi → Notes (only on a Risi Notes device).
                     val notesOn = container?.risiNotesActive?.collectAsStateWithLifecycle()?.value == true
                     if (notesOn) OutlinedButton(onClick = onRisiNotes, modifier = Modifier.fillMaxWidth().testTag("settings_risi_notes")) { Text(ai.risicloud.risime.data.notes.RisiNotes.NOTES_TITLE) }
+                    // v1.41 §37.7 Settings → Risi: transcription of my Official voice notes.
+                    if (container != null) RisiVoiceSection(container)
                 }
                 HorizontalDivider()
             }

@@ -794,6 +794,7 @@ class AppContainer(
         gcalSwitch.setServerOn(cfg.googleCalendarOn)
         val transcribeBefore = callTranscribeSwitch.serverOn.value
         callTranscribeSwitch.setServerOn(cfg.callTranscribeOn)
+        voice.setServerTranscribe(cfg.voiceTranscribeOn)
         if (transcribeBefore != cfg.callTranscribeOn) {
             refreshCapabilities()
             callTranscribe.refreshAvailability()
@@ -1071,6 +1072,54 @@ class AppContainer(
     val imageUploader = ai.risicloud.risime.data.media.ImageUploader(api, db.media(), db.messages(), mediaFiles)
     val imageDownloader = ai.risicloud.risime.data.media.ImageDownloader(api, db.media(), mediaFiles, mediaSealer, { mediaCrypto })
     val imageLoader by lazy { ai.risicloud.risime.ui.chat.ImageLoader(images) }
+
+    // ---- v1.41 §37 voice notes ----
+
+    private val voicePrefs by lazy { appContext.getSharedPreferences("risime_voice", Context.MODE_PRIVATE) }
+
+    /** §37: the recorder, the sender's setting and sending a note (an E2EE blob like a photo). */
+    val voice by lazy {
+        ai.risicloud.risime.voice.VoiceNotes(
+            api, voicePrefs,
+            commit = { audio, conv, meta, reply ->
+                sessionStore.current()?.user?.id?.let { me ->
+                    images.commitVoice(audio, conv, me, ai.risicloud.risime.net.dmPeer(conv, me) ?: conv, meta, reply)
+                }
+            },
+            placeOf = { conv ->
+                val row = chatTabs.rows.value?.get(conv) ?: chatTabs.rows.value?.get(conv.lowercase())
+                when {
+                    row?.risi == true -> ai.risicloud.risime.voice.VoicePlace.RISI_CHAT
+                    row?.official == true -> ai.risicloud.risime.voice.VoicePlace.OFFICIAL
+                    else -> ai.risicloud.risime.voice.VoicePlace.PRIVATE
+                }
+            },
+            mediaReady = { imagesSupported() },
+            recorder = ai.risicloud.risime.voice.VoiceRecorder(log = { Log.i("RisiMe", it) }),
+        )
+    }
+
+    /** §37.3 the one player: in-memory decrypt, `played` on first start, auto-play next, screen off, earpiece. */
+    val voicePlayer by lazy {
+        ai.risicloud.risime.voice.VoicePlayer(
+            appContext, scope,
+            decrypt = { id -> images.decrypt(id) },
+            download = { id -> downloadImage(id) == ai.risicloud.risime.data.media.DownloadOutcome.Cached },
+            markPlayed = { id -> engine.markPlayed(id) },
+            nextOf = { id ->
+                db.messages().byClientMsgId(id)?.let { row ->
+                    ai.risicloud.risime.voice.VoiceQueue.next(db.messages().conversation(row.conversationId).first(), id) { m ->
+                        m.kind == ai.risicloud.risime.data.db.MessageEntity.KIND_TEXT && ai.risicloud.risime.net.RisiVoiceTranscript.parse(m.systemJson) != null
+                    }
+                }
+            },
+            prefs = voicePrefs,
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
+    /** §37.1 this build advertises `voice` once it can receive, validate, play and render notes (the media core is there). */
+    fun voiceSupported(): Boolean = imagesSupported()
 
     // ---- v1.34 §33 basic messaging ----
 
@@ -1452,6 +1501,7 @@ class AppContainer(
             risiItemsSupported = { true },
             // v1.39 §36: this build implements §36.2–§36.7 (needs the platform Opus encoder, Android 10+).
             callTranscribeSupported = { callTranscribeSwitch.serverOn.value && ai.risicloud.risime.calls.transcribe.MediaCodecOpusEncoder.available() },
+            voiceSupported = { voiceSupported() },
             onAdvertised = { caps ->
                 val tabs = ai.risicloud.risime.net.DeviceMls.CAP_TABS in caps
                 chatTabs.setAdvertised(tabs)
@@ -2203,7 +2253,7 @@ class AppContainer(
         // §15.7: the server-clock offset from the last run, until the next join reply.
         scope.launch { serverClock.restore(runCatching { sessionStore.serverOffset() }.getOrNull()) }
         // §15.6: purged images leave the in-memory bitmap caches.
-        scope.launch { images.purgedIds.collect { id -> imageLoader.forget(id) } }
+        scope.launch { images.purgedIds.collect { id -> imageLoader.forget(id); voicePlayer.purged(id) } }
         // §15.6: hidden tombstones are kept 30 days.
         scope.launch { runCatching { db.deletes().pruneDeletedIds(System.currentTimeMillis() - 30L * 24 * 3600_000) } }
         // §17.3: the start-up sweep (keys of closed or 48-h-old requests), then owed history work, once live.

@@ -75,6 +75,8 @@ class DeviceRegistrar(
     private val risiItemsSupported: () -> Boolean = { false },
     /** v1.39 §36.1: `/auth/config` says `call_transcribe: on` and this phone can make Ogg/Opus chunks. */
     private val callTranscribeSupported: () -> Boolean = { false },
+    /** v1.41 §37.1: this build sends, receives, plays and renders voice notes (with `voice_transcript`) and understands `played`. */
+    private val voiceSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -128,6 +130,8 @@ class DeviceRegistrar(
             },
             // v1.34 §33.1: `files` once the app can receive, validate and open a `file` (the media core is there).
             DeviceMls.CAP_FILES.takeIf { imagesSupported() && filesSupported() },
+            // v1.41 §37.1: `voice` with the media core (the blob format of photos and files).
+            DeviceMls.CAP_VOICE.takeIf { imagesSupported() && filesSupported() && voiceSupported() },
             // v1.34 §33.1: `pdf_export` only with `risi_tools` (the server drops it otherwise).
             DeviceMls.CAP_PDF_EXPORT.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && imagesSupported() && filesSupported() && pdfExportSupported() },
             // v1.35 §34 Phase 2: `risi_items` only with `risi_tools` (the cards it unlocks live in the Risi chat).
