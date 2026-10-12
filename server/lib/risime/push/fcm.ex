@@ -37,10 +37,11 @@ defmodule RisiMe.Push.FCM do
 
   @impl RisiMe.Push
   def deliver(push_token, payload) do
-    key = project_for(RisiMe.Devices.push_app_id(push_token))
+    app_id = RisiMe.Devices.push_app_id(push_token)
+    key = project_for(app_id)
 
     with {:ok, %{token: access, project_id: project}} <- access_token(key) do
-      send_message(key, access, project, push_token, payload)
+      send_message(key, access, project, app_id, push_token, payload)
     end
   rescue
     e ->
@@ -67,7 +68,7 @@ defmodule RisiMe.Push.FCM do
   defp android(%{"type" => "call"}), do: %{priority: "high", collapse_key: "call", ttl: "45s"}
   defp android(_inbox), do: %{priority: "high", collapse_key: "inbox", ttl: "3600s"}
 
-  defp send_message(key, access, project, push_token, payload) do
+  defp send_message(key, access, project, app_id, push_token, payload) do
     url = "https://fcm.googleapis.com/v1/projects/#{project}/messages:send"
 
     result =
@@ -75,6 +76,12 @@ defmodule RisiMe.Push.FCM do
         url,
         [json: message(push_token, payload), auth: {:bearer, access}] ++ req_options()
       )
+
+    # One audit line per send (scripts/push-proof): the Firebase project, the device's app_id and the HTTP
+    # result. Never the token, the user or the payload.
+    Logger.info(
+      "fcm: send project=#{project} app=#{app_id || "none"} http=#{http_result(result)}"
+    )
 
     case result do
       {:ok, %Req.Response{status: 200, body: body}} ->
@@ -105,6 +112,9 @@ defmodule RisiMe.Push.FCM do
         {:error, :retryable}
     end
   end
+
+  defp http_result({:ok, %Req.Response{status: status}}), do: status
+  defp http_result(_), do: "transport_error"
 
   # FCM's error status (`error.status`) or, for v1 errors, the `errorCode` of the details.
   defp fcm_error(%{"error" => %{} = error}) do

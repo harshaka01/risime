@@ -210,6 +210,35 @@ defmodule RisiMe.PushFCMTest do
     assert FCM.project_for(nil) == :default
   end
 
+  test "every send logs one audit line: project, app_id and HTTP result, never the token or the user",
+       %{calls: calls} do
+    device!("tok-audit-new", "ai.risicloud.risime")
+    device!("tok-audit-old", nil)
+    stub(calls, &ok/1)
+    Logger.put_module_level(FCM, :info)
+    on_exit(fn -> Logger.delete_module_level(FCM) end)
+
+    log =
+      capture_log([level: :info], fn ->
+        assert :ok = FCM.deliver("tok-audit-new", RisiMe.Push.payload())
+        assert :ok = FCM.deliver("tok-audit-old", RisiMe.Push.payload())
+      end)
+
+    assert log =~ "fcm: send project=risicloud-test app=ai.risicloud.risime http=200"
+    assert log =~ "fcm: send project=risime-test app=none http=200"
+    refute log =~ "tok-audit"
+    refute log =~ @access
+
+    stub(calls, &error(&1, 404, "UNREGISTERED"))
+
+    log =
+      capture_log([level: :info], fn ->
+        assert {:error, :unregistered} = FCM.deliver("tok-audit-new", RisiMe.Push.payload())
+      end)
+
+    assert log =~ "fcm: send project=risicloud-test app=ai.risicloud.risime http=404"
+  end
+
   test "each device is sent through its app's project, with separate token caches",
        %{calls: calls} do
     device!("tok-old", nil)
