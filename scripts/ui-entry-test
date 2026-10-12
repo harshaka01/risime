@@ -3692,6 +3692,31 @@ reinstall_section() {
   sign_in "+94770000981" "uientry81@example.com" || fail "reinstall: A couldn't sign in again"
   pass "reinstall: A signed in again after the reinstall"
 
+  # At once (the rebuild is still running): tap Risi → ONE pane, no tab bar, never "Setting up encryption…" or
+  # "Rejoining group…"; "hello" is sent right away and Risi answers it (the ask waits for the rebuild, never dropped).
+  open_risi_chat || { shot "59-risi-reinstall-chat"; fail "reinstall: the Risi chat didn't open as the Risi chat (no 'Ask Risi…')"; }
+  risi_pane_ok() {
+    grep -qE 'text="[^"]*(Private|Official)[^"]*"' "$WORK/ui-$DEV.xml" && { echo "a Private/Official tab or line"; return 1; }
+    grep -qF 'Setting up encryption' "$WORK/ui-$DEV.xml" && { echo "'Setting up encryption'"; return 1; }
+    grep -qF 'Rejoining group' "$WORK/ui-$DEV.xml" && { echo "'Rejoining group'"; return 1; }
+    return 0
+  }
+  local why
+  dump; why="$(risi_pane_ok)" || { shot "59-risi-reinstall-chat"; fail "reinstall: the Risi chat isn't one pane: $why"; }
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "hello%sreinstall%sping%stwo"; sleep 0.5
+  tap "Send" || fail "reinstall: send 'hello' right after the reinstall"
+  local got=0
+  for _ in $(seq 1 150); do
+    dump
+    why="$(risi_pane_ok)" || { shot "59-risi-reinstall-chat"; fail "reinstall: while Risi reconnects the chat shows $why"; }
+    grep -qF 'REINSTALL pong from Risi.' "$WORK/ui-$DEV.xml" && { got=1; break; }
+    sleep 1
+  done
+  shot "59-risi-reinstall-chat"
+  [ "$got" = 1 ] || fail "reinstall: Risi didn't answer the 'hello' sent right after the reinstall"
+  pass "reinstall: the Risi chat is one pane at once (no tabs, no 'Setting up encryption', no 'Rejoining group'); 'hello' sent at once is answered"
+
   # The list, watched for 30 s from the sign-in (with an app restart half-way, before or after the rebuild):
   # never a "Rejoining group…" or a "Group" row, and in the end exactly one "Risi" row.
   local risi=0 pend=0 grp=0 bad="" i
@@ -3707,32 +3732,35 @@ reinstall_section() {
   [ "$risi" = 1 ] || fail "reinstall: the chat list has $risi 'Risi' rows (want 1)"
   pass "reinstall: the chat list has one Risi row, never 'Rejoining group…' or a stray 'Group' (30 s, one restart)"
 
-  tap "Risi" || fail "reinstall: open the Risi chat"
-  wait_for 'text="Ask Risi…"' 60 || { shot "59-risi-reinstall-chat"; fail "reinstall: the Risi chat didn't open as the Risi chat (no 'Ask Risi…')"; }
-  dump
-  grep -qF "start Official" "$WORK/ui-$DEV.xml" && { shot "59-risi-reinstall-chat"; fail "reinstall: 'Couldn't start Official' in the Risi chat"; }
-  grep -qF 'text="Official"' "$WORK/ui-$DEV.xml" && { shot "59-risi-reinstall-chat"; fail "reinstall: the Risi chat shows an Official tab"; }
-  local ready=0
-  for _ in $(seq 1 120); do
-    dump
-    if ! grep -qF 'Setting up encryption' "$WORK/ui-$DEV.xml" && ! grep -qF 'Rejoining group' "$WORK/ui-$DEV.xml"; then ready=1; break; fi
-    sleep 1
-  done
-  [ "$ready" = 1 ] || { shot "59-risi-reinstall-chat"; fail "reinstall: the Risi chat still says 'Setting up encryption'/'Rejoining group' after 120 s"; }
-  tap "Ask Risi…" || true; sleep 0.5
-  A shell input text "reinstall%sping%stwo"; sleep 0.5
-  tap "Send" || fail "reinstall: send the ask after the reinstall"
-  wait_for 'REINSTALL pong from Risi.' 120 || { shot "59-risi-reinstall-chat"; fail "reinstall: Risi didn't answer after the reinstall"; }
-  shot "59-risi-reinstall-chat"
-  pass "reinstall: the Risi chat opens as the Risi chat (no Official, encryption set up) and Risi answers"
-
   local after; after="$(fx risichat)"
   echo "    after: $after"
   [[ "$after" == *"id=$rid "* ]] || fail "reinstall: A's Risi chat changed on the server ($before -> $after)"
   [[ "$after" == *"state=active"* ]] || fail "reinstall: A's Risi chat isn't active after the reinstall ($after)"
   [[ "$after" == *"groups=1"* ]] || fail "reinstall: A is in another group on the server too ($after)"
-  logcat_ok "risi reinstall"
   pass "reinstall: the server keeps one Risi chat for A (same id) and no stray group"
+
+  # A human 1:1 Official still works after the reinstall: B's app is open (it re-adds A's new phone to the DM),
+  # A starts Official with B, sends, and @Risi answers.
+  DEV=B; open_chat "ZZ UI A" || fail "reinstall: B can't open the DM"
+  DEV=A; official_tab B || fail "reinstall: A can't open (start) the 1:1 Official with B"
+  say "We agreed the budget review on Tuesday" || fail "reinstall: A can't send in the 1:1 Official"
+  tap "@Risi" || fail "reinstall: no @Risi chip in the 1:1 Official"
+  wait_for 'text="Ask Risi…"' 10 || fail "reinstall: the @Risi chip didn't switch the composer"
+  tap "Ask Risi…" || true; sleep 0.5
+  A shell input text "what%sdid%swe%sagree"; sleep 0.5
+  tap "Send" || fail "reinstall: send the @Risi ask in the 1:1 Official"
+  wait_text "Continuing with Risi" 150 || { shot "59-risi-reinstall-official"; fail "reinstall: Risi didn't answer @Risi in the 1:1 Official"; }
+  shot "59-risi-reinstall-official"
+  pass "reinstall: the human 1:1 Official works (send, @Risi answers)"
+  # No FATAL/ANR of the app on either phone.
+  local d out
+  for d in A B; do
+    DEV=$d; out="$(A logcat -d 2>/dev/null || true)"
+    if printf '%s\n' "$out" | grep -E 'FATAL EXCEPTION|ANR in ' | grep -qF "$PKG"; then fail "reinstall: $d logcat has a FATAL/ANR for $PKG"; fi
+    printf '%s\n' "$out" | grep -A3 'FATAL EXCEPTION' | grep -qF "Process: $PKG" && fail "reinstall: $d logcat has a FATAL for $PKG"
+    logcat_ok "risi reinstall"
+  done
+  pass "reinstall: no FATAL/ANR for the app on A or B"
 }
 if [ "$RREIN" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_REINSTALL_ONLY:-0}" = 1 ]; }; then reinstall_section; fi
 
