@@ -1,5 +1,36 @@
 # Android status — 0.2 nightlies
 
+## READY P0 E (12 Oct): black screen after calls — fix + gate `scripts/call-back-test`
+**Reproduced on redroid (Android 15 and 14):** A calls B, B answers, A leaves the call screen with **Home** (or the screen goes
+off, as at the ear), B hangs up. The call is over but A's `CallActivity` stays alive in its own `ai.risicloud.risime.calls` task
+(`dumpsys activity activities`: `Task{… #14 A=…:ai.risicloud.risime.calls sz=1}` → `CallActivity … state=STOPPED finishing=false`),
+and Recents shows a second "RisiMe" card with the dead in-call screen (Mute / End). Tapping that card resumed the call screen, which
+finished itself in the same frame without showing the app (an empty transition straight back to Recents/home).
+**Cause** (`CallActivity.kt`, before 30a300c):
+1. The close-on-end was a `LaunchedEffect(s, blind)` over `collectAsStateWithLifecycle` — collection stops at STOPPED, so a call that
+   ended while the screen was not in front never closed it.
+2. `leaveToChat()` started `MainActivity` only if `lifecycle.currentState >= RESUMED`, which is never true inside `onResume` (still
+   STARTED): the `onResume → !hasCall() → leaveToChat()` path only finished.
+3. `leaveToChat()` called `finish()` **before** starting `MainActivity` in the other task: two transitions (a cross-task close to
+   whatever task was below the call's — home, another app, a stale call task — and the app's task coming up) instead of one.
+**Fix:** `watchCallEnd()` on `lifecycleScope` (every lifecycle state) closes the call screen when `state == null && blindRing == null`
+(300 ms for the "Call ended" card; log line `calls: call screen closes (call over, resumed=…)`); not in front → quiet `finish()`;
+in front (Back, Minimise, the end on screen, `onResume` without a call) → `MainActivity` (the call's chat) first, then `finish()`.
+**Not reproduced:** the literal black window that only Force stop clears. On redroid 14/15 every Back/hang-up path showed the chat
+(light and dark theme, app lock + keyguard, screen off). Redroid 16 does not boot on spark2 (surfaceflinger RenderEngine abort
+"output buffer not gpu writeable"; with the shader-cache props off, system_server "Failed to create ashmem"), so Android 16's
+predictive back (default on for targetSdk 36+, our target is 37) could not be exercised. Harsha's phones should confirm; if it still
+happens, a `adb shell dumpsys activity activities` + `adb logcat -d` at the black screen will say which window is on top.
+**Gate** `scripts/call-back-test [--apk …] [--keep]` (own redroid pair -cb1/-cb2 on 5730/5731, server :4410, fake-llm :8197; runs
+`scripts/call-device-test` with `CALLTEST_BACK_ONLY=1`, TABS/RISI on for Official): 10 cycles A→B — private voice End call,
+private video Back, official voice Back, official video End call, private voice Home, official video screen off, private video
+End call, official voice Back, official voice Home, private video screen off. After each: both phones `topResumedActivity` =
+`MainActivity` with the chat's composer/call buttons in the uiautomator dump, no `Hist … CallActivity` record, no `.calls` task in
+Recents, screenshot mean ≥ 12 and spread ≥ 4 (not black); Back → chat list, same checks; then Home → launcher icon and Recents card
+→ the app's normal UI. Before the fix it fails at cycle 5 ("A's call screen is still alive after the call ended in the
+background"). Screenshots `docs/status/screens/59-callback-*.png`. Options: `CALLTEST_BACK_CYCLES`, `CALLTEST_SHOTS`,
+`REDROID_IMAGE` (e.g. `redroid/redroid:15.0.0_64only-250627`).
+
 ## READY P0 2026-10-12 (Harsha's phone tests): B "Can't reach the server", C Official banner overlap
 **B** root cause: the login check (`LoginViewModel.loadChoice` → `api.authConfig()`) was ONE attempt (connect 5 s, no call bound, no
 retry) and any IOException became "Can't reach the server" (`AuthLogic.signInChoice`); it re-ran only on a URL change or Retry,
