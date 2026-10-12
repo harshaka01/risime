@@ -7,6 +7,9 @@ VNSHOTS="$REPO/docs/status/screens"; mkdir -p "$VNSHOTS"
 warn() { echo "CALLTEST WARN $*"; }
 vshot() { A exec-out screencap -p > "$VNSHOTS/67-voice-$1.png" 2>/dev/null || true; }
 slog_mark() { wc -l < "$WORK/server.log"; }
+# Under `set -o pipefail`, `producer | grep -q` fails with SIGPIPE (141) when grep matches before the producer is done:
+# a found line reads as "not found" (nightly.5's forward check) and a forbidden one as "absent". Read everything first.
+matches() { grep -c "$@" >/dev/null; }
 since() { tail -n +"$(( $1 + 1 ))" "$WORK/server.log"; }
 touch "$WORK/vn-marker"
 GROUP="ZZ Voice group"
@@ -42,7 +45,7 @@ for DEV in A B; do
   A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 3
   A reverse "tcp:$VN_CLIP_PORT" "tcp:$VN_CLIP_PORT" >/dev/null
   A shell am broadcast -a ai.risicloud.risime.debug.VOICE_INJECT -p "$PKG" --es url "http://127.0.0.1:$VN_CLIP_PORT/en.wav" >/dev/null
-  ok=""; for _ in $(seq 1 20); do A logcat -d 2>/dev/null | grep -q "RisiMe debug: voice inject armed" && { ok=1; break; }; sleep 1; done
+  ok=""; for _ in $(seq 1 20); do A logcat -d 2>/dev/null | matches -F "RisiMe debug: voice inject armed" && { ok=1; break; }; sleep 1; done
   [ -n "$ok" ] || fail "voice: $DEV's microphone seam was not armed (debug build?)"
 done
 pass "voice: the clip replaces both phones' microphones (debug seam)"
@@ -144,7 +147,7 @@ mark="$(slog_mark)"
 record 4 || fail "voice: A can't hold the mic"
 wait_node '^You: Voice note, 0:0[3-5]' 30 || fail "voice: A's note isn't in the 1:1"
 wait_node '^You: Voice note, 0:0[3-5].*(Sent|Delivered|Read)' 60 || fail "voice: A's note never went out (upload/send)"
-since "$mark" | grep -qF 'INSERT INTO "blobs"' || fail "voice: no blob upload for the note"
+since "$mark" | matches -F 'INSERT INTO "blobs"' || fail "voice: no blob upload for the note"
 DEV=B; wait_node '^Voice note, 0:0[3-5], not played yet' 60 || fail "voice: B never received A's note"
 vshot dm-received
 tap_spot play in || fail "voice: B can't tap play"
@@ -154,7 +157,7 @@ ok=""; for _ in $(seq 1 10); do [ "$(voice_logged 'speed 2×')" -gt 0 ] && { ok=
 [ -n "$ok" ] || fail "voice: B never reached 2x"
 [ "$(voice_logged 'play ')" -gt 0 ] || fail "voice: B's player never started"
 vshot dm-playing-2x
-A logcat -d 2>/dev/null | grep -qE "RisiMe: voice: cannot play" && fail "voice: B could not play the note (decoder)"
+A logcat -d 2>/dev/null | matches -E "RisiMe *: voice: cannot play" && fail "voice: B could not play the note (decoder)"
 pass "voice: 1:1 Private: A's note reached B, B played it at 2x"
 DEV=A; wait_node '^You: Voice note, 0:0[3-5], played' 60 || fail "voice: A's mic never turned blue (played receipt)"
 vshot dm-played-blue-mic
@@ -195,7 +198,7 @@ DEV=A; wait_node '^You: Voice note, [0-9]+:[0-9]{2}, played' 60 || fail "voice: 
 vshot group-played
 for DEV in A B; do dump; grep -qE 'text="(Transcript|Couldn.t transcribe)"' "$WORK/ui-$DEV.xml" && fail "voice: $DEV shows a transcript in Private"; done
 sleep 5
-since "$mark" | grep -qE 'Risi voice|voice_transcript' && fail "voice: the server ran a Risi voice path for a Private group note"
+since "$mark" | matches -E 'Risi voice|voice_transcript' && fail "voice: the server ran a Risi voice path for a Private group note"
 pass "voice: group Private: sent locked, received, played, blue mic; no transcript and no Risi path"
 
 # Official: the one-time note, the note, Risi's transcript under it on both phones.
@@ -254,7 +257,7 @@ for tab in private official; do
 done
 [ -n "$ok" ] || fail "voice: B never got the forwarded note"
 vshot forwarded
-since "$mark" | grep -qF 'INSERT INTO "blobs"' || fail "voice: the forward made no fresh upload"
+since "$mark" | matches -F 'INSERT INTO "blobs"' || fail "voice: the forward made no fresh upload"
 pass "voice: forward: a fresh upload, \"Forwarded\" on B"
 
 # ---------------------------------------------------------------- 7. the server holds ciphertext only
