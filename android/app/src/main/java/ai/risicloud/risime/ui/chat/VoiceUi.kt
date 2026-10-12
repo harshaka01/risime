@@ -20,7 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -59,6 +59,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
@@ -157,9 +159,14 @@ fun VoiceBubbleContent(c: AppContainer, m: MessageEntity, media: MediaEntity?) {
     val accent = colors.readTick
     val avail = SelectionRules.mediaAvail(m, media, System.currentTimeMillis())
     val gone = avail == SelectionRules.MediaAvail.GONE && !(m.outgoing && media?.fileName != null)
+    if (ai.risicloud.risime.BuildConfig.DEBUG) {
+        androidx.compose.runtime.DisposableEffect(m.clientMsgId) {
+            onDispose { VoiceUiDebug.spots.remove("play:${m.clientMsgId}"); VoiceUiDebug.spots.remove("speed:${m.clientMsgId}") }
+        }
+    }
     Column(Modifier.widthIn(min = 220.dp).padding(top = Spacing.xxs).testTag("voice_bubble")) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(40.dp).then(VoiceUiDebug.track(m, "play")), contentAlignment = Alignment.Center) {
                 when {
                     gone -> Icon(MicIcon, null, tint = metaColor)
                     current && s.loading || (media?.state == MediaState.DOWNLOADING.name && !m.outgoing) ->
@@ -173,7 +180,15 @@ fun VoiceBubbleContent(c: AppContainer, m: MessageEntity, media: MediaEntity?) {
             Box(
                 Modifier.weight(1f).height(32.dp).padding(horizontal = Spacing.xs)
                     .pointerInput(m.clientMsgId, dur) {
-                        detectTapGestures { o -> if (!gone && meta != null) c.voicePlayer.seek(m, meta.durationMs, o.x / size.width) }
+                        // Tap to seek without taking the press from the bubble: a long press still opens its menu.
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val up = waitForUpOrCancellation() ?: return@awaitEachGesture
+                            if (up.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis && !gone && meta != null) {
+                                up.consume()
+                                c.voicePlayer.seek(m, meta.durationMs, up.position.x / size.width)
+                            }
+                        }
                     }
                     .pointerInput(m.clientMsgId, dur) {
                         detectHorizontalDragGestures { change, _ ->
@@ -183,11 +198,22 @@ fun VoiceBubbleContent(c: AppContainer, m: MessageEntity, media: MediaEntity?) {
             ) {
                 WaveformBars(levels, progress, played = accent, rest = metaColor.copy(alpha = 0.55f), modifier = Modifier.fillMaxWidth().height(32.dp))
             }
-            // Mine: the mic turns accent (blue) once played (DM `played`, group `all_played`). Received: the unplayed dot.
-            if (m.outgoing) {
-                Icon(MicIcon, if (m.playedAt != null) "Played" else null, Modifier.size(20.dp).testTag(if (m.playedAt != null) "voice_mic_played" else "voice_mic"), tint = if (m.playedAt != null) accent else metaColor)
-            } else if (m.playedAt == null) {
-                Box(Modifier.size(10.dp).background(accent, CircleShape).testTag("voice_unplayed"))
+            // While it is the current note: the speed pill (WhatsApp's place). Otherwise, mine: the mic that turns accent
+            // (blue) once played (DM `played`, group `all_played`); received: the unplayed dot.
+            Box(Modifier.size(width = 40.dp, height = 32.dp), contentAlignment = Alignment.Center) {
+                if (current && !gone) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp), color = metaColor.copy(alpha = 0.22f),
+                        modifier = Modifier.size(width = 40.dp, height = 28.dp).clickable { c.voicePlayer.cycleSpeed() }.testTag("voice_speed")
+                            .then(VoiceUiDebug.track(m, "speed")),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) { Text(VoiceSpeeds.label(s.speed), style = MaterialTheme.typography.labelMedium) }
+                    }
+                } else if (m.outgoing) {
+                    Icon(MicIcon, if (m.playedAt != null) "Played" else null, Modifier.size(20.dp).testTag(if (m.playedAt != null) "voice_mic_played" else "voice_mic"), tint = if (m.playedAt != null) accent else metaColor)
+                } else if (m.playedAt == null) {
+                    Box(Modifier.size(10.dp).background(accent, CircleShape).testTag("voice_unplayed"))
+                }
             }
         }
         Row(Modifier.padding(start = 44.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -196,15 +222,6 @@ fun VoiceBubbleContent(c: AppContainer, m: MessageEntity, media: MediaEntity?) {
                 if (gone) SelectionRules.VOICE_GONE else VoiceText.duration(shown),
                 style = MaterialTheme.typography.labelSmall, color = metaColor,
             )
-            if (current && !gone) {
-                Spacer(Modifier.width(Spacing.sm))
-                Surface(
-                    shape = RoundedCornerShape(10.dp), color = metaColor.copy(alpha = 0.18f),
-                    modifier = Modifier.clickable { c.voicePlayer.cycleSpeed() }.testTag("voice_speed"),
-                ) {
-                    Text(VoiceSpeeds.label(s.speed), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp))
-                }
-            }
             if (current && s.error != null) {
                 Spacer(Modifier.width(Spacing.sm))
                 Text(s.error!!, style = MaterialTheme.typography.labelSmall, color = metaColor)
@@ -257,6 +274,30 @@ fun transcriptFor(note: MessageEntity, rows: List<MessageEntity>): RisiVoiceTran
         if (t.messageId.equals(id, true)) return t
     }
     return null
+}
+
+/**
+ * Debug builds only: where each laid-out voice bubble's play button and speed pill are on screen, so the redroid gate
+ * (whose uiautomator can't see inside the merged bubble) can tap them; logged on the debug `VOICE_INJECT --ez where`
+ * broadcast. Release builds track nothing (the modifier is empty).
+ */
+object VoiceUiDebug {
+    data class Spot(val clientMsgId: String, val conversationId: String, val outgoing: Boolean, val localTs: Long, val x: Int, val y: Int)
+
+    val spots = java.util.concurrent.ConcurrentHashMap<String, Spot>()
+
+    fun track(m: MessageEntity, what: String): Modifier = if (!ai.risicloud.risime.BuildConfig.DEBUG) Modifier else
+        Modifier.onGloballyPositioned { lc ->
+            val r = lc.boundsInWindow()
+            if (r.width > 0 && r.height > 0) spots["$what:${m.clientMsgId}"] = Spot(m.clientMsgId, m.conversationId, m.outgoing, m.localTs, r.center.x.toInt(), r.center.y.toInt())
+        }
+
+    /** One line per spot: "voice ui <what> <id> <conv> <in|out> <localTs> <x> <y>". */
+    fun lines(): List<String> = spots.entries.sortedBy { it.value.localTs }.map { (k, s) ->
+        "voice ui ${k.substringBefore(':')} ${s.clientMsgId} ${s.conversationId} ${if (s.outgoing) "out" else "in"} ${s.localTs} ${s.x} ${s.y}"
+    }
+
+    fun clear() = spots.clear()
 }
 
 /** A tap on a voice bubble: play / pause. */

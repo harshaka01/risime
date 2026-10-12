@@ -281,6 +281,13 @@ fun ReadByContent(state: ReadByState, nameOf: (String) -> String, onRetry: () ->
                 val s = ReceiptSections.of(reply, isAgent)
                 val of = reply.receipts.count { !isAgent(it.userId) }.takeIf { it > 0 } ?: reply.of
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                    // v1.41 §37.4: a voice note's "Played by" (times from `played_at`); only once someone played it.
+                    val played = s.read.filter { it.playedAt != null }.sortedByDescending { isoMs(it.playedAt) }
+                    if (played.isNotEmpty()) {
+                        item { SectionHeader("Played by ${played.size} of $of", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
+                        items(played, key = { "p" + it.userId }) { ReceiptRow(nameOf(it.userId), isoMs(it.playedAt)) }
+                        item { HorizontalDivider(Modifier.padding(vertical = Spacing.sm)) }
+                    }
                     item { SectionHeader("Read by ${s.read.size} of $of", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
                     if (s.read.isEmpty()) item { Text("Nobody yet", Modifier.padding(horizontal = Spacing.lg), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     items(s.read, key = { "r" + it.userId }) { ReceiptRow(nameOf(it.userId), isoMs(it.readAt)) }

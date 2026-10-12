@@ -1121,6 +1121,23 @@ class AppContainer(
     /** §37.1 this build advertises `voice` once it can receive, validate, play and render notes (the media core is there). */
     fun voiceSupported(): Boolean = imagesSupported()
 
+    /**
+     * §37.1 `voice_ready` for the mic (null: not known). Risi, a visible agent member of Official, has no app instance
+     * that advertises `voice` (the server handles notes for it, §37.6), so a chat whose only missing member is an agent
+     * counts as ready.
+     */
+    suspend fun voiceReady(conversationId: String): Boolean? {
+        val g = (runCatching { api.mlsGroup(conversationId) }.getOrNull() as? ApiResult.Ok)?.value ?: return null
+        return voiceReadyOf(conversationId, g)
+    }
+
+    private suspend fun voiceReadyOf(conversationId: String, g: ai.risicloud.risime.net.MlsGroup): Boolean {
+        if (g.voiceReady) return true
+        if (!g.e2ee || g.missingVoice.isEmpty()) return false
+        val agents = runCatching { mlsEngine?.let { e -> dbTx.run { e.agentUsers(conversationId) } } }.getOrNull().orEmpty()
+        return g.missingVoice.all { m -> agents.any { it.equals(m.userId, true) } }
+    }
+
     // ---- v1.34 §33 basic messaging ----
 
     /** §33.4 persists a whole forward (one transaction) before anything is sent. */
@@ -1235,7 +1252,7 @@ class AppContainer(
             var files: Boolean? = null
             var voice: Boolean? = null
             if ((dm && (hasImage || hasFile)) || (!dm && hasFile) || hasVoice) {
-                (runCatching { api.mlsGroup(conv) }.getOrNull() as? ApiResult.Ok)?.value?.let { g -> images = g.imagesReady; files = g.filesReady; voice = g.voiceReady }
+                (runCatching { api.mlsGroup(conv) }.getOrNull() as? ApiResult.Ok)?.value?.let { g -> images = g.imagesReady; files = g.filesReady; voice = voiceReadyOf(conv, g) }
             }
             out += ai.risicloud.risime.data.messaging.ForwardCandidate(
                 conversationId = conv, name = name, official = official, risiChat = row?.risi == true,

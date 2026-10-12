@@ -27,6 +27,13 @@ class VoiceInjectReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (!BuildConfig.DEBUG || intent.action != ACTION) return
+        // `--ez where true`: log where the visible voice bubbles' play buttons and speed pills are (uiautomator can't
+        // see inside a merged bubble).
+        if (intent.getBooleanExtra("where", false)) {
+            ai.risicloud.risime.ui.chat.VoiceUiDebug.lines().forEach { Log.i("RisiMe", "RisiMe debug: $it") }
+            Log.i("RisiMe", "RisiMe debug: voice ui end")
+            return
+        }
         if (intent.getBooleanExtra("stop", false)) {
             VoiceMicInject.clear()
             Log.i("RisiMe", "RisiMe debug: voice inject cleared")

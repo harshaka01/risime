@@ -11,6 +11,44 @@
   switches the tab and carries the text (`RisiUiBus.carryToOfficial`). Nothing reaches Risi from Private.
 - Gate `scripts/risi-chat-test`: RCTEST OK (two redroid phones). Shots `66-risi-*.png`.
 
+## READY v1.41 §37 voice notes (12 Oct, next nightly; not released)
+**Data:** strict `voice` envelope (`VoiceEnvelope`: §14.4 blob/enc, mime ogg-opus | mp4, 500 ms–30 min, exactly 64 waveform
+bytes; malformed → dropped and logged), rows `kind = voice` with `VoiceMeta` in `system_json`, the key sealed in a media row
+like a photo; received notes auto-download on **any** network (`VoiceDownloadWorker`, CONNECTED) and are **never evicted**;
+the outbox waits for the voice upload. Room **v18** (Migration17To18, additive: `played_at`, `receipt_played`).
+**Receipts:** `played` ack once per received note when playback first starts (after `read`; `acked_status = PLAYED`); DM
+`status: played` and group `played`/`all_played` → the blue mic; Info shows "Played" (DM) / "Played by" (group).
+**Record:** the mic replaces Send while the box is empty (only when `voice_ready`, else the §33.1 notice; an agent-only
+`missing_voice` — Risi in Official — counts as ready); hold to record, slide left to cancel, slide up to lock
+(Delete/Send), timer + live waveform, mic permission asked on first use with the reason. Platform Opus encoder (Android 10+),
+48 kHz mono 32 kbit/s, muxed to Ogg in memory (`OggOpus`); the plaintext is on disk only in `noBackupFilesDir/media/tmp`
+for the encrypt call. Official stamps `transcribe: false` when Settings → Risi → "Transcribe my voice notes in Official
+chats" is off (`/me/risi/voice`); the Risi chat stamps a fresh `request_id`; the one-time "Risi transcribes…" note before the
+first Official note; Private shows no Risi text.
+**Play:** in-memory decrypt → `MediaPlayer` via `MediaDataSource` (no plaintext file), waveform scrubber, 1×/1.5×/2×
+(remembered), unplayed dot, auto-play of the next unplayed received note, `mediaPlayback` foreground service + media
+session (screen off), proximity → earpiece and back.
+**Everywhere:** forward (fresh key per target; transcribe/request_id/reply_to dropped; non-`voice_ready` targets disabled),
+reply-to, previews/notifications "🎤 Voice note 0:12", copy "<Voice note 0:12>", backups by reference (`played_at`,
+`status: played`), history shares, delete-for-everyone blob ids. Official `voice_transcript` collapsed under the bubble
+("Transcript ▾" / "Couldn't transcribe"; no model names, no script check), sender-only "Delete transcript"
+(`risi_action transcript_delete`); without the note on the phone it is a small line.
+**Tests:** VoiceEnvelopeTest, VoiceChatEngineTest, Migration17To18Test, BackupV141Test, ForwardingTest (voice key rotation),
+VoiceNotesLogicTest (stamping, auto-play order, Ogg framing, debug-only seam in the merged manifests), VoiceRecorderTest,
+real §37 decoders in ContractExamplesTest (the voice examples' `blob.size` is wrong: proposal 2026-10-12-voice-example-sizes).
+`scripts/upgrade-test` counts voice notes + their cached ciphertext. **Device gate** `scripts/voice-note-test` (two redroids
+-vn1/-vn2, temp server :4413 with RISI_VOICE_TRANSCRIBE=on + the local speech service): **CALLTEST OK** (12 Oct 18:5x) —
+1:1 Private hold-to-record → B received, played at 2x, blue mic on A; reply-to note quoting A's; group Private sent locked
+(slide up), played, blue mic (all_played), no transcript and no Risi path in the server log; group Official one-time note,
+note, Risi's transcript under it on both phones ("Let's meet at the office tomorrow at 10…", expands); 1:1 Official note +
+transcript; forward into the group (fresh upload, "Forwarded" on B); 6 media blobs on the server, none with Ogg/Opus/RIFF
+magic or decodable, no audio in the server log/temp dirs/speech container; no audio file on either phone; logcat clean.
+Shots `docs/status/screens/67-voice-*.png`. Not exercised on redroid (no sensor/screen): earpiece switch, screen-off playback.
+**Server note:** `voice_ready` (and `files_ready`/`images_ready`) is false in every Official chat because Risi's agent user is
+listed in `missing_*` (`device_id: null`); the app treats an agent-only `missing_voice` as ready. Server should exclude agents.
+**Debug-only seam:** `ai.risicloud.risime.debug.VOICE_INJECT` (DUMP-protected; arms a WAV in place of the microphone, `where`
+logs bubble positions); absent from the release manifest (unit-tested), `VoiceMicInject.arm` ignores clips in release.
+
 ## READY chat-list clarity + "hi without a padlock" (12 Oct, next nightly; not released)
 **1. One marker per preview** (`previewMarker()`, ChatsScreen.kt): "🔒 " Private (E2EE), "● " Official, "⚠ Not encrypted · "
 sent/received without E2EE. Never blank for a message; rows from before v17 are judged honestly (group → 🔒, MLS sender

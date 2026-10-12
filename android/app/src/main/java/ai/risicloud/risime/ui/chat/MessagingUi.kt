@@ -499,6 +499,8 @@ fun DmInfoSheet(m: MessageEntity, onDismiss: () -> Unit) {
             InfoRow(MessagingStrings.SENT, CopyFormat.timeOf(m).takeIf { m.serverTs != null })
             InfoRow(MessagingStrings.DELIVERED, m.deliveredAt, reached = m.status == "DELIVERED" || m.status == "READ")
             InfoRow(MessagingStrings.READ, m.readAt, reached = m.status == "READ")
+            // v1.41 §37.4: a voice note's "Played" time (the blue mic).
+            if (m.voice) InfoRow("Played", m.playedAt)
         }
     }
 }

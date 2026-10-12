@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# v1.41 §37 device gate (android-added): voice notes on two redroid phones with the real app.
+# Standalone (own redroid pair -vn1/-vn2 on 5750/5751, temp server on 127.0.0.1:4413 with its own DB/keyspace
+# risime_calltest_vn, fake-llm on 8197, clips on 8768): scripts/call-device-test's setup (temp server with TABS=on
+# RISI=on, sign-in through the real UI, friends, e2ee DM), then scripts/voice-note-scenario.sh, which restarts the
+# temp server with RISI_VOICE_TRANSCRIBE=on and the local speech service (127.0.0.1:8200, WHISPER_API_KEY from .env)
+# and checks, with a clip injected in place of each phone's microphone (debug-only VOICE_INJECT seam; redroid has
+# no microphone; release builds have no such receiver):
+#   - 1:1 Private: hold-to-record → B receives the note; B plays it at 2x; the `played` receipt turns A's mic blue;
+#   - reply-to: B answers A's note with a voice note quoting it;
+#   - a group (A + B), Private: send, receive, play, blue mic (all played); no transcript ever;
+#   - Official (the group's and the 1:1's): the one-time "Risi transcribes" note, the note arrives, Risi's
+#     transcript shows collapsed under it on both phones (and expands);
+#   - forward: A forwards B's note into the group (a fresh upload; B sees "Forwarded");
+#   - the server: every stored media blob is ciphertext (no Ogg magic anywhere, not decodable); no plaintext audio in
+#     the server log, its temp dirs or the speech container; no Risi voice path for a Private conversation;
+#   - no audio file left on either phone (only .enc ciphertext under noBackupFilesDir/media); logcat clean.
+#
+#   scripts/voice-note-test [--apk app-debug.apk] [--keep]
+#
+# Prints "CALLTEST PASS|FAIL|WARN …" lines and "CALLTEST OK" at the end. Screenshots: docs/status/screens/67-voice-*.png.
+set -euo pipefail
+args=(); while [ $# -gt 0 ]; do
+  if [ "$1" = --apk ] && [ $# -gt 1 ]; then args+=(--apk "$(realpath "$2")"); shift 2; else args+=("$1"); shift; fi
+done
+set -- "${args[@]+"${args[@]}"}"
+cd "$(dirname "$0")/.."
+curl -sf -o /dev/null --max-time 5 http://127.0.0.1:8200/health || { echo "the speech service (127.0.0.1:8200) is not up"; exit 2; }
+command -v gst-launch-1.0 >/dev/null || { echo "gst-launch-1.0 (opus plugins) needed to decode the clips"; exit 2; }
+export CALLTEST_BACK_ONLY=1
+export CALLTEST_EXTRA="$PWD/scripts/voice-note-scenario.sh"
+export CALLTEST_INSTANCE="${CALLTEST_INSTANCE:-_vn}"
+export CALLTEST_PORT="${CALLTEST_PORT:-4413}"
+export CALLTEST_LLM_PORT="${CALLTEST_LLM_PORT:-8197}"
+export CALLTEST_REDROID_A="${CALLTEST_REDROID_A:--vn1}" CALLTEST_REDROID_A_PORT="${CALLTEST_REDROID_A_PORT:-5750}"
+export CALLTEST_REDROID_B="${CALLTEST_REDROID_B:--vn2}" CALLTEST_REDROID_B_PORT="${CALLTEST_REDROID_B_PORT:-5751}"
+export VN_CLIP_PORT="${VN_CLIP_PORT:-8768}"
+exec scripts/call-device-test "$@"

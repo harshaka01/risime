@@ -69,7 +69,13 @@ fun rememberVoiceComposer(
     var officialNote by remember { mutableStateOf(false) }
     var mine by remember { mutableStateOf(false) } // this composer owns the running recording
     LaunchedEffect(conversationId) {
-        ready = (runCatching { c.api.mlsGroup(conversationId) }.getOrNull() as? ApiResult.Ok)?.value?.voiceReady
+        // A chat that just became e2ee (a new group, Official just started) or whose members just updated turns ready
+        // within seconds: re-check while it isn't (bounded), never after.
+        repeat(24) {
+            ready = c.voiceReady(conversationId) ?: ready
+            if (ready == true) return@LaunchedEffect
+            kotlinx.coroutines.delay(5_000)
+        }
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) toast(VoiceStrings.MIC_DENIED)
@@ -133,7 +139,7 @@ fun rememberVoiceComposer(
                     onPress = press@{
                         if (ready == false) {
                             toast(notReadyText)
-                            scope.launch { ready = (runCatching { c.api.mlsGroup(conversationId) }.getOrNull() as? ApiResult.Ok)?.value?.voiceReady }
+                            scope.launch { ready = c.voiceReady(conversationId) }
                             return@press false
                         }
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
