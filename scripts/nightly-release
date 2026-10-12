@@ -198,6 +198,8 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   STEP_T=900 step scripts/server-reach-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "SERVER REACH FAILED: not releasing"; exit 1; }
   echo "==> Official banner layout (scripts/official-banner-check, bug C)"
   STEP_T=1800 step scripts/official-banner-check --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "OFFICIAL BANNER CHECK FAILED: not releasing"; exit 1; }
+  echo "==> call -> back cycles (scripts/call-back-test, bug E: no black screen after a call)"
+  STEP_T=2700 step scripts/call-back-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-BACK TEST FAILED: not releasing"; exit 1; }
 fi
 
 # Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
