@@ -11,4 +11,6 @@ class RisiRestApi(private val api: ApiClient) : RisiRest {
     override suspend fun deleteAllFacts() = api.deleteRisiFacts()
 
     override suspend fun commitments(state: String) = api.risiCommitments(state)
+
+    override suspend fun commitments(state: String, source: String?) = api.risiCommitments(state, source)
 }

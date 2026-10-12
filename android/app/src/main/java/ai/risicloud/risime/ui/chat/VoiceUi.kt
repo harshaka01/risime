@@ -237,14 +237,19 @@ fun VoiceBubbleContent(c: AppContainer, m: MessageEntity, media: MediaEntity?) {
  */
 @Composable
 fun VoiceTranscriptBlock(t: RisiVoiceTranscript, mine: Boolean, onDelete: (() -> Unit)?) {
-    var open by remember(t.messageId) { mutableStateOf(false) }
+    var userOpen by remember(t.messageId) { mutableStateOf(false) }
+    // v1.42 §38.3 a jump to an action item's line in this note expands its transcript.
+    val forced = t.messageId?.lowercase()?.let { VoiceJump.expanded[it] } == true
+    val open = userOpen || forced
     val ok = t.ok
     Column(
         Modifier.widthIn(max = 320.dp).padding(top = Spacing.xxs, start = if (mine) 0.dp else Spacing.sm, end = if (mine) Spacing.sm else 0.dp)
             .testTag("voice_transcript"),
     ) {
         Row(
-            Modifier.clickable(enabled = ok) { open = !open }.semantics { contentDescription = if (ok) "${VoiceStrings.TRANSCRIPT}: ${if (open) "expanded" else "collapsed"}" else VoiceStrings.COULDNT },
+            Modifier.clickable(enabled = ok) {
+                if (open) { userOpen = false; t.messageId?.lowercase()?.let { VoiceJump.expanded.remove(it) } } else userOpen = true
+            }.semantics { contentDescription = if (ok) "${VoiceStrings.TRANSCRIPT}: ${if (open) "expanded" else "collapsed"}" else VoiceStrings.COULDNT },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -298,6 +303,22 @@ object VoiceUiDebug {
     }
 
     fun clear() = spots.clear()
+}
+
+/**
+ * v1.42 §38.3 a jump to an action item's line in a voice note: the note's transcript expands and playback seeks to
+ * the line's `offset_ms` (the player starts there, as a tap on the waveform does).
+ */
+object VoiceJump {
+    /** Note message ids (lowercase) whose transcript a jump expanded. */
+    val expanded = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
+
+    fun apply(c: AppContainer, row: MessageEntity, ref: ai.risicloud.risime.net.SourceRef) {
+        if (!row.voice || !ref.isVoiceNote) return
+        row.messageId?.lowercase()?.let { expanded[it] = true }
+        val meta = VoiceMeta.decode(row.systemJson) ?: return
+        c.voicePlayer.seek(row, meta.durationMs, ai.risicloud.risime.data.tabs.RisiActionItems.seekFraction(ref.offsetMs, meta.durationMs))
+    }
 }
 
 /** A tap on a voice bubble: play / pause. */

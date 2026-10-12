@@ -81,6 +81,12 @@ interface RisiHost {
     /** §27.4 [Open Risi chat] on the short card: my Risi chat at that summary (only when [risiChatAvailable]). */
     fun openRisiChat(summaryId: String) {}
 
+    /** v1.42 §38.4 `item_calendar` / `item_remind` / `item_not_mine` in this (the owner's Risi) chat, with the confirmed `edit`. */
+    fun actItem142(itemId: String, action: String, edit: kotlinx.serialization.json.JsonObject?) {}
+
+    /** v1.42 §38.3 an item's line in another conversation: open it there (scrolled, highlighted; a note seeked). */
+    fun openLine(conversationId: String, ref: ai.risicloud.risime.net.SourceRef) {}
+
     /** This phone has a usable Risi chat with the Ledger on (the short card's button shows only then). */
     fun risiChatAvailable(): Boolean = false
 
@@ -151,9 +157,23 @@ class RisiCardContext(
     val sendChip: ((String) -> Unit)? = null,
     /** This screen is the user's own Risi chat (v1.32 §29.7 "Your events" shows only there). */
     val risiChat: Boolean = false,
+    /** v1.42 §38.4 item_id (lowercase) → its view after every `item_update` on this phone (any conversation). */
+    val itemViews: Map<String, ai.risicloud.risime.data.tabs.LedgerItemView> = emptyMap(),
+    /** v1.42 §38.3 jump to an item's line ([conversationId] null or this chat: here; else open that chat). */
+    val jumpLine: ((conversationId: String?, ref: ai.risicloud.risime.net.SourceRef) -> Unit)? = null,
+    /** The row highlighted after a jump (client_msg_id). */
+    val flash: String? = null,
+    /** A conversation's local name (the confirm card's "in <chat>"). */
+    val conversationName: (String) -> String? = { null },
 )
 
 /** Builds a [RisiCardContext] for the rows on screen. */
-fun risiCardContext(host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false, prefill: (String) -> Unit = {}, risiChatReady: Boolean = false, sendChip: ((String) -> Unit)? = null, risiChat: Boolean = false) =
+fun risiCardContext(
+    host: RisiHost, messages: List<MessageEntity>, nameOf: (String) -> String, nowMs: Long, onRef: (String) -> Unit, knownNames: List<String> = emptyList(), readOnly: Boolean = false,
+    prefill: (String) -> Unit = {}, risiChatReady: Boolean = false, sendChip: ((String) -> Unit)? = null, risiChat: Boolean = false,
+    itemViews: Map<String, ai.risicloud.risime.data.tabs.LedgerItemView> = emptyMap(),
+    jumpLine: ((String?, ai.risicloud.risime.net.SourceRef) -> Unit)? = null, flash: String? = null,
+) =
     RisiCardContext(host, nameOf, RisiCards.states(messages), RisiCards.awaiting(messages, host.me, nowMs), nowMs, onRef, knownNames, readOnly,
-        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill, risiChatReady = risiChatReady, sendChip = sendChip, risiChat = risiChat)
+        quotes = { r -> RisiCards.sourceQuotes(r, messages, nameOf) }, messages = messages, prefill = prefill, risiChatReady = risiChatReady, sendChip = sendChip, risiChat = risiChat,
+        itemViews = itemViews, jumpLine = jumpLine, flash = flash, conversationName = { host.conversationName(it) })

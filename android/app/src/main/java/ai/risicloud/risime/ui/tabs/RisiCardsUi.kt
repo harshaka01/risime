@@ -152,6 +152,15 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     ai.risicloud.risime.net.RisiKinds130.NOTE_CARD -> ai.risicloud.risime.ui.notes.NoteCardBody(row, r, ctx)
                     ai.risicloud.risime.net.RisiKinds130.NOTES_SAVED -> ai.risicloud.risime.ui.notes.NotesSavedCardBody(row, r, ctx)
                     ai.risicloud.risime.net.RisiKinds131.GOOGLE_RECONNECT -> GoogleReconnectCard(row, r, ctx)
+                    // v1.42 §38.3/§38.4 action items (a malformed card shows its body).
+                    ai.risicloud.risime.net.RisiKinds142.ACTION_ITEMS, ai.risicloud.risime.net.RisiKinds142.ACTION_CONFIRM -> {
+                        val card = remember(row.systemJson) { ai.risicloud.risime.net.RisiActionCard.parse(row.systemJson) }
+                        when {
+                            card == null -> ai.risicloud.risime.ui.common.RisiMarkdownText(row.body)
+                            card.kind == ai.risicloud.risime.net.RisiKinds142.ACTION_ITEMS -> ActionItemsCardBody(row, card, ctx)
+                            else -> ActionConfirmCardBody(row, card, ctx)
+                        }
+                    }
                     else -> ai.risicloud.risime.ui.common.RisiMarkdownText(row.body)
                 }
                 FeedbackRow(r, ctx)
@@ -184,6 +193,8 @@ private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
     ai.risicloud.risime.net.RisiKinds130.NOTE_CARD -> "Risi · Notes"
     ai.risicloud.risime.net.RisiKinds130.NOTES_SAVED -> "Risi · Notes saved"
     ai.risicloud.risime.net.RisiKinds131.GOOGLE_RECONNECT -> "Risi · Google Calendar"
+    ai.risicloud.risime.net.RisiKinds142.ACTION_ITEMS -> ai.risicloud.risime.data.tabs.RisiActionItems.HEADER_ITEMS
+    ai.risicloud.risime.net.RisiKinds142.ACTION_CONFIRM -> ai.risicloud.risime.data.tabs.RisiActionItems.HEADER_CONFIRM
     else -> "Risi"
 }
 
@@ -469,7 +480,7 @@ fun RisiEditDialog(initialText: String, initialDue: String?, ownerName: String?,
 private fun CallTranscriptLine(row: MessageEntity, ctx: RisiCardContext, modifier: Modifier = Modifier) {
     val t = remember(row.systemJson) { ai.risicloud.risime.net.RisiTranscriptKinds.transcript(row.systemJson) }
     val zone = remember { ZoneId.systemDefault() }
-    Box(modifier.fillMaxWidth().padding(end = 32.dp).testTag("risi_call_transcript"), contentAlignment = Alignment.CenterStart) {
+    Box(modifier.fillMaxWidth().lineFlash(row, ctx, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)).padding(end = 32.dp).testTag("risi_call_transcript"), contentAlignment = Alignment.CenterStart) {
         Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f), border = BorderStroke(1.dp, OfficialAccent.copy(alpha = 0.35f))) {
             Column(Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)) {
                 val speaker = t?.speaker

@@ -612,6 +612,13 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         override fun openChat(conversationId: String, atIso: String?) =
             c.risiUi.openChat(conversationId, atIso?.let { ai.risicloud.risime.data.tabs.RisiUiBus.Focus(at = it) })
 
+        override fun actItem142(itemId: String, action: String, edit: kotlinx.serialization.json.JsonObject?) {
+            viewModelScope.launch { requests.actItem142(itemId, action, edit) }
+        }
+
+        override fun openLine(conversationId: String, ref: ai.risicloud.risime.net.SourceRef) =
+            c.risiUi.openChat(conversationId, ai.risicloud.risime.data.tabs.RisiUiBus.Focus(line = ref))
+
         override fun openRisiChat(summaryId: String) {
             val conv = risiChatId() ?: return
             c.risiUi.openChat(conv, ai.risicloud.risime.data.tabs.RisiUiBus.Focus(summaryId = summaryId))
@@ -651,6 +658,11 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
     val risiChatReady: StateFlow<Boolean> = combine(c.chatTabs.rows, c.risiLedger.on, c.risiTools.on) { rows, ledger, tools ->
         ledger && tools && rows?.values?.any { it.risi } == true
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** v1.42 §38.4 every `item_update` on this phone as item views: the Official `action_items` card follows the owners' actions. */
+    val itemViews: StateFlow<Map<String, ai.risicloud.risime.data.tabs.LedgerItemView>> =
+        c.db.messages().itemUpdates().map { ai.risicloud.risime.data.tabs.RisiLedger.items(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /** §27.3/§27.4 where this chat should scroll when it opens from a Risi card (taken once). */
     fun takeFocus(): ai.risicloud.risime.data.tabs.RisiUiBus.Focus? = c.risiUi.takeFocus(conversationId)

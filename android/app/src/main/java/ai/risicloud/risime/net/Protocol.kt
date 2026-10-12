@@ -379,7 +379,12 @@ data class AuthConfig(
     @SerialName("call_transcribe") val callTranscribe: String? = null,
     /** §37.1 (v1.41): Risi transcribes Official voice notes; "on" | "off"; absent = off (the kill switch for §37.6 only). */
     @SerialName("voice_transcribe") val voiceTranscribe: String? = null,
+    /** §38.1 (v1.42): Risi voice → action items; "on" | "off"; absent = off. */
+    @SerialName("risi_action_items") val risiActionItems: String? = null,
 ) {
+    /** §38.1: the server extracts action items from Official calls and voice notes. */
+    val risiActionItemsOn: Boolean get() = risiActionItems == "on"
+
     /** §36.1: the server takes `call:transcribe` pushes and chunk uploads; only then the app advertises `call_transcribe`. */
     val callTranscribeOn: Boolean get() = callTranscribe == "on"
 

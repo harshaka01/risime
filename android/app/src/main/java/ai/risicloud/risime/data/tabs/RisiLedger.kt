@@ -39,7 +39,7 @@ object RisiLedger {
         for (m in messages) {
             val r = RisiMessages.meta(m) ?: continue
             when (r.kind) {
-                RisiKinds127.DISCUSSION_SUMMARY, ai.risicloud.risime.net.RisiKinds130.NOTE_CARD -> for (i in r.items) {
+                RisiKinds127.DISCUSSION_SUMMARY, ai.risicloud.risime.net.RisiKinds130.NOTE_CARD, ai.risicloud.risime.net.RisiKinds142.ACTION_CONFIRM -> for (i in r.items) {
                     val id = i.id.lowercase().ifEmpty { continue }
                     out.putIfAbsent(id, view(i, r.summaryKey))
                 }
@@ -64,7 +64,9 @@ object RisiLedger {
         LedgerItemView(i.id, summaryId, i.owner, i.counterpart, i.text, i.due, i.allDay, i.dueText, i.state ?: RisiItemStates.PROPOSED, null)
 
     /** §27.3 `discussion_summary` or its §30.4 replacement `note_card` (same id, same items). */
-    fun isSummary(r: RisiMeta): Boolean = r.kind == RisiKinds127.DISCUSSION_SUMMARY || r.kind == ai.risicloud.risime.net.RisiKinds130.NOTE_CARD
+    fun isSummary(r: RisiMeta): Boolean = r.kind == RisiKinds127.DISCUSSION_SUMMARY || r.kind == ai.risicloud.risime.net.RisiKinds130.NOTE_CARD ||
+        // v1.42 §38.4 the owner's `action_confirm` replaces the §27.3 items for in-scope sources (its item_updates apply to it).
+        r.kind == ai.risicloud.risime.net.RisiKinds142.ACTION_CONFIRM
 
     /** The `discussion_summary` / `note_card` rows on this phone by summary_id (= note_id, lowercase). */
     fun summaries(messages: List<MessageEntity>): Map<String, Pair<MessageEntity, RisiMeta>> {
@@ -81,6 +83,8 @@ object RisiLedger {
      * the first message at or after `at` in Official (null: not on this phone yet).
      */
     fun focusTarget(messages: List<MessageEntity>, f: RisiUiBus.Focus): String? {
+        // v1.42 §38.3 an item's line: the call_transcript turn or the voice note (null until it is on this phone).
+        f.line?.let { ref -> return RisiActionItems.lineRow(messages, ref)?.messageId }
         f.messageId?.let { mid ->
             // Not (yet) on this phone: no scroll; the chat opens at its end and scrolls when history brings it.
             return messages.firstOrNull { it.messageId.equals(mid, true) }?.messageId

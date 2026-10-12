@@ -50,6 +50,7 @@ const val RISI_KNOWS_BLURB = "What Risi has learned from your Official chats. De
 const val DELETE_EVERYTHING_LABEL = "Delete everything"
 const val RISI_FACTS_EMPTY = "Risi hasn't stored anything about you."
 const val PROMISES_EMPTY = "No open promises."
+const val PROMISES_EMPTY_FROM_CALLS = "No open promises from calls or voice notes."
 const val OWED_TO_ME_TITLE = "Owed to me"
 
 /** Row test tags per direction (the v1.27 tags kept for "I promised" and "Promised to me"). */
@@ -69,7 +70,10 @@ private fun PromiseRow(c: RisiCommitment, me: String, nameOf: (String) -> String
         Text(c.text, style = MaterialTheme.typography.bodyLarge)
         val who = RisiPromises.owner(c, me, nameOf)
         val due = RisiPromises.due(c, timed = { formatDue(it) })
-        Text(listOfNotNull(who, due).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_promise_meta"))
+        // v1.42 §38.5: the kind (only when it isn't a plain promise) and where it was heard.
+        val kind = c.kind?.takeIf { it != ai.risicloud.risime.net.RisiKinds142.PROMISE }?.let(ai.risicloud.risime.data.tabs.RisiActionItems::kindLabel)
+        val heard = ai.risicloud.risime.data.tabs.RisiActionItems.sourceLabel(c.source)
+        Text(listOfNotNull(kind, who, due, heard).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_promise_meta"))
         val status = RisiPromises.status(c)
         Text(
             status, style = MaterialTheme.typography.labelMedium,
@@ -173,6 +177,10 @@ data class PromisesUi(
     val noteTitles: Map<String, String> = emptyMap(),
     /** Items with a `done`/`item_reopen` of mine on its way (their buttons are off). */
     val acting: Set<String> = emptySet(),
+    /** v1.42 §38.5 the chip "From calls & voice notes" shows (the server extracts them). */
+    val sourceChip: Boolean = false,
+    /** The chip is on: `?source=call,voice_note`. */
+    val fromCalls: Boolean = false,
 ) {
     /** "I promised" / "Promised to me" / "Others" with their counts. */
     val sections: List<RisiPromises.Section> get() = RisiPromises.sections(items, totals)
@@ -185,6 +193,9 @@ interface RisiPromiseOpener {
 
     /** Open it, scrolled to [messageId] once that message is here (null: at its end). */
     fun open(conversationId: String, messageId: String?)
+
+    /** v1.42 §38.5 open it at an item's line (a call transcript turn or a voice note). */
+    fun openLine(conversationId: String, ref: ai.risicloud.risime.net.SourceRef) = open(conversationId, ref.messageId)
 }
 
 const val PROMISE_CHAT_MISSING = "That chat isn't on this phone."
@@ -215,9 +226,18 @@ class RisiPromisesModel(
     private val opener: RisiPromiseOpener? = null,
     private val notes: RisiPromiseNotes? = null,
     private val now: () -> Long = System::currentTimeMillis,
+    /** v1.42 §38.5 the server says `risi_action_items: on` (the source chip shows). */
+    private val sourceChip: Boolean = false,
 ) {
     val state: StateFlow<PromisesUi> get() = _state
-    private val _state = MutableStateFlow(PromisesUi())
+    private val _state = MutableStateFlow(PromisesUi(sourceChip = sourceChip))
+
+    /** v1.42 §38.5 the chip "From calls & voice notes": reloads with `?source=call,voice_note` (off: all). */
+    fun setFromCalls(on: Boolean) {
+        if (_state.value.fromCalls == on) return
+        _state.update { it.copy(fromCalls = on) }
+        load()
+    }
 
     /** Rows are tappable only with an opener. */
     val canOpen: Boolean get() = opener != null
@@ -225,10 +245,16 @@ class RisiPromisesModel(
     fun load() {
         _state.update { it.copy(loading = true, error = null) }
         scope.launch {
-            when (val r = runCatching { rest.commitments("open") }.getOrNull()) {
+            val fromCalls = _state.value.fromCalls
+            val r = runCatching {
+                if (fromCalls) rest.commitments("open", ai.risicloud.risime.data.tabs.RisiActionItems.SOURCE_FILTER) else rest.commitments("open")
+            }.getOrNull()
+            when (r) {
                 is ApiResult.Ok -> {
-                    val done = if (notes == null) emptyList() else recentlyDone()
-                    _state.value = PromisesUi(false, r.value.commitments, totals = r.value.totals, done = done)
+                    val done = if (notes == null || fromCalls) emptyList() else recentlyDone()
+                    // An older server ignores `source`: the phone keeps only the call/voice items it asked for.
+                    val items = if (fromCalls) r.value.commitments.filter { it.source in ai.risicloud.risime.net.RisiKinds142.SOURCES } else r.value.commitments
+                    _state.value = PromisesUi(false, items, totals = if (fromCalls) null else r.value.totals, done = done, sourceChip = sourceChip, fromCalls = fromCalls)
                     titles(r.value.commitments + done)
                 }
                 else -> _state.update { it.copy(loading = false, error = risiErrorMessage(r)) }
@@ -291,7 +317,9 @@ class RisiPromisesModel(
         scope.launch {
             if (runCatching { o.has(conv) }.getOrDefault(false)) {
                 _state.update { it.copy(note = null) }
-                o.open(conv, mid)
+                // v1.42 §38.5 an item from a call or voice note opens at its line instead of `source_message_id`.
+                val line = c.sourceRef?.takeIf { it.jumpable }
+                if (line != null) o.openLine(conv, line) else o.open(conv, mid)
             } else {
                 _state.update { it.copy(note = PROMISE_CHAT_MISSING) }
             }
@@ -303,8 +331,8 @@ class RisiFactsViewModel(rest: RisiRest) : ViewModel() {
     val model = RisiFactsModel(rest, viewModelScope).also { it.load() }
 }
 
-class RisiPromisesViewModel(rest: RisiRest, opener: RisiPromiseOpener? = null, notes: ((CoroutineScope) -> RisiPromiseNotes)? = null) : ViewModel() {
-    val model = RisiPromisesModel(rest, viewModelScope, opener, notes?.invoke(viewModelScope)).also { it.load() }
+class RisiPromisesViewModel(rest: RisiRest, opener: RisiPromiseOpener? = null, notes: ((CoroutineScope) -> RisiPromiseNotes)? = null, sourceChip: Boolean = false) : ViewModel() {
+    val model = RisiPromisesModel(rest, viewModelScope, opener, notes?.invoke(viewModelScope), sourceChip = sourceChip).also { it.load() }
 }
 
 @Composable
@@ -359,9 +387,16 @@ fun RisiPromisesScreen(model: RisiPromisesModel, me: String, nameOf: (String) ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = Spacing.xl, vertical = Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
             s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             s.note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_promises_note")) }
+            if (s.sourceChip) {
+                androidx.compose.material3.FilterChip(
+                    selected = s.fromCalls, onClick = { model.setFromCalls(!s.fromCalls) },
+                    label = { Text(ai.risicloud.risime.data.tabs.RisiActionItems.SOURCE_CHIP, maxLines = 1) },
+                    modifier = Modifier.testTag("risi_promises_source_chip"),
+                )
+            }
             when {
                 s.loading -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
-                s.items.isEmpty() && s.done.isEmpty() && s.error == null -> Text(PROMISES_EMPTY, modifier = Modifier.testTag("risi_promises_empty"))
+                s.items.isEmpty() && s.done.isEmpty() && s.error == null -> Text(if (s.fromCalls) PROMISES_EMPTY_FROM_CALLS else PROMISES_EMPTY, modifier = Modifier.testTag("risi_promises_empty"))
                 // The last row stays above the navigation bar (contentWindowInsets is 0: edge to edge; the last
                 // [Reopen] was unreachable behind it, found by scripts/ui-entry-test --risi-notes).
                 else -> LazyColumn(Modifier.testTag("risi_promises_list"), contentPadding = WindowInsets.navigationBars.asPaddingValues()) {

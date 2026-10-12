@@ -489,6 +489,9 @@ private fun MainNav(c: AppContainer, meId: String) {
                         override suspend fun has(conversationId: String): Boolean = c.db.groups().get(conversationId) != null
                         override fun open(conversationId: String, messageId: String?) =
                             c.risiUi.openChat(conversationId, messageId?.let { ai.risicloud.risime.data.tabs.RisiUiBus.Focus(messageId = it) })
+
+                        override fun openLine(conversationId: String, ref: ai.risicloud.risime.net.SourceRef) =
+                            c.risiUi.openChat(conversationId, ai.risicloud.risime.data.tabs.RisiUiBus.Focus(line = ref))
                     }, notes = if (!c.risiNotesOn()) null else { scope ->
                         // v1.29 §30.5: [Done]/[Reopen] = the note's tick (in the Risi chat); "From note: …" opens the note.
                         val env = ai.risicloud.risime.ui.notes.NotesEnv(c, meId, scope)
@@ -497,7 +500,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                             override fun open(noteId: String) = c.risiUi.openNote(noteId)
                             override suspend fun act(itemId: String, action: String): Boolean = c.sendItemAction(itemId, action)
                         }
-                    })
+                    }, sourceChip = c.risiActionItemsServer.value)
                 }.model, meId,
                 nameOf = { id -> contacts.firstOrNull { it.userId.equals(id, true) }?.displayName ?: "Someone" },
                 onBack = { nav.popBackStack() },

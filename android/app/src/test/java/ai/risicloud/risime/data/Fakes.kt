@@ -131,6 +131,9 @@ class FakeMessageDao : MessageDao {
     override fun conversation(conversationId: String): Flow<List<MessageEntity>> =
         flowOf(rows.values.filter { it.conversationId == conversationId }.sortedBy { it.localTs })
 
+    override fun itemUpdates(): Flow<List<MessageEntity>> =
+        flowOf(rows.values.filter { it.kind == MessageEntity.KIND_TEXT && it.systemJson?.contains("\"item_update\"") == true }.sortedBy { it.localTs })
+
     override suspend fun lastInConversation(conversationId: String) =
         rows.values.filter { it.conversationId == conversationId }.maxByOrNull { it.localTs }
 

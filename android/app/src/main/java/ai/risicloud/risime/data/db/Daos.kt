@@ -130,6 +130,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversation_id = :conversationId ORDER BY local_ts ASC")
     fun conversation(conversationId: String): Flow<List<MessageEntity>>
 
+    /** v1.42 §38.4 every Risi `item_update` on this phone (any conversation): the Official card follows the owner's actions. */
+    @Query("SELECT * FROM messages WHERE kind = 'text' AND system_json LIKE '%\"item_update\"%' ORDER BY local_ts ASC")
+    fun itemUpdates(): Flow<List<MessageEntity>>
+
     @Query("SELECT * FROM messages WHERE conversation_id = :conversationId ORDER BY local_ts DESC LIMIT 1")
     suspend fun lastInConversation(conversationId: String): MessageEntity?
 

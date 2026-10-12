@@ -444,23 +444,86 @@ class ContractExamplesTest {
     }
 
     /**
-     * v1.42 §38 action items (added by root with the contract bump): today's parsers must tolerate every new example
-     * (new Risi kinds → `body`, extra fields ignored). Android replaces these with real decoders when it builds §38.
+     * v1.42 §38 action items (strict): the cards decode into [RisiActionCard] with every field the phone relies on, the
+     * three new actions are exactly what this app sends for the confirmed edit, My promises gains `kind`/`source_ref`.
      */
     private val actionItemsV142: Map<String, (String) -> Any> by lazy {
         fun obj(s: String) = ProtocolJson.parseToJsonElement(s).jsonObject
-        fun card(s: String, kind: String) = ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == kind && it.body.isNotEmpty()) }
-        fun act(s: String, a: String) = obj(s).also { require(it["type"]!!.jsonPrimitive.content == "risi_action" && it["action"]!!.jsonPrimitive.content == a) }
+        fun card(s: String, kind: String): RisiActionCard {
+            val env = ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == kind && it.body.isNotEmpty()) }
+            val c = RisiActionCard.parse(obj(s)["risi"].toString())!!
+            require(c.kind == kind && c.v == 1 && env.risi!!.summaryId == c.summaryId)
+            // Strict: nothing dropped by validation (every item of a shipped example is shown).
+            require(c.items.size == obj(s)["risi"]!!.jsonObject["items"]!!.jsonArray.size)
+            require(c.madeBy != null && c.conversationId!!.startsWith("grp:"))
+            return c
+        }
+        // What this app sends for the action, compared exactly with the example.
+        fun act(s: String, a: String, edit: JsonObject?) = obj(s).also { o ->
+            require(ai.risicloud.risime.data.tabs.RisiControl.valid(o) && o["action"]!!.jsonPrimitive.content == a)
+            require(ai.risicloud.risime.data.tabs.RisiControl.action(o["target"]!!.jsonPrimitive.content, a, writeEdit = edit) == o)
+        }
         mapOf(
-            "auth_config_v142.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(obj(s)["risi_action_items"]!!.jsonPrimitive.content == "on") } },
-            "envelope_risi_action_items.json" to { s -> card(s, "action_items") },
-            "envelope_risi_action_items_voice_note.json" to { s -> card(s, "action_items") },
-            "envelope_risi_action_items_unclear.json" to { s -> card(s, "action_items") },
-            "envelope_risi_action_confirm.json" to { s -> card(s, "action_confirm") },
-            "envelope_risi_action_item_calendar.json" to { s -> act(s, "item_calendar") },
-            "envelope_risi_action_item_remind.json" to { s -> act(s, "item_remind") },
-            "envelope_risi_action_item_not_mine.json" to { s -> act(s, "item_not_mine") },
-            "risi_commitments_reply_v142.json" to { s -> ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also { require(it.commitments.single().summaryId != null) } },
+            "auth_config_v142.json" to { s -> ProtocolJson.decodeFromString<AuthConfig>(s).also { require(it.risiActionItemsOn && it.voiceTranscribeOn && it.callTranscribeOn) } },
+            "envelope_risi_action_items.json" to { s ->
+                card(s, RisiKinds142.ACTION_ITEMS).also { c ->
+                    require(c.source == RisiKinds142.SOURCE_CALL && !c.unclear && c.reason == null && c.summary!!.startsWith("Quotation") && c.lang == "en")
+                    require(c.sourceRef!!.isCall && c.sourceRef!!.turn == null && c.sourceRef!!.offsetMs == null && c.notify.isEmpty())
+                    require(c.items.map { it.kind } == listOf(RisiKinds142.PROMISE, RisiKinds142.MEETING, RisiKinds142.DECISION, RisiKinds142.NUMBER))
+                    val p = c.items[0]
+                    require(p.ledger && p.state == RisiItemStates.PROPOSED && p.due == "2026-10-13T11:30:00.000Z" && !p.allDay && p.dueText == "tomorrow 5 pm" && p.counterpart.size == 1)
+                    require(p.sourceRef!!.jumpable && p.sourceRef!!.sessionId == "9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d" && p.sourceRef!!.turn == 3 && p.sourceRef!!.offsetMs == 4_200L)
+                    val d = c.items[2]
+                    require(!d.ledger && d.owner == null && d.state == null && d.due == null && d.sourceRef!!.turn == 6)
+                    require(c.callRef == "0d1e2f3a-4b5c-4d6e-8f7a-9b0c1d2e3f4a" && c.madeBy!!.also.single().task == RisiMadeByAlso.TASK_TRANSCRIBE)
+                }
+            },
+            "envelope_risi_action_items_voice_note.json" to { s ->
+                card(s, RisiKinds142.ACTION_ITEMS).also { c ->
+                    require(c.source == RisiKinds142.SOURCE_VOICE_NOTE && c.summary == null && c.lang == "si")
+                    require(c.sourceRef!!.isVoiceNote && c.sourceRef!!.messageId == "d1e2f3a4-a6f2-11f1-8000-0242ac120002" && c.sourceRef!!.callId == null)
+                    val i = c.items.single()
+                    require(i.kind == RisiKinds142.PROMISE && i.due == null && i.dueText == null && i.lang == "si")
+                    require(i.sourceRef!!.isVoiceNote && i.sourceRef!!.jumpable && i.sourceRef!!.messageId == c.sourceRef!!.messageId && i.sourceRef!!.offsetMs == 6_100L)
+                }
+            },
+            "envelope_risi_action_items_unclear.json" to { s ->
+                card(s, RisiKinds142.ACTION_ITEMS).also { c ->
+                    require(c.unclear && c.reason == RisiKinds142.REASON_SCRIPT_CHECK && c.items.isEmpty() && c.summary == null && c.callRef == null && c.madeBy!!.model == null)
+                }
+            },
+            "envelope_risi_action_confirm.json" to { s ->
+                card(s, RisiKinds142.ACTION_CONFIRM).also { c ->
+                    require(c.chatId!!.startsWith("dm:") && c.forUsers == listOf("7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3") && c.notify == c.forUsers)
+                    require(c.expiresAt == "2026-10-14T12:31:12.004Z")
+                    val i = c.items.single()
+                    require(i.owner == c.forUsers.single() && i.state == RisiItemStates.PROPOSED && i.buttons == RisiKinds142.BUTTONS)
+                    // §38.4 [Add to calendar] with a usable time: due … due + 60 min; the reminder: due − 1 h.
+                    val before = java.time.Instant.parse("2026-10-12T12:40:00Z").toEpochMilli()
+                    val slot = ai.risicloud.risime.data.tabs.RisiActionItems.calendarSlot(i, before)!!
+                    require(ai.risicloud.risime.data.tabs.RisiControl.iso(slot.startMs) == i.due && slot.endMs - slot.startMs == 3_600_000L)
+                    require(ai.risicloud.risime.data.tabs.RisiControl.iso(ai.risicloud.risime.data.tabs.RisiActionItems.remindAt(i, before)!!) == "2026-10-13T10:30:00.000Z")
+                    // The item_update path: RisiLedger reads the confirm card's items as the base.
+                    require(ai.risicloud.risime.data.tabs.RisiLedger.isSummary(ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!))
+                }
+            },
+            "envelope_risi_action_item_calendar.json" to { s ->
+                act(s, RisiActions142.ITEM_CALENDAR, ai.risicloud.risime.data.tabs.RisiActionItems.calendarEdit(
+                    ai.risicloud.risime.data.tabs.RisiActionItems.Slot(java.time.Instant.parse("2026-10-14T04:30:00Z").toEpochMilli(), java.time.Instant.parse("2026-10-14T05:30:00Z").toEpochMilli(), false),
+                ))
+            },
+            "envelope_risi_action_item_remind.json" to { s ->
+                act(s, RisiActions142.ITEM_REMIND, ai.risicloud.risime.data.tabs.RisiActionItems.remindEdit(java.time.Instant.parse("2026-10-13T10:30:00Z").toEpochMilli()))
+            },
+            "envelope_risi_action_item_not_mine.json" to { s -> act(s, RisiActions142.ITEM_NOT_MINE, null).also { require(it["edit"] == kotlinx.serialization.json.JsonNull) } },
+            "risi_commitments_reply_v142.json" to { s ->
+                ProtocolJson.decodeFromString<RisiCommitmentsReply>(s).also { r ->
+                    val c = r.commitments.single()
+                    require(c.summaryId != null && c.kind == RisiKinds142.PROMISE && c.source == RisiKinds142.SOURCE_CALL && c.sourceMessageId == null)
+                    require(c.sourceRef!!.jumpable && c.sourceRef!!.turn == 3 && c.sourceRef!!.offsetMs == 4_200L)
+                    require(ai.risicloud.risime.data.tabs.RisiActionItems.sourceLabel(c.source) == "From a call")
+                }
+            },
         )
     }
 

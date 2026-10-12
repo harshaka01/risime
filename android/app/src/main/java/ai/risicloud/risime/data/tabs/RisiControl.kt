@@ -18,7 +18,7 @@ object RisiControl {
     const val TYPE_ACTION = "risi_action"
 
     val REQUEST_ACTIONS = setOf("ask", "summarise", "report")
-    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + ai.risicloud.risime.net.RisiActions129.ALL + ai.risicloud.risime.net.RisiActions130.ALL + ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE
+    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + ai.risicloud.risime.net.RisiActions129.ALL + ai.risicloud.risime.net.RisiActions130.ALL + ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE + ai.risicloud.risime.net.RisiActions142.ALL
 
     /** §25.4 (v1.25): on a confirm card (`write_id`) or a group reminder (`reminder_id`). */
     val V125_ACTIONS: Set<String> get() = setOf("confirm_write", "cancel_write", "me_too", "not_me")
@@ -80,6 +80,9 @@ object RisiControl {
                 put("text", editText ?: "")
                 if (editDue == null) put("due", JsonNull) else put("due", editDue)
             })
+        } else if (action in ai.risicloud.risime.net.RisiActions142.ALL && writeEdit != null) {
+            // v1.42 §38.4 item_calendar `{start, end, all_day}` / item_remind `{remind_at}`: what the owner confirmed.
+            put("edit", writeEdit)
         } else if (action == "confirm_write" && writeEdit != null) {
             // Proposal 2026-10-09-risi-action-loop §4: [Edit] on a calendar_add card (title/start/end/all_day).
             put("edit", writeEdit)
@@ -130,6 +133,9 @@ object RisiControl {
             "item_decline" -> "Declined an item"
             "item_edit" -> "Edited an item"
             "item_reopen" -> "Reopened an item"
+            ai.risicloud.risime.net.RisiActions142.ITEM_CALENDAR -> "Added an item to the calendar"
+            ai.risicloud.risime.net.RisiActions142.ITEM_REMIND -> "Asked for a reminder"
+            ai.risicloud.risime.net.RisiActions142.ITEM_NOT_MINE -> "Said an item isn't theirs"
             "event_accept" -> "Accepted an invitation"
             "event_decline" -> "Declined an invitation"
             "event_suggest" -> "Suggested another time"
@@ -168,6 +174,9 @@ object RisiControl {
                 "item_decline" -> "$who declined an item"
                 "item_edit" -> "$who edited an item"
                 "item_reopen" -> "$who reopened an item"
+                ai.risicloud.risime.net.RisiActions142.ITEM_CALENDAR -> "$who added an item to the calendar"
+                ai.risicloud.risime.net.RisiActions142.ITEM_REMIND -> "$who asked for a reminder"
+                ai.risicloud.risime.net.RisiActions142.ITEM_NOT_MINE -> "$who said an item isn't theirs"
                 "event_accept" -> "$who accepted"
                 "event_decline" -> "$who declined"
                 "event_suggest" -> "$who suggested another time"
@@ -244,6 +253,13 @@ class RisiRequests(
     suspend fun confirmEdited(writeId: String, edit: JsonObject): Boolean {
         if (!isOfficial()) return false
         send(RisiControl.action(writeId, "confirm_write", writeEdit = edit))
+        return true
+    }
+
+    /** v1.42 §38.4 `item_calendar` / `item_remind` / `item_not_mine` with the confirmed [edit] (null: the server's default). */
+    suspend fun actItem142(itemId: String, action: String, edit: JsonObject?): Boolean {
+        if (action !in ai.risicloud.risime.net.RisiActions142.ALL || !isOfficial()) return false
+        send(RisiControl.action(itemId, action, writeEdit = edit))
         return true
     }
 

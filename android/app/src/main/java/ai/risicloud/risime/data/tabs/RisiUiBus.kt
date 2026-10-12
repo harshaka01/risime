@@ -46,6 +46,8 @@ class RisiUiBus {
         val messageId: String? = null,
         /** v1.35 §34.4 Open on a scheduled message in Risi's items: the chat's "Scheduled messages" sheet. */
         val scheduled: Boolean = false,
+        /** v1.42 §38.3 an action item's line (a call transcript turn or a voice note, seeked and expanded). */
+        val line: ai.risicloud.risime.net.SourceRef? = null,
     )
 
     private val drafts = ConcurrentHashMap<String, String>()

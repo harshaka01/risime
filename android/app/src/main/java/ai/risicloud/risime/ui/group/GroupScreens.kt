@@ -177,11 +177,22 @@ fun GroupChatScreen(
     val notesActive by vm.notesActive.collectAsStateWithLifecycle()
     // §27.3/§27.4 opened from a Risi card ([Open chat] / [Open Risi chat]): scroll there once the message is here.
     var focus by remember { mutableStateOf<ai.risicloud.risime.data.tabs.RisiUiBus.Focus?>(null) }
+    var lineFocus by remember { mutableStateOf<Pair<MessageEntity, ai.risicloud.risime.net.SourceRef>?>(null) }
     LaunchedEffect(Unit) { focus = vm.takeFocus()?.let { f -> if (f.scheduled) { scheduledSheet = true; null } else f } }
     LaunchedEffect(focus, messages) {
         val f = focus ?: return@LaunchedEffect
         val target = ai.risicloud.risime.data.tabs.RisiLedger.focusTarget(messages, f) ?: return@LaunchedEffect
-        if (ai.risicloud.risime.ui.tabs.scrollToMessage(scroll, messages, target)) focus = null
+        if (ai.risicloud.risime.ui.tabs.scrollToMessage(scroll, messages, target)) {
+            focus = null
+            // v1.42 §38.3 opened at an action item's line: highlight it (a voice note also seeks and expands).
+            f.line?.let { ref -> messages.firstOrNull { it.messageId.equals(target, true) }?.let { row -> lineFocus = row to ref } }
+        }
+    }
+    // §38.3 the line never came (deleted, or older than this phone's history): say so instead of waiting.
+    LaunchedEffect(focus?.line) {
+        if (focus?.line == null) return@LaunchedEffect
+        kotlinx.coroutines.delay(5_000)
+        if (focus?.line != null) { focus = null; vm.imgs.toast.value = ai.risicloud.risime.data.tabs.RisiActionItems.LINE_GONE }
     }
     val media by vm.imgs.media.collectAsStateWithLifecycle()
     val imagesReady by vm.imgs.imagesReady.collectAsStateWithLifecycle()
@@ -214,6 +225,18 @@ fun GroupChatScreen(
     var followUpDismissed by rememberSaveable { mutableStateOf<String?>(null) }
     val continuing = followUp != null && followUp != followUpDismissed
     val risiScope = rememberCoroutineScope()
+    var flash by remember { mutableStateOf<String?>(null) }
+    val itemViews by vm.itemViews.collectAsStateWithLifecycle()
+    // v1.42 §38.3 an action item's line here: scroll, highlight, and for a voice note seek + expand its transcript.
+    val showLine: (MessageEntity, ai.risicloud.risime.net.SourceRef) -> Unit = { row, ref ->
+        risiScope.launch {
+            row.messageId?.let { ai.risicloud.risime.ui.tabs.scrollToMessage(scroll, messages, it) }
+            ai.risicloud.risime.ui.chat.VoiceJump.apply(vm.container, row, ref)
+            flash = row.clientMsgId
+            kotlinx.coroutines.delay(1_600)
+            if (flash == row.clientMsgId) flash = null
+        }
+    }
     val risiCtx = if (risi == null) null else ai.risicloud.risime.ui.tabs.risiCardContext(
         risi, messages, vm::nameOf, System.currentTimeMillis(),
         onRef = { id -> risiScope.launch { ai.risicloud.risime.ui.tabs.scrollToMessage(scroll, messages, id) } },
@@ -226,13 +249,23 @@ fun GroupChatScreen(
         // and pressing send does; in an Official chat the @Risi request), never pasted, never a plain message.
         sendChip = if (readOnly) null else ({ s -> ai.risicloud.risime.ui.tabs.RisiChips.send(risi, s) }),
         risiChat = risiChat,
+        itemViews = itemViews,
+        jumpLine = { conv, ref ->
+            if (conv == null || conv.equals(vm.conversationId, true)) {
+                val row = ai.risicloud.risime.data.tabs.RisiActionItems.lineRow(messages, ref)
+                if (row != null) showLine(row, ref) else vm.imgs.toast.value = ai.risicloud.risime.data.tabs.RisiActionItems.LINE_GONE
+            } else {
+                risi.openLine(conv, ref)
+            }
+        },
+        flash = flash,
     )
+    LaunchedEffect(lineFocus) { lineFocus?.let { (row, ref) -> lineFocus = null; showLine(row, ref) } }
     val typingLabel = groupTypingLabel(typing)
     val count = members.count { it.current && it.state != GroupMember.STATE_PENDING_ADD }
     // v1.34 §33: stars, reply, forward, Info, files.
     val starred by vm.messaging.starred.collectAsStateWithLifecycle()
     val replyTo by vm.messaging.replyTo.collectAsStateWithLifecycle()
-    var flash by remember { mutableStateOf<String?>(null) }
     var starredOpen by remember { mutableStateOf(false) }
     val x = ai.risicloud.risime.ui.chat.ChatMessaging(
         vm.container, vm.messaging, vm.files, messages, media, starred,

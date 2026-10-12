@@ -392,7 +392,8 @@ class ApiClient(
 
     suspend fun deleteRisiFacts(): ApiResult<Unit> = call<Unit, Unit>("DELETE", "risi/facts", null)
 
-    suspend fun risiCommitments(state: String): ApiResult<RisiCommitmentsReply> = call<Unit, RisiCommitmentsReply>("GET", "risi/commitments?state=$state", null, headers = deviceHeaders()) // §30.5: `note_id` only for a risi_notes device
+    suspend fun risiCommitments(state: String, source: String? = null): ApiResult<RisiCommitmentsReply> =
+        call<Unit, RisiCommitmentsReply>("GET", "risi/commitments?state=$state" + (source?.let { "&source=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: ""), null, headers = deviceHeaders()) // §30.5: `note_id` only for a risi_notes device
 
     // ---- §29.3 Risi Calendar (a `risi_events` device; else 403 invalid_device) ----
     private fun q(v: String) = java.net.URLEncoder.encode(v, "UTF-8")

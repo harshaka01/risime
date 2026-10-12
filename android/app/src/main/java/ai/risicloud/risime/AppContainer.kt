@@ -775,6 +775,9 @@ class AppContainer(
         if (chatTabs.serverOn.value) timezoneSync.sync(sessionStore.current()?.user?.id)
     }
 
+    /** v1.42 §38.1 `/auth/config` `risi_action_items` (My promises shows the "From calls & voice notes" chip). */
+    val risiActionItemsServer = kotlinx.coroutines.flow.MutableStateFlow(false)
+
     /** §24.15: read `/auth/config` `tabs`; a change re-advertises the capabilities. */
     suspend fun refreshTabsSwitch() {
         val cfg = (api.authConfig() as? ApiResult.Ok)?.value ?: return
@@ -795,6 +798,7 @@ class AppContainer(
         val transcribeBefore = callTranscribeSwitch.serverOn.value
         callTranscribeSwitch.setServerOn(cfg.callTranscribeOn)
         voice.setServerTranscribe(cfg.voiceTranscribeOn)
+        risiActionItemsServer.value = cfg.risiActionItemsOn
         if (transcribeBefore != cfg.callTranscribeOn) {
             refreshCapabilities()
             callTranscribe.refreshAvailability()

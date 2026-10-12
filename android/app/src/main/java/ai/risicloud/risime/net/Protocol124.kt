@@ -320,6 +320,10 @@ data class RisiCommitment(
     @SerialName("source_message_ids") val sourceMessageIds: List<String> = emptyList(),
     /** v1.29 §30.5 the note this item came from (null: none or an older server). */
     @SerialName("note_id") val noteId: String? = null,
+    /** v1.42 §38.5 the item's kind (`promise` for older items; null from older servers). */
+    val kind: String? = null,
+    /** v1.42 §38.5 the exact line it came from (a call turn or a voice note); null for a chat item. */
+    @SerialName("source_ref") val sourceRef: SourceRef? = null,
 )
 
 /** Server item 9: open items per direction (`GET /risi/commitments` and the personal digest; equal by construction). */
@@ -393,6 +397,9 @@ interface RisiRest {
     suspend fun deleteAllFacts(): ApiResult<Unit>
 
     suspend fun commitments(state: String): ApiResult<RisiCommitmentsReply>
+
+    /** v1.42 §38.5 `?source=` (a comma list of `chat` | `call` | `voice_note`; null = all). */
+    suspend fun commitments(state: String, source: String?): ApiResult<RisiCommitmentsReply> = commitments(state)
 }
 
 /** v1.32 §29.7 `answer.local_events`: the checked range (at most 14 days); the asker's phone lists its own events in it. */
