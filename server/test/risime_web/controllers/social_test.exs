@@ -12,7 +12,7 @@ defmodule RisiMeWeb.SocialTest do
 
   setup do
     RisiMe.Auth.clear_cache()
-    a = logged_in_user(display_name: "Alice", company: "CodeGen")
+    a = logged_in_user(display_name: "Alice", company: "Risi")
     %{a: a}
   end
 
@@ -350,7 +350,7 @@ defmodule RisiMeWeb.SocialTest do
       assert %{"phone" => phone, "user_id" => nil, "display_name" => nil, "company" => nil} = out
       assert phone == b.phone
 
-      assert [%{"id" => id, "user_id" => uid, "display_name" => "Alice", "company" => "CodeGen"}] =
+      assert [%{"id" => id, "user_id" => uid, "display_name" => "Alice", "company" => "Risi"}] =
                friends(conn, bt)["incoming"]
 
       assert uid == a.user.id

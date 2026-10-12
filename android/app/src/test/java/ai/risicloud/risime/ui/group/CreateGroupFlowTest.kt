@@ -73,7 +73,7 @@ class CreateGroupFlowTest {
                     listOf(
                         ContactEntity("+10000000002", "Kamal", "Rise", kamal, registered = true, friend = true, groupReady = true),
                         ContactEntity("+10000000003", "Sunil", "Rise", sunil, registered = true, friend = true, groupReady = true),
-                        ContactEntity("+10000000004", "Nimal", "CodeGen", nimal, registered = true, friend = true, groupReady = false),
+                        ContactEntity("+10000000004", "Nimal", "Risi", nimal, registered = true, friend = true, groupReady = false),
                     ),
                 )
             }

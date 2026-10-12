@@ -59,7 +59,7 @@ case mode do
     jwk = dir |> Path.join("key.json") |> File.read!() |> Jason.decode!() |> JOSE.JWK.from_map()
 
     dev_user = fn phone, name ->
-      {:ok, e} = Accounts.allow(%{phone: phone, email: "interop#{String.slice(phone, -2, 2)}@example.com", display_name: name, company: "CodeGen"})
+      {:ok, e} = Accounts.allow(%{phone: phone, email: "interop#{String.slice(phone, -2, 2)}@example.com", display_name: name, company: "Risi"})
       u = Repo.get_by(User, phone: phone) || Repo.insert!(%User{phone: e.phone, email: e.email, display_name: e.display_name, company: e.company})
       t = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
       Repo.insert!(%UserToken{user_id: u.id, token_hash: :crypto.hash(:sha256, t), device_name: "interop"})
@@ -68,8 +68,8 @@ case mode do
 
     a = dev_user.("+94770000921", "ZZ Interop A")
     b = dev_user.("+94770000922", "ZZ Interop B")
-    {:ok, _} = Accounts.allow(%{phone: "+94770000911", email: "itest-a@example.com", display_name: "ZZ Interop JA", company: "CodeGen"})
-    {:ok, _} = Accounts.allow(%{phone: "+94770000912", email: "itest-b@example.com", display_name: "ZZ Interop JB", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: "+94770000911", email: "itest-a@example.com", display_name: "ZZ Interop JA", company: "Risi"})
+    {:ok, _} = Accounts.allow(%{phone: "+94770000912", email: "itest-b@example.com", display_name: "ZZ Interop JB", company: "Risi"})
 
     now = System.system_time(:second)
     mint = fn sub, email, ttl ->
@@ -93,8 +93,8 @@ case mode do
       "bshort_exp" => now + 60
     }
     # v1.6 friends flow: A and C allowlisted (not friends), I invited (no allowlist), P_X unused.
-    {:ok, _} = Accounts.allow(%{phone: "+94770000913", email: "itest-fa@example.com", display_name: "ZZ Interop FA", company: "CodeGen"})
-    {:ok, _} = Accounts.allow(%{phone: "+94770000914", email: "itest-fc@example.com", display_name: "ZZ Interop FC", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: "+94770000913", email: "itest-fa@example.com", display_name: "ZZ Interop FA", company: "Risi"})
+    {:ok, _} = Accounts.allow(%{phone: "+94770000914", email: "itest-fc@example.com", display_name: "ZZ Interop FC", company: "Risi"})
     jwt_user = fn sub, email, phone ->
       t = mint.(sub, email, 900)
       # First-use mapping creates the user; we need its id for the test.

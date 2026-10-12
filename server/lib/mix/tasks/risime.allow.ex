@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Risime.Allow do
   @moduledoc """
   Adds or updates (by phone) a person who may log in.
 
-      mix risime.allow --phone +94771234567 --email name@company.lk --name "Name" --company CodeGen
+      mix risime.allow --phone +94771234567 --email name@company.lk --name "Name" --company Risi
       mix risime.allow --rebind +94771234567   # clear the user's Keycloak binding (409 fix)
   """
   use Mix.Task

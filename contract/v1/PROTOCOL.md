@@ -34,7 +34,7 @@ Request: `{"phone": "+94771234567", "code": "123456", "device_name": "Pixel 8"}`
 Returns all other allowlisted people, sorted by display_name.
 ### 1.5 `POST /auth/logout` → `204` (revokes the token)
 
-`User = {"id": "uuid", "phone": "+94…", "display_name": "Harsha", "company": "CodeGen"}`
+`User = {"id": "uuid", "phone": "+94…", "display_name": "Harsha", "company": "Risi"}`
 `Contact = {"phone": "+94…", "display_name": "Kamal", "company": "Rise", "user_id": "uuid" | null, "registered": true}`
 Only contacts with `registered: true` can be messaged.
 

@@ -8,7 +8,7 @@ defmodule RisiMeWeb.ApiTest do
   defp authed(conn, token), do: put_req_header(conn, "authorization", "Bearer " <> token)
 
   test "request + verify + me", %{conn: conn} do
-    entry = allowlist_entry(display_name: "Harsha", company: "CodeGen")
+    entry = allowlist_entry(display_name: "Harsha", company: "Risi")
 
     conn1 = post(conn, ~p"/api/v1/auth/request", %{phone: entry.phone, email: entry.email})
     assert json_response(conn1, 200) == %{"status" => "sent", "expires_in" => 300}
@@ -46,7 +46,7 @@ defmodule RisiMeWeb.ApiTest do
     conn: conn
   } do
     entry =
-      allowlist_entry(phone: unique_phone(), display_name: "Shenika Herath", company: "CodeGen")
+      allowlist_entry(phone: unique_phone(), display_name: "Shenika Herath", company: "Risi")
 
     refute RisiMe.Repo.get_by(RisiMe.Accounts.User, phone: entry.phone)
 
@@ -68,7 +68,7 @@ defmodule RisiMeWeb.ApiTest do
              "id" => user["id"],
              "phone" => entry.phone,
              "display_name" => "Shenika Herath",
-             "company" => "CodeGen",
+             "company" => "Risi",
              "phone_verified" => true,
              "vouched_by" => nil,
              "phone_confirmed" => true

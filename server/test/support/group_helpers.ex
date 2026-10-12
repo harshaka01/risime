@@ -32,7 +32,7 @@ defmodule RisiMe.GroupHelpers do
       phone: RisiMe.Fixtures.unique_phone(),
       email: "fast#{n}@example.com",
       display_name: name || "User #{n}",
-      company: "CodeGen"
+      company: "Risi"
     })
   end
 

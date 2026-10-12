@@ -3,7 +3,7 @@ defmodule RisiMe.AllowlistTest do
 
   alias RisiMe.Accounts
 
-  @attrs %{phone: "+94770000101", email: "A@Example.com", display_name: "A", company: "CodeGen"}
+  @attrs %{phone: "+94770000101", email: "A@Example.com", display_name: "A", company: "Risi"}
 
   test "allow/1 inserts, normalises email and upserts by phone" do
     assert {:ok, e} = Accounts.allow(@attrs)

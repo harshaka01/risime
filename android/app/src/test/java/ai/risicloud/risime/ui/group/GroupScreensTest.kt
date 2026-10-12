@@ -38,7 +38,7 @@ class GroupScreensTest(private val dark: Boolean) {
 
     private val friends = listOf(
         PickFriend("u-kamal", "Kamal", "Rise", ready = true),
-        PickFriend("u-nimal", "Nimal", "CodeGen", ready = false),
+        PickFriend("u-nimal", "Nimal", "Risi", ready = false),
         PickFriend("u-sunil", "Sunil", "Rise", ready = true),
     )
 

@@ -148,10 +148,10 @@ user! = fn phone ->
 end
 case mode do
   "setup" ->
-    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "upgrade61@example.com", display_name: "ZZ Upgrade A", company: "CodeGen"})
-    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "upgrade62@example.com", display_name: "ZZ Upgrade B", company: "CodeGen"})
-    {:ok, _} = Accounts.allow(%{phone: c_phone, email: "upgrade63@example.com", display_name: "ZZ Upgrade C", company: "CodeGen"})
-    {:ok, _} = Accounts.allow(%{phone: d_phone, email: "upgrade64@example.com", display_name: "ZZ Upgrade D", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "upgrade61@example.com", display_name: "ZZ Upgrade A", company: "Risi"})
+    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "upgrade62@example.com", display_name: "ZZ Upgrade B", company: "Risi"})
+    {:ok, _} = Accounts.allow(%{phone: c_phone, email: "upgrade63@example.com", display_name: "ZZ Upgrade C", company: "Risi"})
+    {:ok, _} = Accounts.allow(%{phone: d_phone, email: "upgrade64@example.com", display_name: "ZZ Upgrade D", company: "Risi"})
     IO.puts("upgrade: setup ok")
   "friends" ->
     RisiMe.Social.make_friends!(user!.(a_phone).id, user!.(b_phone).id)

@@ -21,7 +21,7 @@ import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModelTest {
-    private val me = User("u1", "+94770000001", "Harsha", "CodeGen")
+    private val me = User("u1", "+94770000001", "Harsha", "Risi")
 
     private class FakeBackend(initial: Session) : SettingsBackend {
         override val session = MutableStateFlow<Session?>(initial)

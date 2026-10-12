@@ -376,8 +376,8 @@ alias RisiMe.Accounts.User
 a_phone = "+94770000981"; b_phone = "+94770000982"
 case mode do
   "setup" ->
-    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "uientry81@example.com", display_name: "ZZ UI A", company: "CodeGen"})
-    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "uientry82@example.com", display_name: "ZZ UI B", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "uientry81@example.com", display_name: "ZZ UI A", company: "Risi"})
+    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "uientry82@example.com", display_name: "ZZ UI B", company: "Risi"})
     IO.puts("uientry: setup ok")
   "friends" ->
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)
@@ -387,7 +387,7 @@ case mode do
     # A third, long-named friend of A (UI batch: a name longer than the row). Inserted directly: no device signs in as C.
     a = Repo.get_by!(User, phone: a_phone)
     c = Repo.get_by(User, phone: "+94770000983") ||
-          Repo.insert!(%User{phone: "+94770000983", email: "uientry83@example.com", company: "CodeGen",
+          Repo.insert!(%User{phone: "+94770000983", email: "uientry83@example.com", company: "Risi",
                              display_name: "ZZ UI Cee With An Extremely Long Display Name For Ellipsis Test"})
     RisiMe.Social.make_friends!(a.id, c.id)
     IO.puts("uientry: longfriend ok")

@@ -12,7 +12,7 @@ import org.junit.Test
 class ChatRowsTest {
     private val me = "aaaa"
     private val kamal = ContactEntity("+1", "Kamal", "Rise", "BBBB", true)
-    private val nimal = ContactEntity("+2", "Nimal", "CodeGen", "cccc", true)
+    private val nimal = ContactEntity("+2", "Nimal", "Risi", "cccc", true)
     private val ghost = ContactEntity("+3", "Ghost", "Rise", null, false)
 
     @Test fun unreadCountsAttachToTheRightDmAndSortingIsKept() {

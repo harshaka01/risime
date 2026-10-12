@@ -118,8 +118,8 @@ alias RisiMe.Accounts.User
 a_phone = "+94770000971"; b_phone = "+94770000972"
 case mode do
   "setup" ->
-    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "calltest71@example.com", display_name: "ZZ Call A", company: "CodeGen"})
-    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "calltest72@example.com", display_name: "ZZ Call B", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "calltest71@example.com", display_name: "ZZ Call A", company: "Risi"})
+    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "calltest72@example.com", display_name: "ZZ Call B", company: "Risi"})
     IO.puts("calltest: setup ok")
   "friends" ->
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)

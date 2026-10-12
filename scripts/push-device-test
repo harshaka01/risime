@@ -146,8 +146,8 @@ case mode do
     File.write!(Path.join(dir, "oidc-refresh.jwt"), refresh)
     IO.puts("pushtest: oidc tokens ok")
   "setup" ->
-    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "pushtest81@example.com", display_name: "ZZ Push A", company: "CodeGen"})
-    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "pushtest82@example.com", display_name: "ZZ Push B", company: "CodeGen"})
+    {:ok, _} = Accounts.allow(%{phone: a_phone, email: "pushtest81@example.com", display_name: "ZZ Push A", company: "Risi"})
+    {:ok, _} = Accounts.allow(%{phone: b_phone, email: "pushtest82@example.com", display_name: "ZZ Push B", company: "Risi"})
     IO.puts("pushtest: setup ok")
   "friends" ->
     a = Repo.get_by!(User, phone: a_phone); b = Repo.get_by!(User, phone: b_phone)

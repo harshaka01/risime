@@ -42,7 +42,7 @@ defmodule RisiMe.Fixtures do
             phone: phone,
             email: "u#{String.trim_leading(phone, "+")}@example.com",
             display_name: "User #{phone}",
-            company: "CodeGen"
+            company: "Risi"
           },
           Map.new(attrs)
         )

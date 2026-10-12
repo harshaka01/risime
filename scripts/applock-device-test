@@ -54,7 +54,7 @@ A() { adb -s "$S" "$@"; }
 # ---------------------------------------------------------------- server
 ss -ltnH "sport = :$PORT" | grep -q . && { echo "port $PORT busy"; exit 1; }
 cat > "$WORK/fixtures.exs" <<'EXS'
-{:ok, _} = RisiMe.Accounts.allow(%{phone: "+94770000991", email: "applock91@example.com", display_name: "ZZ Lock A", company: "CodeGen"})
+{:ok, _} = RisiMe.Accounts.allow(%{phone: "+94770000991", email: "applock91@example.com", display_name: "ZZ Lock A", company: "Risi"})
 IO.puts("applock: setup ok")
 EXS
 echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB)"

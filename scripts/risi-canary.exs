@@ -26,7 +26,7 @@ end
 case mode do
   "setup" ->
     dev_user = fn phone, name ->
-      {:ok, e} = Accounts.allow(%{phone: phone, email: "canary#{String.slice(phone, -2, 2)}@example.com", display_name: name, company: "CodeGen"})
+      {:ok, e} = Accounts.allow(%{phone: phone, email: "canary#{String.slice(phone, -2, 2)}@example.com", display_name: name, company: "Risi"})
       u = Repo.get_by(User, phone: phone) || Repo.insert!(%User{phone: e.phone, email: e.email, display_name: e.display_name, company: e.company})
       t = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
       Repo.insert!(%UserToken{user_id: u.id, token_hash: :crypto.hash(:sha256, t), device_name: "canary"})

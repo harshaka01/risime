@@ -420,7 +420,7 @@ defmodule RisiMe.ContractExamplesTest do
   end
 
   setup do
-    a = logged_in_user(display_name: "A", company: "CodeGen")
+    a = logged_in_user(display_name: "A", company: "Risi")
     b = logged_in_user(display_name: "B", company: "Rise")
     befriend!(a, b)
     {:ok, sock_a} = connect(UserSocket, %{"token" => a.token})
