@@ -1,5 +1,16 @@
 # Android status — 0.2 nightlies
 
+## READY PART 4 talking to Risi (12 Oct; decision 083; next APK)
+- "Risi is typing…" is the progress bubble of a running Risi turn (tool steps keep their labels; memory steps now
+  read "Searching your chats…" / "Searched your chats").
+- The empty Risi chat shows "What can Risi do?" with 4 examples; a tap fills the composer (never sends); the reminder
+  one leaves the cursor after "to call ".
+- Official composer: typing "@" offers **Risi** (picker chip, content-desc "Mention Risi") which turns on the @Risi
+  chip; typed "@Risi …" is an ask; in a 1:1 Official "Risi, …" is an ask too (`RisiTalk`, `sendFromComposer`).
+- Private (DM and group): "@Risi" typed shows "Risi only works in Official. Move this to Official?"; **Move to Official**
+  switches the tab and carries the text (`RisiUiBus.carryToOfficial`). Nothing reaches Risi from Private.
+- Gate `scripts/risi-chat-test`: RCTEST OK (two redroid phones). Shots `66-risi-*.png`.
+
 ## READY chat-list clarity + "hi without a padlock" (12 Oct, next nightly; not released)
 **1. One marker per preview** (`previewMarker()`, ChatsScreen.kt): "🔒 " Private (E2EE), "● " Official, "⚠ Not encrypted · "
 sent/received without E2EE. Never blank for a message; rows from before v17 are judged honestly (group → 🔒, MLS sender

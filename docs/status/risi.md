@@ -157,3 +157,39 @@ The nudges work in both modes.
 
 ## Step 5: backfill
 Not started; it goes through root's APK path.
+
+## PART 4: Talking to Risi (12 Oct; decision 083; gate `scripts/risi-chat-test`)
+
+**State:** green on `main` (483b14d server, 9e7d3d7 android, cfda1d8 gate). The server part is server-only and
+can ship through the fast lane (483b14d); the client part needs the next APK. Gate run on cfda1d8:
+`RCTEST OK` (fake-llm), every check passed. Shots: `docs/status/screens/66-risi-*.png`.
+
+### What failed before (baseline: nightly.4 code, the same gate with `--soft`)
+- **Offline: silent.** `Turn.loop` (turn.ex:625, `{:error, _}` → `{:snooze, 30}`) and `Requests.complete`
+  (requests.ex:337) snoozed a request whose model was down without a word, for up to 2 min (Turn) / 10 min (v1.24
+  path). The reply did come later (later_reply passed), but nothing told the asker.
+- **@Risi in a group's Official answered "I've replied in your Risi chat."** "what did we decide" takes the memory
+  route (`ScheduleIntent.classify` → `MemoryIntent`, turn.ex `forced_memory`); `memory_search` is a personal tool
+  and its result meta is always `personal: true` (memory_tools.ex:419), so §25.1 sent the answer to the asker's
+  Risi chat and the other members saw only the pointer line.
+- **Client (android):** no empty-chat card; the bubble said "Working…" (RisiTools.kt `RisiStepLabels.of`); no
+  "@" picker; typed "@Risi …" and 1:1 "Risi, …" were plain messages (`sendFromComposer`, RisiComposerUi.kt:56,
+  by design of decision 066); no Private hint.
+- Passing already: Risi chat reply in 6.8 s, quiet without @Risi, nothing reaches Risi from Private, logcat clean.
+
+### Fixes
+- `RisiMe.Agent.Offline`: "Risi is offline, I'll reply when I'm back." once per request (an `answer`, `call_ref`
+  null, notify the asker), when a model call fails or has been pending 10 s (the clock runs only while the
+  model is asked, never during a client tool). The request then snoozes 15 s at a time for up to 30 min
+  (`Turn.bounds` `wait_s` 1800, `retry_s` 15) and answers by itself.
+- The memory route in an Official chat searches that chat only (`conversation_id`, its promises only, meta
+  `personal: false`) and is answered there; across chats it stays personal.
+- Gate timings (fake-llm, 3 s model delay on the first question): Risi chat reply 6.7 s with "Risi is typing…"
+  on screen; offline notice 11.7 s after send (the model proxy down: 1 call + 3 backoff retries, then the notice);
+  the later reply within the 15-s retry after the model came back.
+
+### TODO
+- **(d) Voice to Risi:** not part of this gate. Voice notes (v1.41 §37) are being built separately; once a
+  voice ask in the Risi chat exists, add a step to `scripts/risi-chat-test` (a voice note → transcript → reply
+  ≤ 10 s, offline notice when the speech or model service is down).
+- `--live` (risi-l1 through the same proxy) is implemented but not run in this session.
