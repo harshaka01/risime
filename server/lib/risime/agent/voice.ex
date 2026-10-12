@@ -28,7 +28,11 @@ defmodule RisiMe.Agent.Voice do
   * **Risi chat** (§37.8): the note is a request: after the transcript the text is handled as a
     §24.11 `ask` with the note's `request_id` (buffered as a `risi_request` with
     `"via": "voice"` and `lang`, so the answer is in the transcript's language); `unclear` or
-    `failed` get the fixed "couldn't hear" answer and no tools run.
+    `failed` get the fixed "couldn't hear" answer and no tools run. PART 4d (Harsha
+    2026-10-12), never silent: `risi_progress` `working` ("Risi is typing…") goes out as soon
+    as the note arrives; the switch off or a note over 5 min get a fixed answer instead of
+    silence; a speech service that looks unhealthy is still tried. The model being down is
+    the typed-message path's (`RisiMe.Agent.Offline`: the request job's offline notice).
   * **Learning log:** one `transcribe` row per note (model, language, audio seconds, latency,
     status), `output: null`.
   """
@@ -44,6 +48,8 @@ defmodule RisiMe.Agent.Voice do
   @min_probability 0.6
   @mimes ["audio/ogg; codecs=opus", "audio/mp4"]
   @unclear_answer "I couldn't hear that clearly. Please try again or type it."
+  @off_answer "I can't listen to voice notes right now. Please type it."
+  @too_long_answer "That voice note is over 5 minutes, too long for me. Please send a shorter one or type it."
 
   ## Switches
 
@@ -136,7 +142,8 @@ defmodule RisiMe.Agent.Voice do
   @doc """
   A decrypted `voice` envelope of an active human member (`m` = `%{message_id, sender_id}`).
   Called in the conversation's process: it only decides and starts the transcription task.
-  Returns `:skip`, `:dropped` (malformed) or `{:started, pid}`.
+  Returns `:skip`, `:dropped` (malformed), `{:started, pid}` or (the Risi chat while Risi can't
+  listen) `{:replied, pid}`.
   """
   def received(conv, %{message_id: id, sender_id: sender}, env) do
     case validate(env) do
@@ -147,8 +154,19 @@ defmodule RisiMe.Agent.Voice do
 
       {:ok, note} ->
         case decide(conv, sender, env, note) do
-          {:ok, mode} -> start(conv, id, sender, env, note, mode)
-          :skip -> :skip
+          {:ok, :risi_chat} ->
+            # PART 4d: "Risi is typing…" right away, while the note is being transcribed.
+            typing(sender, env["request_id"], conv)
+            start(conv, id, sender, env, note, :risi_chat)
+
+          {:ok, mode} ->
+            start(conv, id, sender, env, note, mode)
+
+          {:reply, why} ->
+            cant_listen(conv, sender, env["request_id"], why)
+
+          :skip ->
+            :skip
         end
     end
   rescue
@@ -158,22 +176,35 @@ defmodule RisiMe.Agent.Voice do
   end
 
   @doc false
-  # §37.6 "When": `{:ok, :official | :risi_chat}` or `:skip`. Private never gets past the first
-  # line (no blob, no key, no speech call).
+  # §37.6 "When": `{:ok, :official | :risi_chat}`, `{:reply, :off | :too_long}` (Risi chat only)
+  # or `:skip`. Private never gets past the first line (no blob, no key, no speech call).
   def decide(conv, sender, env, note) do
-    risi_chat? = RisiMe.Groups.Tabs.risi_chat?(conv)
-
     cond do
       not RisiMe.Agent.official?(conv) -> :skip
+      RisiMe.Groups.Tabs.risi_chat?(conv) -> decide_risi_chat(conv, sender, env, note)
       not config_on?() -> :skip
       Map.has_key?(env, "forwarded") -> :skip
       note.duration_ms > @max_transcribe_ms -> :skip
       not Secretary.active_human?(conv, sender) -> :skip
-      risi_chat? and uuid?(env["request_id"]) -> {:ok, :risi_chat}
-      risi_chat? -> :skip
       env["transcribe"] == false -> :skip
       not setting(sender).transcribe -> :skip
       true -> {:ok, :official}
+    end
+  end
+
+  # §37.8 + PART 4d "never silent": in the user's Risi chat a note is a request, so it is always
+  # answered. The switch off or a note over 5 min get a fixed answer (no transcript); a speech
+  # service that looks unhealthy is still tried (if it really is down, the §37.8 `failed` card
+  # and answer follow). `transcribe: false` and the §37.7 setting don't apply here.
+  defp decide_risi_chat(conv, sender, env, note) do
+    cond do
+      not uuid?(env["request_id"]) -> :skip
+      Map.has_key?(env, "forwarded") -> :skip
+      not Secretary.active_human?(conv, sender) -> :skip
+      not (Risi.enabled?() and Out.ready?()) -> :skip
+      not enabled?() -> {:reply, :off}
+      note.duration_ms > @max_transcribe_ms -> {:reply, :too_long}
+      true -> {:ok, :risi_chat}
     end
   end
 
@@ -214,6 +245,16 @@ defmodule RisiMe.Agent.Voice do
   rescue
     e ->
       Logger.warning("Risi voice transcription failed in #{conv}: #{inspect(e.__struct__)}")
+
+      # The Risi chat is never silent (PART 4d).
+      if mode == :risi_chat do
+        try do
+          fixed_answer(conv, sender, request_id, @unclear_answer)
+        rescue
+          _ -> :ok
+        end
+      end
+
       {:error, :exception}
   end
 
@@ -452,7 +493,7 @@ defmodule RisiMe.Agent.Voice do
   end
 
   # §37.8: the request goes through the §24.11 path (limits, queue, the §25 loop).
-  defp risi_chat(conv, note_id, sender, %{status: "ok"}, _rid) do
+  defp risi_chat(conv, note_id, sender, %{status: "ok"}, rid) do
     env = Secretary.envelope(conv, note_id)
 
     if env do
@@ -461,16 +502,24 @@ defmodule RisiMe.Agent.Voice do
         sender_id: sender,
         plaintext: env |> Map.drop(~w(__sender __device __ts)) |> Jason.encode!()
       })
+    else
+      # The working copy didn't land (never silent): the "couldn't hear" answer.
+      fixed_answer(conv, sender, rid, @unclear_answer)
     end
 
     :ok
   end
 
-  defp risi_chat(conv, _note_id, sender, _t, rid) do
+  defp risi_chat(conv, _note_id, sender, _t, rid),
+    do: fixed_answer(conv, sender, rid, @unclear_answer)
+
+  # A rule-made `answer` to the note's request (notifies the asker only); it ends the typing
+  # bubble (the answer and a `done` signal).
+  defp fixed_answer(conv, sender, rid, text) do
     risi = %{
       "kind" => "answer",
       "request_id" => rid,
-      "answer" => @unclear_answer,
+      "answer" => text,
       "refs" => [],
       "confidence" => 1.0,
       "sources" => [],
@@ -480,8 +529,28 @@ defmodule RisiMe.Agent.Voice do
       "notify" => [sender]
     }
 
-    send_post(conv, @unclear_answer, risi, [])
+    send_post(conv, text, risi, [])
+    RisiMe.Agent.Progress.send(sender, rid, conv, "done")
     :ok
+  end
+
+  # The Risi chat while Risi can't listen (the switch off) or the note is over 5 min: an answer,
+  # never silence. In a task: never posts from the conversation's process.
+  defp cant_listen(conv, sender, rid, why) do
+    text = if why == :off, do: @off_answer, else: @too_long_answer
+
+    case Task.Supervisor.start_child(__MODULE__.TaskSup, fn ->
+           fixed_answer(conv, sender, rid, text)
+         end) do
+      {:ok, pid} -> {:replied, pid}
+      {:error, _} -> :skip
+    end
+  end
+
+  defp typing(sender, rid, conv) do
+    RisiMe.Agent.Progress.send(sender, rid, conv, "working")
+  rescue
+    _ -> :ok
   end
 
   defp log(conv, t, note, latency) do
