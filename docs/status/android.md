@@ -1,5 +1,44 @@
 # Android status — 0.2 nightlies
 
+## READY v1.39 §36 call transcription fast path (12 Oct; not released)
+1:1 Official calls only. Code: `calls/transcribe/` (consent machine, chunker, Ogg/Opus muxer + MediaCodec Opus encoder,
+own-mic tap, upload queue, manager, call-screen UI), `net/Protocol139.kt`, `data/tabs/RisiTranscriptLines.kt`,
+`ui/settings/DeveloperSection.kt`, debug-only `debug/MicInjectReceiver.kt`.
+- **Switch + capability:** `/auth/config call_transcribe` (`callTranscribeSwitch`, persisted); `call_transcribe` is advertised
+  only with `calls` + `tabs`, the switch on and the platform Opus encoder (Android 10+).
+- **Official tab:** a call placed from a 1:1's Official tab (header button → `CallActions(official = true)`) sets
+  `call_offer.tab = "official"`; the callee keeps it from the offer (`CallSnapshot.official`). Private calls: no button,
+  no code path; a request for a call this phone holds as Private is declined at once with `private_call`.
+- **Call screen:** [Transcribe] (live Official call, switch + capability) → `call:transcribe request`, "Asking <peer>…" with
+  Cancel; the peer's dialog "<name> wants Risi to transcribe this call. (developer model comparison on)" + "Audio is sent to Risi
+  for transcription." with Allow / Decline, closing at `expires_at`; the red "Risi transcribing" bar (honest line, decision 048)
+  with Stop → "Stop" / "Stop and delete transcript"; the bar fails toward showing (only a final state from the signal, `GET` or
+  `409 stopped` removes it). End sends `stop ended` first; reconnect → `GET /calls/{id}/transcribe` + resend held chunks.
+- **Audio:** ONLY this phone's capture (`JavaAudioDeviceModule` record samples), 16 kHz mono, 12-s chunks (silent ones as
+  keep-alive; muted = silence), MediaCodec Opus 24 kbit/s muxed to Ogg in memory, multipart upload with seq/offset_ms/duration_ms/
+  codec=ogg_opus. At most 2 chunks held (oldest dropped, zeroed). §36.4 errors: 409/403/404/503 off → stop at once (+GET),
+  429 → back off (Retry-After), 503 unavailable/5xx → same seq once after 5 s then drop, 413/422 → drop. Buffers zeroed after use;
+  nothing on disk (unit test scans the package for file/cache/muxer/log APIs).
+- **Official chat:** `call_transcript` lines ("You 13:39" / "<name> hh:mm" + text, names/zone from this phone, no model name),
+  the consent lines (table wording, discard variant), the developer compare card (models, ms, routed first, failures in red),
+  `lang` parsed and ignored.
+- **Developer:** Settings → About → tap the version 7× → Developer → "Compare speech models on call transcripts"
+  (GET/PUT `/me/risi/dev`, only when a fresh `GET /me` says `risi_dev`).
+- **Tests:** `TranscribeConsentTest`, `TranscribeAudioTest` (chunker, Ogg CRC/granules, no-disk guard), `TranscribeUploaderTest`,
+  `CallTranscribeManagerTest` (Private sends only the decline; own-mic chunks; 409 stops; hang-up stop ended; injection),
+  `RisiTranscriptLinesTest`, ContractExamplesTest (21 v1.39 examples).
+- **Device gate `scripts/call-transcribe-test`** (own redroid pair -ct1/-ct2, temp server :4412 restarted with
+  RISI_CALL_TRANSCRIBE=on, the local speech service :8200): see the run notes below. Clips: `android/testdata/transcribe`
+  (synthetic MMS-TTS en/ta); Sinhala reuses the speech service's SLR30 clip (no usable offline Sinhala TTS found).
+  Screens `docs/status/screens/65-transcribe-*.png`.
+- **Gate run 12 Oct (`CALLTEST OK`):** Private call: no button, 0 chunks; B declined → no bar, 0 chunks; allowed → red bar on
+  both; 12 chunks uploaded from injected en/si/ta; B's Stop removed the bar on both and uploads stopped; second session ended by
+  "Stop and delete transcript"; Official chat lines A en + ta ("You hh:mm"), B si, no misattribution; no audio file on either
+  phone, server temp dirs or the speech container; logcat clean. WARN (non-blocking): no summary card within 90 s (temp server
+  uses the fake LLM; the server's Summary.run did run); the discard consent line was off screen for the check; once (an earlier
+  run) the Sinhala chunk came back romanised ("…maa periwaraa gatha") from the speech model, not Sinhala script.
+- Not checked on a device: compare mode end to end (the developer switch is unit-level; needs `RISI_DEV_USERS` + compare on).
+
 ## READY ownership quick fix (12 Oct, next nightly)
 - About: "© 2026 RisiCloud. All rights reserved." (`ABOUT_OWNER_LINE`; "Risi" stays the assistant's name).
 - Licences off every visible menu (About's "Open-source licences" button and Settings → Calls' "Show licences" are gone) →
