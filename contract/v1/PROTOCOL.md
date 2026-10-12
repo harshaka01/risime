@@ -10464,7 +10464,7 @@ setting. Old apps drop an unknown envelope type (§10.3) and show Risi kinds as 
 `voice_payload.json`:
 ```json
 {"v": 1, "type": "voice",
- "blob": {"blob_id": "…", "size": 49248, "sha256": "<b64 SHA-256 of the ciphertext>"},
+ "blob": {"blob_id": "…", "size": 49168, "sha256": "<b64 SHA-256 of the ciphertext>"},
  "enc": {"alg": "A256GCM-S64K", "key": "<b64 32 bytes>", "plain_size": 49152},
  "mime": "audio/ogg; codecs=opus", "duration_ms": 12400,
  "waveform": "<b64 of exactly 64 bytes>"}

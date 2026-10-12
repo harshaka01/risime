@@ -17,3 +17,6 @@ Set `"size": 49168` in `voice_payload.json`, `voice_payload_reply_no_transcribe.
 ## Meanwhile (android)
 `ContractExamplesTest` checks each voice example twice: as shipped (strictly dropped, or decoded once fixed)
 and with the size corrected (decoded field by field). Nothing else depends on the wrong value.
+
+## Status
+Applied by root 2026-10-12 (examples and the §37 sample in PROTOCOL.md now say 49168; no version bump, example fix only).
