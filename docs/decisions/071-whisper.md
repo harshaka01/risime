@@ -1,5 +1,7 @@
 # 071 — Self-hosted speech-to-text for Risi call transcription (faster-whisper on 127.0.0.1:8200)
-**Status:** accepted 2026-10-09 (root). Implements the infra part of decision 070 (§27.7–27.9:
+**Status:** accepted 2026-10-09 (root); **amended 2026-10-12** (multi-model routing for Sinhala and
+Tamil, new memory numbers: see "Amendment 2026-10-12" at the end, which overrides the image tag,
+default compute type, allocator and memory numbers above). Implements the infra part of decision 070 (§27.7–27.9:
 Risi listening to Official calls). The speech model is named in `made_by.also` as
 `faster-whisper-large-v3` (provider `risime`, task `transcribe`).
 
@@ -152,3 +154,111 @@ No offline TTS is installed on spark2, and real speech is the better test anyway
 
 ## Needs Harsha
 Nothing needs sudo: Docker and the NVIDIA runtime were already in place for vLLM.
+
+## Amendment 2026-10-12: si / ta / en routing, compare mode, model pool
+For the quick Official-call transcription path. Root only did the speech service; the wire contract
+is written separately.
+
+### Models (all local, nothing downloaded)
+| Alias | Role | Source on disk | Served from (`~/risime-models`) | Runtime |
+|---|---|---|---|---|
+| `faster-whisper-large-v3` | default, **language detector**, `en` route | existing | `faster-whisper-large-v3` | CTranslate2, now **int8_float16** |
+| `whisper-small-sinhala` | `si` route | `~/risime-eval-models/whisper-small-sinhala` (SinhaSpeech v6-e6-run11-best) | `faster-whisper-small-sinhala` (CT2 float16, converted) | faster-whisper |
+| `tamil-asr-qwen3` | `ta` route | `~/risime-eval-models/tamil-asr-qwen3` (lemuralabs) | `tamil-asr-qwen3` (copied as is) | transformers 5.16 (in the image) |
+| `whisper-large-v3-sinhala` | compare only | `~/risime-eval-models/whisper-large-v3-sinhala` (kasunw) | `faster-whisper-large-v3-sinhala` (CT2 int8_float16) | faster-whisper |
+| `faster-whisper-large-v3-turbo` | compare only | existing | `faster-whisper-large-v3-turbo` | faster-whisper |
+
+- `infra/whisper/convert_models.py` does the conversions inside the image, CPU only, offline
+  (`ct2-transformers-converter` equivalent with `load_as_float16`, `low_cpu_mem_usage`; the fast
+  `tokenizer.json` is built locally, else faster-whisper would fetch one).
+- **tamil-asr-qwen3** is in Qwen's original layout (`thinker_config`, `thinker.*` weights), which
+  transformers' native `Qwen3ASRForConditionalGeneration` doesn't read directly.
+  `infra/whisper/qwen3_asr.py` builds the native config, builds the model on the GPU and streams
+  the safetensors into it with a key map (the audio projector moves from the audio tower to
+  `multi_modal_projector`). No accelerate, no CPU copy: load 1.2 s warm, 7–8 s cold page cache
+  (25 s with `from_pretrained` + `.to(cuda)`). Greedy decoding (`QWEN_ASR_BEAMS=1`); the card
+  recommends beam 5, which is slower. Torch's native ops JIT a Triton helper, so a small **exec
+  tmpfs `/cache`** holds Triton's kernels (never audio); `/tmp` stays noexec.
+- Not done: the eval's vLLM path for these models (8.6–11.3 GB each) — far too big for the memory left.
+
+### API (all Bearer auth; OpenAI shape kept)
+- `POST /v1/audio/transcriptions`, `model`:
+  - `auto`: route per chunk. Silero VAD first: no speech → `text: ""`, no model run.
+    `language` given as `si`/`ta`/`en` → that route, no detection. Otherwise large-v3
+    `detect_language` (VAD'd, first 30 s), probabilities **restricted to si/ta/en and
+    renormalised** (large-v3's own top guess for Sinhala is often Bengali); best ≥
+    `WHISPER_ROUTE_MIN_P` (0.5) → route, else large-v3 with its own detection
+    (`reason: low_confidence`). If the routed model can't load (memory floor) → large-v3 with the
+    detected language (`fallback: memory`).
+  - any alias above (or `whisper-1` = default) → that model; `language` is forced to the model's
+    own language for the si/ta models. 503 if it can't be loaded for memory.
+  - `json` for `auto`: `{"text", "model", "language"}` (`model` = what really ran, for `made_by`).
+    `verbose_json`: as before plus `model`, `model_processing_s`, `load_s` and, for `auto`,
+    `routing: {reason, language, probability, probs{si,ta,en}, raw_probs, whisper_top,
+    whisper_top_p, detect_s[, fallback]}`. Segments are empty for tamil-asr-qwen3.
+- `POST /v1/audio/compare`: multipart `file`, optional `language`, `models` (comma list; default
+  all), `prompt`. Runs detection, then every model **sequentially** (one compare at a time;
+  compare-only models are unloaded right after use). Returns `{duration, detected, routed_model,
+  results: [{model, text, language, processing_s, load_s, routed} | {model, error}],
+  processing_s}`.
+- `GET /v1/models`: every alias with `role`, `language`, `loaded`, `est_mb`, plus `auto` with its
+  routes and `memory: {budget_mb, min_available_mb, available_mb}`.
+
+### Memory (measured 2026-10-12 next to risi-l1, nvidia-smi per process + host MemAvailable)
+`CT2_CUDA_ALLOCATOR=cuda_malloc_async` (frees instead of caching) and int8_float16 for large-v3
+cut the idle service from 7.3 GB to 2.9 GB, and large-v3 got faster (0.53 s vs 0.70 s, JFK).
+
+| Model | GPU (unified) MiB | host MemAvailable drop | warm latency (clip) | load |
+|---|---|---|---|---|
+| whisper service idle (large-v3 int8 loaded) | 1 998 | 2.9 GB (old float16 service: 7.3 GB) | — | 3–4 s at start |
+| + large-v3 after use | +198 | +0.4 GB | 0.53 s model / 0.85 s request (11 s en) | — |
+| + whisper-small-sinhala | +672 | +0.8 GB | 0.37 s model / 0.7 s request (5.2 s si) | 0.3 s |
+| + tamil-asr-qwen3 (bf16) | +4 617 | +6.3–6.6 GB | 3.4 s model / 3.8 s request (7.8 s ta) | 1.2 s warm, 7–8 s cold |
+| whisper-large-v3-sinhala (int8, compare) | +1 920 | ~+2.2 GB | 1.0 s (5.2 s si) | 1.3–1.7 s |
+| large-v3-turbo (fp16, compare) | +2 114 | ~+2.4 GB | 0.24 s (11 s en) | 0.9–1.6 s |
+
+- **All three routed models resident: ~11 GB** of host memory (GPU 7.5 GB + ~3 GB host side:
+  torch/transformers libraries and shared memory). risi-l1 holds 47.5 GB GPU and is untouched.
+- MemAvailable with risi-l1 running and whisper stopped swung between 16 and 18 GB today (Gradle
+  daemons from the other sessions take 4–7 GB each). With everything loaded it fell to 3.4 GB,
+  and once to 1.8 GB when another Gradle daemon started; whisper was restarted to give the
+  memory back, and the pool now does that by itself (below).
+- **Pool rules** (env, `infra/docker-compose.whisper.yml`): lazy loads; the detector is never
+  unloaded; a load is refused if the loaded models' estimates would pass
+  `WHISPER_MEM_BUDGET_MB` (11 000) or host MemAvailable would fall below
+  `WHISPER_MIN_AVAILABLE_MB` (3 072) — LRU models are unloaded first; every 10 s idle models are
+  unloaded (tamil-asr-qwen3 after `WHISPER_IDLE_UNLOAD_S`, 900 s; compare-only ones after 120 s),
+  and while MemAvailable is under the floor every unused model except the detector is unloaded.
+  So Tamil may answer through large-v3 (`fallback: memory`, CER 12 % on the FLEURS clip) when
+  the host is busy, and risi-l1 is never starved.
+- `mem_limit` 6g → **8g** (host-side RAM only; torch adds ~2 GB anon/shmem, and model-file page
+  cache counts here; 6g hit the limit with reclaim). No raise near 16 GiB was needed.
+
+### Routing and quality (`scripts/asr-smoke`, `--manifest ~/risime-eval-data/manifest.jsonl`)
+- Test clips (the repo's three Opus clips): si → whisper-small-sinhala, CER 3 %; ta →
+  tamil-asr-qwen3, CER 11 %; en → large-v3, exact. Detection: si p = 0.92, ta 0.997, en 0.9999,
+  0.19–0.2 s. Silence → empty text in 0.12 s.
+- 100 eval clips (50 YouTube Sinhala, 50 FLEURS Tamil, read/broadcast speech; not in the repo):
+  **routing 96 %** (ta 49/50, si 47/50: 2 → ta, 1 → en). Mean CER through `auto`: **ta 8.0 %**
+  (large-v3 was 23.4 % on the same set), **si 12.4 %** (large-v3: 92 %). No English set was
+  available offline beyond the JFK clip (no TTS on spark2), so English routing is checked on that
+  clip only.
+- Compare on the si clip: kasunw large-v3-sinhala CER 0 %, small 3 %, large-v3/turbo wrong script.
+- Concurrency: 6 parallel mixed requests: si/en 1.4–6 s; two Tamil chunks at once take 8–11 s,
+  because generation on one Qwen model isn't batched. Fine for 1–2 Tamil calls; 4 concurrent Tamil
+  calls with 15 s chunks would lag (follow-up: batch Tamil chunks, or a static-cache compile).
+- Per-chunk, not per-word: a 10–15 s chunk gets one language. Code-mixed Singlish/Tanglish chunks go
+  to the majority language.
+
+### Privacy (unchanged, verified)
+Audio is decoded from the request body in memory and the upload file is closed at once (Starlette
+spools only bodies > 1 MB, into the `/tmp` tmpfs). `scripts/asr-smoke` checks that `docker diff`
+is unchanged by a run, that `/tmp` and `/cache` hold only known caches (CUDA JIT, Triton,
+onnxruntime's id files), and that no file there starts like audio (Ogg, RIFF, FLAC, MP3, WebM).
+Logs carry metrics only (model, route reason, language, seconds).
+
+### Image and rollback
+`risime/whisper:ct2-4.8.2-fw-1.2.1-asr2` (same CTranslate2/faster-whisper build; adds
+`qwen3_asr.py`). Rollback: set `image:` back to `risime/whisper:ct2-4.8.2-fw-1.2.1` (still on
+disk) with the old `server.py`, or keep the new image with `WHISPER_COMPUTE_TYPE=float16` and
+`CT2_CUDA_ALLOCATOR=cub_caching` in `.env` to restore the old numbers.

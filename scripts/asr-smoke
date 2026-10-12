@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# Smoke test of the multi-model speech service (decision 071, amendment 2026-10-12).
+# Against the running risime-whisper container (127.0.0.1:8200), it checks:
+#   - port 8200 is bound to 127.0.0.1 only; /health; 401 without the key;
+#   - /v1/models lists auto + the routed models (si, ta, en);
+#   - model=auto on the three Opus test clips in infra/whisper/testdata routes
+#     si -> whisper-small-sinhala, ta -> tamil-asr-qwen3, en -> faster-whisper-large-v3, with a
+#     non-empty transcript, character error rate within ASR_SMOKE_MAX_CER (default 0.35), and
+#     warm latency within ASR_SMOKE_MAX_S (default 10 s; first, cold call ASR_SMOKE_MAX_COLD_S, 60 s);
+#   - a 3 s silence clip (built in memory) returns empty text (route reason no_speech);
+#   - POST /v1/audio/compare returns every candidate with text, language and processing_s;
+#   - no residual files: the container filesystem is unchanged by the run (docker diff) and its
+#     tmpfs mounts hold nothing but Triton's compiled kernels (no audio).
+# Per-model latency and the container's memory are printed. The key is never printed.
+#   scripts/asr-smoke [--url http://127.0.0.1:8200] [--manifest FILE.jsonl]
+# --manifest: also measure routing accuracy on local clips (jsonl: audio, lang[, text]); e.g.
+#   ~/risime-eval-data/manifest.jsonl (50 Sinhala + 50 Tamil eval clips, not in the repo).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+url=http://127.0.0.1:8200
+manifest=
+container=${ASR_SMOKE_CONTAINER:-risime-whisper-whisper-1}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --url) url=$2; shift 2 ;;
+    --manifest) manifest=$2; shift 2 ;;
+    *) echo "usage: $0 [--url URL] [--manifest FILE.jsonl]" >&2; exit 2 ;;
+  esac
+done
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+WHISPER_API_KEY="${WHISPER_API_KEY:-$(grep -E '^WHISPER_API_KEY=' .env 2>/dev/null | tail -1 | cut -d= -f2-)}"
+[[ -n "$WHISPER_API_KEY" ]] || fail "WHISPER_API_KEY missing from .env"
+export WHISPER_API_KEY WHISPER_URL="$url" TESTDATA="$PWD/infra/whisper/testdata" MANIFEST="$manifest"
+
+port="${url##*:}"; port="${port%%/*}"
+binds="$(ss -ltnH "sport = :$port" | awk '{print $4}' | sort -u)"
+[[ -n "$binds" ]] || fail "nothing listens on :$port"
+while read -r b; do
+  [[ "$b" == "127.0.0.1:$port" ]] || fail "port $port bound to $b (must be 127.0.0.1 only)"
+done <<<"$binds"
+echo "ok   bind: $(echo "$binds" | tr '\n' ' ')"
+[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url/health")" == 200 ]] || fail "/health"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url/v1/models")"
+[[ "$code" == 401 ]] || fail "/v1/models without key returned $code, want 401"
+echo "ok   /health 200, no key -> 401"
+# Snapshot of the container's filesystem changes (the NVIDIA runtime adds files at creation).
+diff0="$(docker diff "$container" 2>/dev/null | sort || true)"
+
+python3 -I - <<'PY'
+import io, json, math, os, struct, sys, time, unicodedata, urllib.error, urllib.request, uuid, wave
+
+URL, KEY, DATA = os.environ["WHISPER_URL"], os.environ["WHISPER_API_KEY"], os.environ["TESTDATA"]
+MAX_S = float(os.environ.get("ASR_SMOKE_MAX_S", "10"))
+MAX_COLD_S = float(os.environ.get("ASR_SMOKE_MAX_COLD_S", "60"))  # includes a model load
+MAX_CER = float(os.environ.get("ASR_SMOKE_MAX_CER", "0.35"))
+H = {"Authorization": f"Bearer {KEY}"}
+
+
+def fail(msg):
+    print(f"FAIL: {msg}", file=sys.stderr); sys.exit(1)
+
+
+def get(path):
+    with urllib.request.urlopen(urllib.request.Request(URL + path, headers=H), timeout=10) as r:
+        return json.load(r)
+
+
+def post(path, audio, name, fields, timeout=300):
+    b = uuid.uuid4().hex
+    body = b""
+    for k, v in fields.items():
+        body += f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+    ctype = "audio/wav" if name.endswith(".wav") else "audio/ogg"
+    body += (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
+             f"Content-Type: {ctype}\r\n\r\n").encode() + audio + f"\r\n--{b}--\r\n".encode()
+    req = urllib.request.Request(URL + path, data=body, method="POST",
+                                 headers={**H, "Content-Type": f"multipart/form-data; boundary={b}"})
+    t0 = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r), time.monotonic() - t0
+    except urllib.error.HTTPError as e:
+        fail(f"{path} {name}: HTTP {e.code} {e.read()[:300]!r}")
+
+
+def norm(s):
+    s = unicodedata.normalize("NFC", s).lower().replace("‍", "")
+    return "".join(c for c in s if c.isalnum() or c.isspace() or unicodedata.category(c).startswith("M"))
+
+
+def cer(ref, hyp):
+    a, b = norm(ref).replace(" ", ""), norm(hyp).replace(" ", "")
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] / max(len(a), 1)
+
+
+models = get("/v1/models")
+ids = [m["id"] for m in models["data"]]
+want = {"auto", "faster-whisper-large-v3", "whisper-small-sinhala", "tamil-asr-qwen3"}
+if not want <= set(ids):
+    fail(f"/v1/models lacks {want - set(ids)}: {ids}")
+print(f"ok   /v1/models: {ids}")
+
+ROUTE = {"si": "whisper-small-sinhala", "ta": "tamil-asr-qwen3", "en": "faster-whisper-large-v3"}
+clips = [("si", "si-slr30-sin_6897_3117231257.ogg", open(os.path.join(DATA, "si.txt")).read()),
+         ("ta", "ta-fleurs-10015420708072669120.ogg", open(os.path.join(DATA, "ta.txt")).read()),
+         ("en", "en-jfk.ogg", "And so, my fellow Americans, ask not what your country can do for "
+                              "you, ask what you can do for your country.")]
+lat = {}
+for rnd in ("cold", "warm"):
+    for lang, name, ref in clips:
+        audio = open(os.path.join(DATA, name), "rb").read()
+        out, dt = post("/v1/audio/transcriptions", audio, name,
+                       {"model": "auto", "response_format": "verbose_json"})
+        r = out.get("routing", {})
+        if r.get("language") == lang and r.get("fallback") == "memory":
+            # Protective, not a bug: the routed model would push host MemAvailable under the
+            # floor, so large-v3 answered. Reported loudly; the routing decision itself was right.
+            print(f"WARN {rnd} {lang}: routed right, but {ROUTE[lang]} not loaded (memory "
+                  f"floor), answered by {out['model']}")
+        elif r.get("language") != lang or out["model"] != ROUTE[lang]:
+            fail(f"{name}: routed to {out['model']} ({r}), want {lang} -> {ROUTE[lang]}")
+        if not out["text"].strip():
+            fail(f"{name}: empty transcript")
+        c = cer(ref.strip(), out["text"])
+        if c > MAX_CER and r.get("fallback") != "memory":
+            fail(f"{name}: CER {c:.0%} > {MAX_CER:.0%}: {out['text']!r}")
+        lim = MAX_COLD_S if rnd == "cold" else MAX_S
+        if dt > lim:
+            fail(f"{name} ({rnd}): {dt:.2f}s > {lim}s")
+        lat.setdefault(out["model"], []).append((rnd, dt, out["load_s"], out["duration"]))
+        print(f"ok   {rnd} {lang}: -> {out['model']} (p={r.get('probability')}, "
+              f"detect {r.get('detect_s')}s, load {out['load_s']}s), {out['duration']:.1f}s audio "
+              f"in {dt:.2f}s, CER {c:.0%}: {out['text']}")
+
+# Silence (3 s, in memory, WAV): no speech -> empty text, no model run.
+buf = io.BytesIO()
+with wave.open(buf, "wb") as w:
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+    w.writeframes(b"\x00\x00" * 48000)
+out, dt = post("/v1/audio/transcriptions", buf.getvalue(), "silence.wav",
+               {"model": "auto", "response_format": "verbose_json"})
+if out["text"].strip() or out.get("routing", {}).get("reason") != "no_speech":
+    fail(f"silence: {out}")
+print(f"ok   silence: empty text, route no_speech, {dt:.2f}s")
+
+# json (default) response for auto carries model + language for made_by.
+out, _ = post("/v1/audio/transcriptions", open(os.path.join(DATA, "en-jfk.ogg"), "rb").read(),
+              "en-jfk.ogg", {"model": "auto"})
+if set(out) != {"text", "model", "language"}:
+    fail(f"json shape: {sorted(out)}")
+print(f"ok   json shape for auto: {sorted(out)}")
+
+# Compare: every candidate, sequentially.
+for lang, name, ref in clips[:2]:
+    out, dt = post("/v1/audio/compare", open(os.path.join(DATA, name), "rb").read(), name, {})
+    served = [m["id"] for m in models["data"] if m["id"] != "auto"]
+    got = [r["model"] for r in out["results"]]
+    if got != served:
+        fail(f"compare models {got}, want {served}")
+    bad = [r for r in out["results"] if "error" in r or not r["text"].strip()]
+    if bad:
+        fail(f"compare: {bad}")
+    if out["routed_model"] != ROUTE[lang]:
+        fail(f"compare routed {out['routed_model']}, want {ROUTE[lang]}")
+    print(f"ok   compare {lang} ({dt:.1f}s total, detected {out['detected']['language']} "
+          f"p={out['detected']['probability']}):")
+    for r in out["results"]:
+        print(f"       {r['model']:30s} {r['processing_s']:6.2f}s (load {r['load_s']:.1f}s) "
+              f"CER {cer(ref.strip(), r['text']):4.0%} lang={r['language']}: {r['text'][:70]}")
+
+print("info latency per model (request wall time, s):")
+for m, xs in lat.items():
+    print(f"       {m:30s} " + ", ".join(f"{k} {d:.2f} (load {l:.1f}, audio {a:.1f})"
+                                          for k, d, l, a in xs))
+
+man = os.environ.get("MANIFEST")
+if man:
+    rows = [json.loads(l) for l in open(man) if l.strip()]
+    ok, per = 0, {}
+    for row in rows:
+        out, dt = post("/v1/audio/transcriptions", open(row["audio"], "rb").read(),
+                       os.path.basename(row["audio"]), {"model": "auto",
+                                                        "response_format": "verbose_json"})
+        got = (out.get("routing") or {}).get("language")
+        p = per.setdefault(row["lang"], {"n": 0, "ok": 0, "s": 0.0, "cer": 0.0, "miss": {}})
+        p["n"] += 1; p["s"] += dt
+        if got == row["lang"]:
+            ok += 1; p["ok"] += 1
+        else:
+            p["miss"][str(got)] = p["miss"].get(str(got), 0) + 1
+        if row.get("text"):
+            p["cer"] += cer(row["text"], out["text"])
+    print(f"info routing accuracy on {man}: {ok}/{len(rows)} = {ok / max(len(rows), 1):.1%}")
+    for l, p in per.items():
+        print(f"       {l}: {p['ok']}/{p['n']} routed right, mean {p['s'] / p['n']:.2f}s, "
+              f"mean CER {p['cer'] / p['n']:.1%}, misrouted as {p['miss']}")
+
+mem = get("/v1/models")["memory"]
+loaded = [m["id"] for m in get("/v1/models")["data"] if m.get("loaded")]
+print(f"info loaded {loaded}; host MemAvailable {mem['available_mb']} MB "
+      f"(floor {mem['min_available_mb']}, budget {mem['budget_mb']} MB)")
+PY
+
+# Residual files: read-only root (docker diff unchanged); tmpfs mounts hold no audio.
+diff1="$(docker diff "$container" 2>/dev/null | sort || true)"
+[[ "$diff0" == "$diff1" ]] || fail "container filesystem changed during the run: $(comm -13 <(echo "$diff0") <(echo "$diff1"))"
+# Known caches only (CUDA JIT, Triton kernels, onnxruntime's id files from the Silero VAD); and no
+# file in /tmp or /cache may start like audio (Ogg, RIFF/WAV, FLAC, MP3, WebM/Matroska).
+left="$(docker exec "$container" find /tmp /cache -type f ! -path '/cache/triton/*' \
+  ! -path '/tmp/.nv/ComputeCache/*' ! -path '/tmp/.cache/Microsoft/*' ! -path '/tmp/.ses' \
+  ! -path '/tmp/torchinductor_*' 2>/dev/null || true)"
+[[ -z "$left" ]] || fail "unexpected files in tmpfs: $left"
+audio="$(docker exec "$container" python3 -I -c '
+import os
+magic = (b"OggS", b"RIFF", b"fLaC", b"ID3", b"\x1aE\xdf\xa3")
+for root in ("/tmp", "/cache"):
+    for d, _, fs in os.walk(root):
+        for f in fs:
+            p = os.path.join(d, f)
+            try:
+                head = open(p, "rb").read(4)
+            except OSError:
+                continue
+            if head.startswith(magic) or f.endswith((".ogg", ".opus", ".wav", ".webm")):
+                print(p)
+print("scanned")
+' 2>&1 || true)"
+[[ "$audio" == scanned ]] || fail "audio files written (or scan failed): $audio"
+echo "ok   no residual files (docker diff unchanged by the run; /tmp, /cache hold no audio)"
+pid="$(docker inspect -f '{{.State.Pid}}' "$container")"
+gpu="$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null | awk -F', ' -v p="$pid" '$1==p{print $2}')"
+rss="$(docker stats --no-stream --format '{{.MemUsage}}' "$container")"
+echo "info memory: whisper GPU ${gpu:-?} MiB (unified), container RSS $rss, host $(grep MemAvailable /proc/meminfo | tr -s ' ')"
+echo "PASS asr-smoke"

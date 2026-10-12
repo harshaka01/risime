@@ -8,13 +8,15 @@
 # Model: ~/risime-models/faster-whisper-large-v3 (outside the repo), see decision 071.
 # Faster option: WHISPER_MODEL_DIR=faster-whisper-large-v3-turbo in .env (alias stays the same
 # unless WHISPER_MODEL_ALIAS is set too; the learning log records the alias).
+# Extra models (si, ta, compare-only) are prepared once by infra/whisper/convert_models.py into
+# ~/risime-models; model=auto routes per chunk by language. Smoke: scripts/asr-smoke.
 # Smoke test: scripts/whisper-smoke
 name: risime-whisper
 services:
   whisper:
     build:
       context: whisper
-    image: risime/whisper:ct2-4.8.2-fw-1.2.1
+    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr2
     restart: unless-stopped
     ports:
       - "127.0.0.1:8200:8000"
@@ -22,6 +24,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=256m,mode=1777
+      # Triton (torch's native ops, used by the Qwen3-ASR path) compiles a small .so and must
+      # dlopen it, so this tmpfs alone allows exec. It holds compiled kernels only, never audio.
+      - /cache:size=128m,mode=1777,exec
     user: "1000:1000"
     security_opt:
       - no-new-privileges:true
@@ -29,16 +34,28 @@ services:
     # Host-side RAM (Python, decoder, buffers). On the GB10 the model's CUDA memory is unified
     # memory that the driver allocates outside this cgroup; it is bounded by the model size and
     # the CTranslate2 cache limit below. Measured numbers: docs/decisions/071-whisper.md.
-    mem_limit: 6g
+    # 8g since 2026-10-12: torch + transformers for Qwen3-ASR add ~2 GB anon/shmem, and the
+    # page cache of model files read at load counts here too (6g hit the limit with reclaim).
+    mem_limit: 8g
     environment:
       WHISPER_API_KEY: ${WHISPER_API_KEY:?set in .env}
       WHISPER_MODEL_PATH: /models/${WHISPER_MODEL_DIR:-faster-whisper-large-v3}
       WHISPER_MODEL_ALIAS: ${WHISPER_MODEL_ALIAS:-faster-whisper-large-v3}
-      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float16}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8_float16}
       WHISPER_NUM_WORKERS: ${WHISPER_NUM_WORKERS:-2}
-      # CTranslate2's caching allocator keeps at most 1 GiB of freed CUDA blocks.
-      CT2_CUDA_ALLOCATOR: cub_caching
-      CT2_CUDA_CACHING_ALLOCATOR_CONFIG: "4,3,12,1073741824"
+      # Model pool (decision 071 amendment 2026-10-12): lazy loads, LRU unload. A load is refused
+      # (model=auto then falls back to large-v3) if the loaded models' estimates would pass the
+      # budget or host MemAvailable would drop below the floor, so risi-l1 is never starved.
+      WHISPER_MEM_BUDGET_MB: ${WHISPER_MEM_BUDGET_MB:-11000}
+      WHISPER_MIN_AVAILABLE_MB: ${WHISPER_MIN_AVAILABLE_MB:-3072}
+      QWEN_ASR_BEAMS: ${QWEN_ASR_BEAMS:-1}
+      WHISPER_IDLE_UNLOAD_S: ${WHISPER_IDLE_UNLOAD_S:-900}
+      TRITON_CACHE_DIR: /cache/triton
+      # cudaMallocAsync returns freed CUDA memory instead of caching it: measured 2.0 GB vs
+      # 4.4 GB resident for large-v3 (int8_float16 vs float16 + cub_caching), and no slower.
+      # The caching config below applies only if CT2_CUDA_ALLOCATOR=cub_caching is set.
+      CT2_CUDA_ALLOCATOR: ${CT2_CUDA_ALLOCATOR:-cuda_malloc_async}
+      CT2_CUDA_CACHING_ALLOCATOR_CONFIG: ${CT2_CUDA_CACHING_ALLOCATOR_CONFIG:-4,3,12,1073741824}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       DO_NOT_TRACK: "1"
