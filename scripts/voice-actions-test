@@ -1,0 +1,524 @@
+#!/usr/bin/env bash
+# v1.42 §38 device gate (android-added): Risi voice → action items on two redroid phones with the real app.
+# Standalone: scripts/call-device-test's setup (temp server from THIS checkout on 127.0.0.1 with TABS=on RISI=on, own
+# DB/keyspace risime_calltest_va, sign-in through the real UI, friends, e2ee DM), then this file's scenario (the same
+# file, sourced by call-device-test), which restarts the temp server with RISI_ACTION_ITEMS=on, RISI_VOICE_TRANSCRIBE=on,
+# RISI_CALL_TRANSCRIBE=on (+ TOOLS, SKILLS, LEDGER, EVENTS; the local speech service 127.0.0.1:8200, WHISPER_API_KEY
+# from .env) and scripts/fake-llm with scripted `action_items` answers, with clips injected in place of the
+# microphones (debug-only VOICE_INJECT / MIC_INJECT seams; redroid has no microphone).
+#
+# The model is scripted (the gate tests the phones and the wire, not the extraction): for every source it returns a
+# promise ("Send the report to Ashen", due as said "by Friday" = all-day — Ashen is no member, so nobody is guessed as
+# owner or counterpart), a meeting ("Review meeting", "Wednesday 10 am" = timed) and an open question (no owner). For a
+# call the promise is owned by the first speaker (A) and the meeting by the second (B); for a voice note both by its
+# speaker; a Sinhala transcript gets the Sinhala promise text. The clips themselves are the synthetic English clip
+# ("…we will send the revised quote on Friday") and the OpenSLR Sinhala clip (android/testdata/transcribe/README.md).
+#
+# Checks:
+#   1. Private: a 1:1 Private voice note and a Private call → no card, the model never asked, no Transcribe button.
+#   2. Official English voice note (A) → ONE action_items card on BOTH phones: kinds grouped, owner "You"/name, due
+#      only as said, the question without owner; a tap on an item jumps to the note (transcript expanded, seeked).
+#   3. A's Risi chat: the action_confirm card; "Add to My promises" on the promise; "Add to calendar" on the meeting
+#      asks first with the exact time (nothing written before Add), then exactly one Risi Calendar event exists
+#      (server DB) and the Official card follows (item_update, any conversation).
+#   4. Official call A↔B transcribed (A English, then B Sinhala) → the call card on both phones; A's Risi chat gets the
+#      promise, B's the meeting (the right owners); B says "Not mine" → hidden on B's Official card, declined for A.
+#   5. Official Sinhala voice note (B) → its card (or, when the speech service romanises it, the honest "couldn't
+#      hear" card: WARN, speech quality).
+#   6. A silent Official note → "couldn't hear clearly", no items, the model not asked.
+#   7. A's My promises: the "From calls & voice notes" chip lists the confirmed promise; a tap jumps to its line.
+#   8. No model names on screen; logcat clean on both phones.
+# Ports: the server, fake-llm, clip server and redroid pair are picked free at start (ss + docker ps), so a running
+# nightly is never touched; the gate refuses to start while MemAvailable < 12 GB. The redroid pair (-va1/-va2) is
+# stopped at the end (unless --keep).
+#
+#   scripts/voice-actions-test [--apk app-debug.apk] [--keep]
+#
+# Prints "CALLTEST PASS|FAIL|WARN …" lines and a final "VATEST OK" or "VATEST FAIL <reason>".
+# Screenshots: docs/status/screens/68-actions-*.png.
+
+# ================================================================ the scenario (sourced by scripts/call-device-test)
+if [ "${BASH_SOURCE[0]}" != "$0" ] && [ -n "${VATEST_SCENARIO:-}" ]; then
+VASHOTS="$REPO/docs/status/screens"; mkdir -p "$VASHOTS"
+warn() { echo "CALLTEST WARN $*"; }
+vashot() { A exec-out screencap -p > "$VASHOTS/68-actions-$1.png" 2>/dev/null || true; }
+llm_actions() { grep -c '"name": *"action_items"' "$WORK/llm-requests.jsonl" 2>/dev/null || true; }
+slog_mark() { wc -l < "$WORK/server.log"; }
+node_at() {
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+pat = re.compile(sys.argv[2]); hit = None
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+for n in nodes:
+    if pat.search(n.get('content-desc') or '') or pat.search(n.get('text') or ''):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); hit = ((x1 + x2) // 2, (y1 + y2) // 2)
+if hit: print(*hit)
+PY
+}
+count_nodes() { python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+pat = re.compile(sys.argv[2])
+try:
+    nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError:
+    nodes = []
+print(sum(1 for n in nodes if pat.search(n.get('content-desc') or '') or pat.search(n.get('text') or '')))
+PY
+}
+wait_node() {  # <regex> [seconds]
+  for _ in $(seq 1 "${2:-30}"); do dump; [ "$(count_nodes "$1")" -gt 0 ] && return 0; sleep 1; done
+  echo "    [$DEV] timeout waiting for /$1/"; return 1
+}
+tap_re() { dump; local p; p="$(node_at "$1")"; [ -n "$p" ] || { echo "    [$DEV] no node /$1/"; return 1; }; A shell input tap $p; }
+# Swipe until /$1/ is on screen: up (older content, the default) or down (a list's lower rows).
+scroll_to() {  # <regex> [swipes] [up|down]
+  local i; for i in $(seq 0 "${2:-6}"); do
+    dump; [ "$(count_nodes "$1")" -gt 0 ] && return 0
+    if [ "${3:-up}" = up ]; then A shell input swipe 540 700 540 1500 300; else A shell input swipe 540 1500 540 700 300; fi
+    sleep 1
+  done
+  return 1
+}
+# Tap the button /$2/ that belongs to the item /$1/: the first such button below the item's line.
+tap_below() {  # <item regex> <button regex>
+  dump
+  python3 -I - "$WORK/ui-$DEV.xml" "$1" "$2" > "$WORK/xy" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+item, btn = re.compile(sys.argv[2]), re.compile(sys.argv[3])
+def box(n): return list(map(int, re.findall(r'\d+', n.get('bounds'))))
+nodes = list(ET.parse(sys.argv[1]).iter('node'))
+txt = lambda n: (n.get('text') or '') + '|' + (n.get('content-desc') or '')
+it = [box(n) for n in nodes if item.search(txt(n))]
+if it:
+    y0 = it[0][1]
+    bs = sorted((box(n) for n in nodes if btn.search(n.get('text') or '') and box(n)[1] > y0), key=lambda b: b[1])
+    if bs: b = bs[0]; print((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+PY
+  [ -s "$WORK/xy" ] || { echo "    [$DEV] no /$2/ below /$1/"; return 1; }
+  # shellcheck disable=SC2046
+  A shell input tap $(cat "$WORK/xy")
+}
+record() {  # hold the composer's mic for $1 seconds
+  hide_keyboard; dump
+  local p; p="$(node_at '^Record voice note$')"
+  [ -n "$p" ] || { echo "    [$DEV] no mic button"; return 1; }
+  # shellcheck disable=SC2086
+  A shell input swipe $p $p "$(( $1 * 1000 ))"
+}
+armed_n() { A logcat -d 2>/dev/null | grep -c 'RisiMe debug: voice inject armed' || true; }
+arm() {  # <clip>: the clip replaces $DEV's microphone for voice notes
+  local n0; n0="$(armed_n)"
+  A shell am broadcast -a ai.risicloud.risime.debug.VOICE_INJECT -p "$PKG" --es url "http://127.0.0.1:$VN_CLIP_PORT/$1.wav" >/dev/null
+  for _ in $(seq 1 20); do [ "$(armed_n)" -gt "$n0" ] && return 0; sleep 1; done
+  return 1
+}
+inj_count() { A logcat -d 2>/dev/null | grep -cE "RisiMe debug: mic inject (done|failed|interrupted)" || true; }
+inject_call() {  # <A|B> <clip16> <repeat>: speak into a call (MIC_INJECT), wait until done
+  DEV=$1; local n0; n0="$(inj_count)"
+  A shell am broadcast -a ai.risicloud.risime.debug.MIC_INJECT -p "$PKG" --es url "http://127.0.0.1:$VN_CLIP_PORT/$2.wav" --ei repeat "$3" --ei gap_ms 800 >/dev/null
+  for _ in $(seq 1 150); do [ "$(inj_count)" -gt "$n0" ] && return 0; sleep 1; done
+  return 1
+}
+dm_tab() {  # <peer name> <private|official>: the 1:1 on that tab with the mic ready
+  open_chat "$1" || return 1
+  if [ "$2" = official ]; then
+    tap "● Official" || return 1
+    for _ in $(seq 1 90); do
+      dump; grep -qF 'Risi listens in Official' "$WORK/ui-$DEV.xml" && { tap "OK" || true; sleep 1; }
+      grep -qF 'text="Start Official"' "$WORK/ui-$DEV.xml" && { tap "Start Official" || true; sleep 2; }
+      grep -qF 'Risi is listening' "$WORK/ui-$DEV.xml" && grep -qF 'Record voice note' "$WORK/ui-$DEV.xml" && return 0
+      sleep 1
+    done
+    return 1
+  fi
+  for _ in 1 2 3 4 5; do
+    dump; grep -qF 'Risi listens in Official' "$WORK/ui-$DEV.xml" && { tap "OK" || true; sleep 1; }
+    if grep -qF 'Risi is listening' "$WORK/ui-$DEV.xml"; then tap "🔒 Private" || true; sleep 2; continue; fi
+    wait_node '^Record voice note$' 30 && return 0
+  done
+  return 1
+}
+# The one-time "Risi transcribes voice notes in Official chats" note before $DEV's first Official note.
+official_note_once() {
+  dump; local p; p="$(node_at '^Record voice note$')"; [ -n "$p" ] || return 1
+  for _ in $(seq 1 8); do
+    # shellcheck disable=SC2086
+    A shell input tap $p
+    if wait_node 'Risi transcribes voice notes in Official chats' 6; then tap "OK" || true; sleep 1; return 0; fi
+    sleep 4
+  done
+  return 1
+}
+open_risi_chat() {
+  back_to_list || return 1
+  scroll_to '^Risi$' 4 || return 1
+  tap_re '^Risi$' || return 1
+  wait_node 'Ask Risi' 60
+}
+open_promises() {
+  back_to_list || return 1
+  tap "More options" || return 1
+  wait_node '^Settings$' 10 || return 1
+  tap "Settings" || return 1
+  scroll_to '^My promises$' 8 down || return 1
+  tap_re '^My promises$' || return 1
+  wait_node '^My promises$' 20
+}
+# A call A → B from the DM's tab (<private|official>), media connected.
+start_call() {
+  local tabtext="🔒 Private" m ok=""
+  [ "$1" = official ] && tabtext="● Official"
+  for DEV in A B; do A shell cmd notification cancel_all >/dev/null 2>&1 || true; done
+  DEV=B; open_chat "ZZ Call A" || fail "actions: B can't open the DM"
+  DEV=A; open_chat "ZZ Call B" || fail "actions: A can't open the DM"
+  tap "$tabtext" || fail "actions: A has no \"$tabtext\" tab"; sleep 2
+  for _ in $(seq 1 20); do tap "Voice call" && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || fail "actions: the $1 tab's Voice call button never became enabled"
+  DEV=B; wait_ring 30 || fail "actions ($1 call): B never rang"
+  answer_intent || fail "actions ($1 call): B can't answer"
+  m=""; for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
+  [ -n "$m" ] || fail "actions ($1 call): media never connected"
+  sleep 2
+}
+end_call() {
+  DEV=A; tap "End call" || fail "actions: A has no End call"
+  DEV=B; for _ in $(seq 1 20); do has "End call" || break; sleep 1; done
+  has "End call" && fail "actions: B still in the call"
+  return 0
+}
+db_count() {  # <query name>: a number from the temp server's DB (metadata only)
+  (cd server && $M mix run "$WORK/va-db.exs" "$1" "${VAIDS[0]}" "${VAIDS[1]}" 2>/dev/null | sed -n 's/^vadb: //p' | tail -1)
+}
+
+# ---------------------------------------------------------------- 1. the server with §38 on, the scripted model
+cat > "$WORK/va-ids.exs" <<'EXS'
+alias RisiMe.{Repo}
+alias RisiMe.Accounts.User
+for p <- ["+94770000971", "+94770000972"], do: IO.puts("vaid: " <> Repo.get_by!(User, phone: p).id)
+EXS
+cat > "$WORK/va-db.exs" <<'EXS'
+import Ecto.Query
+[what, a, _b] = System.argv()
+n =
+  case what do
+    "events_a" ->
+      RisiMe.Repo.one(from e in "risi_events", where: e.owner == type(^a, :binary_id) and e.state == "active" and not is_nil(e.source_item_id), select: count())
+  end
+IO.puts("vadb: #{n}")
+EXS
+mapfile -t VAIDS < <(cd server && $M mix run "$WORK/va-ids.exs" 2>/dev/null | sed -n 's/^vaid: //p')
+[ "${#VAIDS[@]}" = 2 ] || fail "actions: user ids"
+read -r FRI WED < <(python3 -I -c 'import datetime as d; t=d.date.today(); n=lambda w: t + d.timedelta(days=((w - t.weekday()) % 7) or 7); print(n(4), n(2))')
+python3 -I - "$WORK/va-script.json" "$FRI" "$WED" <<'PY'
+import json, sys
+path, fri, wed = sys.argv[1], sys.argv[2], sys.argv[3]
+def items(p_owner, m_owner, sinhala=False):
+    promise = "වාර්තාව සිකුරාදා වන විට අශේන්ට යවන්නම්" if sinhala else "Send the report to Ashen"
+    lang = "si" if sinhala else "en"
+    return [
+        {"kind": "promise", "text": promise, "owner": p_owner, "counterparts": [], "due_local": fri, "due_text": "by Friday",
+         "source": ["m1"], "lang": lang, "confidence": 0.9},
+        {"kind": "meeting", "text": "Review meeting", "owner": m_owner, "counterparts": [], "due_local": wed + "T10:00",
+         "due_text": "Wednesday 10 am", "source": ["m1"], "lang": lang, "confidence": 0.9},
+        {"kind": "question", "text": "Which venue for the launch?", "owner": None, "counterparts": [], "due_local": None,
+         "due_text": None, "source": ["m1"], "lang": lang, "confidence": 0.9},
+    ]
+rules = []
+us = [f"u{n}" for n in range(1, 6)]
+# A call: two speakers (the first speaker's line before the second's) → promise to the first, meeting to the second.
+for x in us:
+    for y in us:
+        if x != y:
+            rules.append({"name": f"call_{x}_{y}", "task": "action_items", "match": f'(?s)"from":"{x}".*"from":"{y}"',
+                          "actions": [{"summary": "Report and review meeting.", "items": items(x, y)}]})
+# A voice note: one speaker; Sinhala script in the transcript → the Sinhala promise text.
+for x in us:
+    rules.append({"name": f"note_si_{x}", "task": "action_items", "match": f'(?s)"from":"{x}".*[඀-෿]',
+                  "actions": [{"summary": None, "items": items(x, x, sinhala=True)}]})
+for x in us:
+    rules.append({"name": f"note_{x}", "task": "action_items", "match": f'"from":"{x}"', "actions": [{"summary": None, "items": items(x, x)}]})
+json.dump({"v": 1, "rules": rules}, open(path, "w"), ensure_ascii=False)
+PY
+tmux kill-session -t "risime-calltest-llm$SUF" 2>/dev/null || true
+for _ in $(seq 1 20); do ss -ltnH "sport = :$LLM_PORT" | grep -q . || break; sleep 0.5; done
+tmux new -d -s "risime-calltest-llm$SUF" "python3 -I '$REPO/scripts/fake-llm' --port $LLM_PORT --script '$WORK/va-script.json' --record '$WORK/llm-requests.jsonl' >> '$WORK/fake-llm.out' 2>&1"
+for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" && break; sleep 0.5; done
+curl -sf -o /dev/null "http://127.0.0.1:$LLM_PORT/health" || fail "actions: the scripted fake-llm didn't start"
+umask 077
+WKEY="$(grep -E '^WHISPER_API_KEY=' "$VATEST_ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2-)"
+[ -n "$WKEY" ] || fail "actions: WHISPER_API_KEY missing from .env"
+{ echo "RISI_TOOLS=on"; echo "RISI_SKILLS=on"; echo "RISI_LEDGER=on"; echo "RISI_EVENTS=on"; echo "RISI_VOICE_TRANSCRIBE=on"; echo "RISI_CALL_TRANSCRIBE=on"
+  echo "RISI_ACTION_ITEMS=on"; echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; echo "WHISPER_API_KEY=$WKEY"; echo "RISI_SPEECH_URL=http://127.0.0.1:8200"; } >> "$WORK/risi.env"
+unset WKEY
+umask 022
+echo "==> restarting the temp server with RISI_ACTION_ITEMS=on"
+tmux kill-session -t "risime-calltest$SUF" 2>/dev/null || true
+for _ in $(seq 1 30); do ss -ltnH "sport = :$PORT" | grep -q . || break; sleep 1; done
+tmux new -d -s "risime-calltest$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+  PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server >> '$WORK/server.log' 2>&1"
+for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+ok=""; for _ in $(seq 1 60); do curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config" | grep -q '"risi_action_items":"on"' && { ok=1; break; }; sleep 2; done
+[ -n "$ok" ] || fail "actions: /auth/config never said risi_action_items: on"
+cfg="$(curl -sf "http://127.0.0.1:$PORT/api/v1/auth/config")"
+grep -q '"voice_transcribe":"on"' <<<"$cfg" || fail "actions: voice_transcribe is not on (speech service?)"
+grep -q '"call_transcribe":"on"' <<<"$cfg" || fail "actions: call_transcribe is not on (speech service?)"
+pass "actions: the temp server says risi_action_items, voice_transcribe and call_transcribe: on"
+
+# ---------------------------------------------------------------- 2. the clips, served to the phones (memory only there)
+mkdir -p "$WORK/clips"
+dec() {  # <ogg> <out.wav> <rate>
+  gst-launch-1.0 -q filesrc location="$1" ! oggdemux ! opusdec ! audioconvert ! audioresample ! "audio/x-raw,format=S16LE,rate=$3,channels=1" ! wavenc ! filesink location="$2"
+}
+SI_OGG="$(ls "$REPO"/infra/whisper/testdata/si-*.ogg | head -1)"
+dec "$REPO/android/testdata/transcribe/en-tts.ogg" "$WORK/clips/en.wav" 48000 || fail "actions: decode en"
+dec "$SI_OGG" "$WORK/clips/si.wav" 48000 || fail "actions: decode si"
+dec "$REPO/android/testdata/transcribe/en-tts.ogg" "$WORK/clips/en16.wav" 16000 || fail "actions: decode en16"
+dec "$SI_OGG" "$WORK/clips/si16.wav" 16000 || fail "actions: decode si16"
+gst-launch-1.0 -q audiotestsrc wave=silence num-buffers=400 samplesperbuffer=960 ! "audio/x-raw,format=S16LE,rate=48000,channels=1" \
+  ! wavenc ! filesink location="$WORK/clips/silence.wav" || fail "actions: make the silent clip"
+tmux kill-session -t "risime-calltest-clips$SUF" 2>/dev/null || true
+tmux new -d -s "risime-calltest-clips$SUF" "python3 -I -m http.server $VN_CLIP_PORT --bind 127.0.0.1 --directory '$WORK/clips' > '$WORK/clips.out' 2>&1"
+trap 'tmux kill-session -t "risime-calltest-clips$SUF" 2>/dev/null || true; cleanup' EXIT
+for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$VN_CLIP_PORT/en.wav" && break; sleep 0.5; done
+# The apps re-read /auth/config (Risi chat, risi_ledger, voice, call_transcribe) after a restart.
+for DEV in A B; do
+  A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 3
+  A reverse "tcp:$VN_CLIP_PORT" "tcp:$VN_CLIP_PORT" >/dev/null
+  arm en || fail "actions: $DEV's microphone seam was not armed (debug build?)"
+done
+for DEV in A B; do
+  ok=""; for _ in $(seq 1 45); do A logcat -d 2>/dev/null | grep -q "call_transcribe: server switch on" && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || warn "actions: $DEV didn't log the call_transcribe switch"
+done
+pass "actions: the clips replace both phones' microphones (debug seams)"
+
+# ---------------------------------------------------------------- 3. Private: a note and a call → nothing
+DEV=B; dm_tab "ZZ Call A" private || fail "actions: B can't open the 1:1 Private tab"
+DEV=A; dm_tab "ZZ Call B" private || fail "actions: A can't open the 1:1 Private tab"
+before="$(llm_actions)"
+record 7 || fail "actions: A can't record in Private"
+DEV=B; wait_node '^Voice note, 0:0[5-8]' 60 || fail "actions: B never got the Private note"
+mark="$(slog_mark)"
+start_call private
+for DEV in A B; do dump; grep -qF 'text="Transcribe"' "$WORK/ui-$DEV.xml" && fail "actions: $DEV shows Transcribe on a Private call"; done
+inject_call A en16 1 || warn "actions: A's call injection didn't finish"
+end_call
+sleep 20
+for DEV in A B; do
+  dm_tab "ZZ Call $([ "$DEV" = A ] && echo B || echo A)" private >/dev/null || true
+  dump; [ "$(count_nodes 'Risi · Action items|^Action item: |couldn.t hear')" = 0 ] || fail "actions: a card in a Private chat on $DEV"
+done
+[ "$(llm_actions)" = "$before" ] || fail "actions: the model was asked about a Private note or call"
+tail -n +"$(( mark + 1 ))" "$WORK/server.log" | grep -qE 'transcribe/chunks' && fail "actions: transcription chunks from a Private call"
+DEV=B; vashot private-no-card
+pass "actions: Private note + Private call: no card, no transcription, the model never asked"
+
+# ---------------------------------------------------------------- 4. Official English voice note: one card, both phones
+DEV=A; dm_tab "ZZ Call B" official || fail "actions: A can't open the 1:1 Official tab"
+DEV=B; dm_tab "ZZ Call A" official || fail "actions: B can't open the 1:1 Official tab"
+DEV=A; official_note_once || warn "actions: no one-time Official note (already shown?)"
+record 7 || fail "actions: A can't record in Official"
+DEV=B; wait_node '^(ZZ Call A: )?Voice note, 0:0[5-8]' 60 || fail "actions: B never got the Official note"
+# (A tall card's header may be scrolled off: its items identify it.)
+wait_node '^Action item: Send the report to Ashen' 240 || fail "actions: no action_items card on B within 4 min (transcript + extraction)"
+wait_node '^Action item: Send the report to Ashen · ZZ Call A · by ' 20 || fail "actions: B's card lacks the promise with its owner and the said due"
+wait_node '^Action item: Review meeting · ZZ Call A · due ' 10 || fail "actions: B's card lacks the meeting with its time"
+wait_node '^Action item: Which venue for the launch\?$' 10 || fail "actions: the question shows an owner/due/state (or is missing)"
+[ "$(count_nodes 'Ashen · Unassigned|Ashen ·.*Ashen')" = 0 ] || fail "actions: a guessed owner"
+vashot official-card-b
+# A's card is taller (Open Risi chat): its header may be scrolled off; the items identify it.
+DEV=A; wait_node '^Action item: Send the report to Ashen · You · by ' 60 || fail "actions: A's card doesn't say \"You\" for A's promise"
+vashot official-card-a
+[ "$(llm_actions)" -ge 1 ] || fail "actions: the model was never asked for the Official note"
+pass "actions: Official voice note → one action_items card on both phones (kinds, owner \"You\"/name, due only as said, question unowned)"
+
+DEV=B; j0="$(A logcat -d 2>/dev/null | grep -c 'risi: action line jump voice_note' || true)"
+p0="$(A logcat -d 2>/dev/null | grep -c 'RisiMe *: voice: play ' || true)"
+tap_re '^Action item: Send the report to Ashen' || fail "actions: B can't tap the item"
+ok=""; for _ in $(seq 1 15); do [ "$(A logcat -d 2>/dev/null | grep -c 'risi: action line jump voice_note' || true)" -gt "$j0" ] && { ok=1; break; }; sleep 1; done
+[ -n "$ok" ] || fail "actions: the tap didn't jump to the note's line"
+sleep 2; dump
+[ "$(count_nodes '^Transcript$|^Couldn.t transcribe$')" -gt 0 ] || fail "actions: after the jump the note (with its transcript) isn't on screen"
+played=""; for _ in $(seq 1 10); do [ "$(A logcat -d 2>/dev/null | grep -c 'RisiMe *: voice: play ' || true)" -gt "$p0" ] && { played=1; break; }; sleep 1; done
+[ -n "$played" ] || warn "actions: the jump didn't start playback at the line (player)"
+vashot source-jump
+pass "actions: a tap on an item jumps to the voice note (transcript expanded, playback seeked)"
+
+# ---------------------------------------------------------------- 5. A's Risi chat: confirm, calendar asks first
+DEV=A; open_risi_chat || fail "actions: A has no Risi chat"
+wait_node '^Action item: Send the report to Ashen · You' 90 || fail "actions: no action_confirm card in A's Risi chat"
+vashot confirm-card
+tap_below '^Action item: Send the report to Ashen' '^Add to My promises$' || fail "actions: no Add to My promises on the promise"
+ok=""; for _ in $(seq 1 30); do dump; [ "$(count_nodes 'Send the report to Ashen · .*confirmed')" -gt 0 ] && { ok=1; break; }; sleep 2; done
+[ -n "$ok" ] || fail "actions: the promise never turned confirmed after Add to My promises"
+ev0="$(db_count events_a)"
+scroll_to '^Action item: Review meeting' 3 down || true
+tap_below '^Action item: Review meeting' '^Add to calendar$' || fail "actions: no Add to calendar on the meeting"
+wait_node '^Add to calendar\?$' 15 || fail "actions: Add to calendar didn't ask for confirmation"
+wait_node 'to your Risi Calendar on .*[0-9]{2}:[0-9]{2}–[0-9]{2}:[0-9]{2}' 5 || fail "actions: the confirmation doesn't show the exact time"
+vashot calendar-confirm
+sleep 3
+[ "$(db_count events_a)" = "$ev0" ] || fail "actions: a calendar event was written before Add"
+tap "Add" || fail "actions: no Add in the confirmation"
+ok=""; for _ in $(seq 1 40); do [ "$(db_count events_a)" -gt "${ev0:-0}" ] && { ok=1; break; }; sleep 3; done
+[ -n "$ok" ] || fail "actions: no Risi Calendar event after Add"
+ok=""; for _ in $(seq 1 30); do dump; [ "$(count_nodes 'Review meeting · .*confirmed')" -gt 0 ] && { ok=1; break; }; sleep 2; done
+[ -n "$ok" ] || fail "actions: the meeting never turned confirmed after Add"
+vashot calendar-added
+[ "$(db_count events_a)" = "$(( ev0 + 1 ))" ] || fail "actions: more than one calendar event for one Add"
+DEV=A; dm_tab "ZZ Call B" official >/dev/null || true
+ok=""; for _ in $(seq 1 45); do dump; [ "$(count_nodes '^Action item: Send the report to Ashen · You · .*confirmed')" -gt 0 ] && { ok=1; break; }; sleep 2; done
+[ -n "$ok" ] || fail "actions: A's Official card didn't follow the confirm (item_update from the Risi chat)"
+vashot official-confirmed
+pass "actions: owner confirms: Add to My promises; Add to calendar asked with the exact time, then exactly one event; the Official card follows"
+
+# ---------------------------------------------------------------- 6. an Official call: cards reach the right owners
+start_call official
+DEV=A; wait_for 'text="Transcribe"' 20 || fail "actions: no Transcribe button on the Official call"
+tap "Transcribe" || fail "actions: A can't tap Transcribe"
+DEV=B; wait_for "Transcribe this call?" 15 || fail "actions: B never got the consent prompt"
+tap "Allow" || fail "actions: B can't Allow"
+for DEV in A B; do wait_for "Risi transcribing" 15 || fail "actions: $DEV shows no transcribing bar"; done
+inject_call A en16 4 || fail "actions: A's call speech didn't finish"
+inject_call B si16 4 || fail "actions: B's call speech didn't finish"
+sleep 20
+end_call
+vashot call-ended
+DEV=B; dm_tab "ZZ Call A" official >/dev/null || true
+wait_node '^Action item: Review meeting · You · due ' 300 || fail "actions: no call card on B within 5 min whose meeting is B's"
+wait_node '^Action item: Send the report to Ashen · ZZ Call A' 10 || fail "actions: the call's promise isn't A's on B's card"
+vashot call-card-b
+DEV=B; open_risi_chat || fail "actions: B has no Risi chat"
+wait_node '^Action item: Review meeting · You' 90 || fail "actions: B got no action_confirm card for the call"
+dump; [ "$(count_nodes '^Action item: Send the report to Ashen')" = 0 ] || fail "actions: B's confirm card has A's promise"
+vashot call-confirm-b
+tap_below '^Action item: Review meeting' '^Not mine$' || fail "actions: no Not mine on B's meeting"
+wait_node "Not yours: Risi won't track it" 30 || fail "actions: Not mine didn't hide the item in B's Risi chat"
+vashot not-mine
+DEV=A; open_risi_chat || fail "actions: back to A's Risi chat"
+ok=""; for _ in $(seq 1 30); do dump; [ "$(count_nodes '^Action item: Send the report to Ashen · You · .*waiting')" -gt 0 ] && { ok=1; break; }; A shell input swipe 540 1500 540 700 300; sleep 2; done
+[ -n "$ok" ] || fail "actions: A got no action_confirm card for the call"
+DEV=B; dm_tab "ZZ Call A" official >/dev/null || true
+ok=""; for _ in $(seq 1 45); do dump; [ "$(count_nodes '^Action item: Review meeting · You')" = 0 ] && [ "$(count_nodes '^Action item: ')" -gt 0 ] && { ok=1; break; }; sleep 2; done
+[ -n "$ok" ] || fail "actions: Not mine didn't hide the meeting on B's Official card"
+vashot not-mine-official-b
+DEV=A; dm_tab "ZZ Call B" official >/dev/null || true
+wait_node '^Action item: Review meeting · ZZ Call B · .*declined' 60 || warn "actions: A doesn't show B's meeting as declined"
+pass "actions: Official call → the card on both phones; promise → A's Risi chat, meeting → B's; Not mine hides it for B only"
+
+# ---------------------------------------------------------------- 7. Official Sinhala voice note (B)
+DEV=B; dm_tab "ZZ Call A" official || fail "actions: B back to Official"
+arm si || fail "actions: B's seam didn't take the Sinhala clip"
+official_note_once || true
+before_unclear="$(count_nodes 'couldn.t hear')"
+record 8 || fail "actions: B can't record the Sinhala note"
+ok=""; for _ in $(seq 1 120); do
+  dump
+  # B's own note: the promise is B's ("You"); B's earlier cards name A as its owner.
+  [ "$(count_nodes '^Action item: (වාර්තාව|Send the report to Ashen · You)')" -gt 0 ] && { ok=items; break; }
+  [ "$(count_nodes 'couldn.t hear')" -gt "$before_unclear" ] && { ok=unclear; break; }
+  sleep 2
+done
+vashot sinhala
+case "$ok" in
+  items) pass "actions: Sinhala voice note → its card (Sinhala promise text)";;
+  unclear) warn "actions: the Sinhala note came back unclear (speech service romanised it: honest card, no items)";;
+  *) fail "actions: no card for the Sinhala voice note within 4 min";;
+esac
+
+# ---------------------------------------------------------------- 8. an unclear (silent) note: the "couldn't hear" card
+DEV=A; dm_tab "ZZ Call B" official || fail "actions: A back to Official"
+arm silence || fail "actions: A's seam didn't take the silent clip"
+before="$(llm_actions)"
+record 7 || fail "actions: A can't record the silent note"
+DEV=B; dm_tab "ZZ Call A" official >/dev/null || true
+wait_node "^Risi couldn.t hear (any speech in )?this voice note" 240 || fail "actions: no \"couldn't hear clearly\" card on B"
+vashot unclear
+[ "$(llm_actions)" = "$before" ] || fail "actions: the model was asked about an unclear note"
+pass "actions: a silent Official note → the \"couldn't hear clearly\" card, no items, no model call"
+
+# ---------------------------------------------------------------- 9. My promises: the source chip and the jump
+DEV=A; open_promises || fail "actions: A can't open My promises"
+tap "From calls & voice notes" || fail "actions: no \"From calls & voice notes\" chip"
+wait_node 'Send the report to Ashen' 20 || fail "actions: the confirmed promise isn't under \"From calls & voice notes\""
+vashot my-promises
+j0="$(A logcat -d 2>/dev/null | grep -c 'risi: action line jump' || true)"
+tap_re 'Send the report to Ashen' || fail "actions: can't tap the promise"
+ok=""; for _ in $(seq 1 20); do [ "$(A logcat -d 2>/dev/null | grep -c 'risi: action line jump' || true)" -gt "$j0" ] && { ok=1; break; }; sleep 1; done
+[ -n "$ok" ] || fail "actions: a tap in My promises didn't jump to the line"
+vashot my-promises-jump
+pass "actions: My promises \"From calls & voice notes\" lists the confirmed promise; a tap jumps to its line"
+
+for DEV in A B; do dump; grep -qiE 'whisper|faster-whisper|large-v3|risi-l1' "$WORK/ui-$DEV.xml" && fail "actions: a model name is shown on $DEV"; done
+logcat_ok "actions"
+pass "actions: §38 device gate"
+return 0 2>/dev/null || exit 0
+fi
+
+# ================================================================ the wrapper
+set -euo pipefail
+args=(); while [ $# -gt 0 ]; do
+  if [ "$1" = --apk ] && [ $# -gt 1 ]; then args+=(--apk "$(realpath "$2")"); shift 2; else args+=("$1"); shift; fi
+done
+set -- "${args[@]+"${args[@]}"}"
+cd "$(dirname "$0")/.."
+SELF="$PWD/scripts/voice-actions-test"
+vafail() { echo "VATEST FAIL $*"; exit 1; }
+curl -sf -o /dev/null --max-time 5 http://127.0.0.1:8200/health || vafail "the speech service (127.0.0.1:8200) is not up"
+command -v gst-launch-1.0 >/dev/null || vafail "gst-launch-1.0 (opus plugins) needed for the clips"
+# Two more redroids + a temp server need room: never start while MemAvailable < 12 GB (VATEST_MIN_GB to change).
+avail_gb="$(awk '/^MemAvailable:/{print int($2 / 1048576)}' /proc/meminfo)"
+[ "$avail_gb" -ge "${VATEST_MIN_GB:-12}" ] || vafail "MemAvailable ${avail_gb} GB < ${VATEST_MIN_GB:-12} GB (nightly redroids running?): not started"
+# .env (WHISPER_API_KEY): this checkout's, else the main worktree's (a git worktree has none). Never printed.
+VATEST_ENV_FILE="${VATEST_ENV_FILE:-$PWD/.env}"
+if [ ! -f "$VATEST_ENV_FILE" ]; then
+  main="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+  VATEST_ENV_FILE="$main/.env"
+fi
+[ -f "$VATEST_ENV_FILE" ] || vafail "no .env (WHISPER_API_KEY)"
+# The temp server reads the repo-level .env (SECRET_KEY_BASE, DB password): a worktree links the main one (gitignored).
+[ -e .env ] || ln -s "$VATEST_ENV_FILE" .env
+# A git worktree has no server/deps: use the main checkout's (read-only; the build goes to our own MIX_BUILD_PATH).
+if [ ! -d server/deps ]; then
+  main="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+  [ -d "$main/server/deps" ] || vafail "no server/deps"
+  ln -s "$main/server/deps" server/deps
+fi
+# Free ports, chosen now (a nightly may hold others): busy = listening on the host or published by a container.
+busy="$(ss -ltnH | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\1/'; docker ps --format '{{.Ports}}' 2>/dev/null | grep -oE ':[0-9]+->' | tr -d ':>-')"
+free() {  # <from> <to> [count]: the first port (or the first of [count] consecutive ports) free in the range
+  local p n="${3:-1}" k ok
+  for p in $(seq "$1" "$2"); do
+    ok=1; for k in $(seq 0 $((n - 1))); do grep -qx "$((p + k))" <<<"$busy" && { ok=""; break; }; done
+    [ -n "$ok" ] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE 'redroid-va[12]$' && vafail "redroid -va1/-va2 already exist (another voice-actions-test running?)"
+[ -n "${CALLTEST_PORT:-}" ] || CALLTEST_PORT="$(free 4420 4499)" || vafail "no free server port"
+[ -n "${CALLTEST_LLM_PORT:-}" ] || CALLTEST_LLM_PORT="$(free 8180 8196)" || vafail "no free fake-llm port"
+[ -n "${VN_CLIP_PORT:-}" ] || VN_CLIP_PORT="$(free 8770 8799)" || vafail "no free clip port"
+rp="$(free 5760 5799 2)" || vafail "no free redroid ports"
+export CALLTEST_PORT CALLTEST_LLM_PORT VN_CLIP_PORT
+export CALLTEST_REDROID_A="${CALLTEST_REDROID_A:--va1}" CALLTEST_REDROID_A_PORT="${CALLTEST_REDROID_A_PORT:-$rp}"
+export CALLTEST_REDROID_B="${CALLTEST_REDROID_B:--va2}" CALLTEST_REDROID_B_PORT="${CALLTEST_REDROID_B_PORT:-$((rp + 1))}"
+export CALLTEST_INSTANCE="${CALLTEST_INSTANCE:-_va}"
+export CALLTEST_BACK_ONLY=1 CALLTEST_EXTRA="$SELF" VATEST_SCENARIO=1 VATEST_ENV_FILE
+echo "==> voice-actions-test: server :$CALLTEST_PORT, fake-llm :$CALLTEST_LLM_PORT, clips :$VN_CLIP_PORT, redroid $CALLTEST_REDROID_A:$CALLTEST_REDROID_A_PORT $CALLTEST_REDROID_B:$CALLTEST_REDROID_B_PORT"
+out="$(mktemp)"
+set +e
+scripts/call-device-test "$@" 2>&1 | tee "$out"
+rc="${PIPESTATUS[0]}"
+set -e
+if [ "$rc" = 0 ] && grep -q '^CALLTEST OK' "$out"; then
+  rm -f "$out"; echo "VATEST OK"; exit 0
+fi
+reason="$(grep -E '^CALLTEST FAIL ' "$out" | tail -1 | sed 's/^CALLTEST FAIL //' || true)"
+[ -n "$reason" ] || reason="$(grep -vE '^\s*$' "$out" | tail -1 || true)"
+rm -f "$out"
+echo "VATEST FAIL ${reason:-exit $rc}"
+exit 1

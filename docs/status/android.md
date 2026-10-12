@@ -1,5 +1,39 @@
 # Android status — 0.2 nightlies
 
+## READY v1.42 §38 Risi voice → action items (13 Oct; next APK; device gate: see below)
+**Wire** (`net/Protocol142.kt`): strict `RisiActionCard` (`action_items` / `action_confirm`: kind, source, status,
+reason, items, `for`, `expires_at`; an item of an unknown kind, an empty text or an `unclear` card's items are dropped,
+never guessed), `ActionItem`, `SourceRef`, `RisiActions142` (`item_calendar` `{start,end,all_day}`, `item_remind`
+`{remind_at}`, `item_not_mine`), `/auth/config` `risi_action_items`, My promises `kind` / `source_ref` and `?source=`.
+Real §38 decoders in ContractExamplesTest (every v1.42 example parses; the actions compare byte-for-byte with what the
+app sends).
+**Official card** (`ActionItemsCardBody`): "From the call" / "From Kamal's voice note", the summary, items grouped by kind
+(Promises, Tasks, Meetings, Decisions, Open questions, Numbers), each with owner ("You" / name / "Unassigned"; none for
+decision/question/number), the due **only when said**, the live state from any `item_update` on the phone (a Room flow over
+every conversation, `MessageDao.itemUpdates`), "Owners confirm theirs in their Risi chat" + [Open Risi chat] for an owner.
+**Tap an item → its line**: a call → the `call_transcript` row with that `session_id` + `turn` (scrolled, highlighted); a
+voice note → the note (scrolled, highlighted, transcript expanded, playback seeked to `offset_ms`); "Line no longer
+available" when it's gone. From the Risi chat / My promises the Official chat opens at the line (`RisiUiBus.Focus.line`).
+Unclear card: "Risi couldn't hear this voice note clearly, so it made no action items." (`no_speech`: "…any speech in…").
+The card is its own row right after the note (the server posts it after the transcript), not drawn inside the bubble.
+**Owner's card** (`ActionConfirmCardBody`, Risi chat): per item the server's buttons, only for my own `proposed` item before
+`expires_at`: Add to My promises (`item_confirm`), **Add to calendar** — a dialog shows the exact slot ("Add "…" to your
+Risi Calendar on Wed 14 Oct, 10:00–11:00?" [Add] [Change time] [Cancel]); with no usable time (no due, all-day, past) the
+date+time picker comes first; nothing is sent before [Add] — **Remind me** (same: due − 1 h or the picker, then the
+question), **Not mine** (the item is replaced by "Not yours: Risi won't track it or offer it to anyone else." and is hidden
+on that owner's Official card; others see it declined), Edit (`item_edit`).
+**My promises**: chip "From calls & voice notes" (shown while `risi_action_items` is on) reloads with
+`?source=call,voice_note` (an older server's extra rows are filtered on the phone); rows show the kind and "From a call" /
+"From a voice note"; a tap opens the Official chat at the item's line.
+**Tests:** `RisiActionItemsTest` (Robolectric: strict parse, owners/due/visibility, buttons, no-guess calendar/reminder,
+line lookup + focus, the Official card, item_update/Not mine, unclear card, voice jump, confirm-before-write dialogs,
+My promises chip + jump), ContractExamplesTest. Unit gate `assembleDebug testDebugUnitTest` green.
+**Device gate** `scripts/voice-actions-test` (android-added; two redroids -va1/-va2 on free ports, temp server on a free
+127.0.0.1 port, scripted fake-llm, the local speech service; refuses to start while MemAvailable < 12 GB): **not yet green end to end.** Run 5 (13 Oct): PASS sign-in, the §38 server switches, the clip seams, **Private note + Private call → no card, no transcription, the model never asked**, **Official English note → one action_items card on both phones** (kinds grouped, "You"/name, due only as said, the question unowned), **tap → jump to the note** (transcript expanded, playback started at the line); it then failed on a gate regex (the card's header scrolled off screen; fixed: the gate now waits on the items). Earlier runs showed the owner's confirm card (shot `68-actions-confirm-card`) and that the server offers Add to calendar only for timed items (contract §38.4; the gate now uses a timed meeting). Not yet run on the device: owner confirm + calendar event, the Official call → right owners + Not mine, the Sinhala note, the silent note, My promises chip. Blocked by memory: the gate refuses to start under 12 GB MemAvailable and spark2 stayed at 4–10 GB for over an hour with the nightly redroids up. Rerun: `scripts/voice-actions-test` (prints VATEST OK / VATEST FAIL). Shots so far `docs/status/screens/68-actions-*.png`.
+**Gaps** (no wire invented): proposal `contract/proposals/2026-10-13-action-items-gaps.md` — asking for unowned/undated
+items, `add_calendar` for all-day/undated items, `item_update` to all members after a voice note (today the other
+member's card stays "waiting"), Remind me needs the Reminders skill, the unclear wording.
+
 ## READY PART 4 talking to Risi (12 Oct; decision 083; next APK)
 - "Risi is typing…" is the progress bubble of a running Risi turn (tool steps keep their labels; memory steps now
   read "Searching your chats…" / "Searched your chats").
