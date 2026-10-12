@@ -12,7 +12,7 @@ defmodule RisiMe.Agent.Requests do
   """
   import Ecto.Query
 
-  alias RisiMe.Agent.{Capabilities, Clock, Commitment, LLM, Out, Prompts, Secretary}
+  alias RisiMe.Agent.{Capabilities, Clock, Commitment, LLM, Offline, Out, Prompts, Secretary}
   alias RisiMe.Repo
 
   @window_s 24 * 3600
@@ -33,7 +33,20 @@ defmodule RisiMe.Agent.Requests do
   @doc false
   def handle(conv, message_id, request_id, user, nil, t0) do
     Process.put(:risi_req_t0, t0)
+    # PART 4 "never silent": a model call pending 10 s (or a model that is down) gets the
+    # offline notice once; the request stays queued and is answered when the model is back.
+    Offline.watch(conv, request_id, user)
 
+    try do
+      result = dispatch(conv, message_id, request_id, user)
+      unless match?({:snooze, _}, result), do: Offline.clear(request_id)
+      result
+    after
+      Offline.stop()
+    end
+  end
+
+  defp dispatch(conv, message_id, request_id, user) do
     case Secretary.envelope(conv, message_id) do
       # v1.25 §25.1: with RISI_TOOLS=on an `ask` is a turn of the tool loop.
       %{"type" => "risi_request", "request_id" => ^request_id, "action" => action} = env ->
@@ -331,12 +344,15 @@ defmodule RisiMe.Agent.Requests do
           {:snooze, 10}
         end
 
-      # The model is down after its retries: try again later, answer late; only after 10
-      # minutes the polite error.
+      # The model is down after its retries: say so once (PART 4), try again later and answer
+      # late; only after the wait bound the polite error.
       {:error, _} ->
-        if waited_s() > @max_wait_s,
-          do: reply_error(conv, rid, user, "model_unavailable"),
-          else: {:snooze, 30}
+        if waited_s() > RisiMe.Agent.Turn.bounds().wait_s do
+          reply_error(conv, rid, user, "model_unavailable")
+        else
+          Offline.notice(conv, rid, user)
+          {:snooze, RisiMe.Agent.Turn.bounds().retry_s}
+        end
     end
   end
 

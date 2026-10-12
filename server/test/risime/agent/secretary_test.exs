@@ -483,15 +483,17 @@ defmodule RisiMe.Agent.SecretaryTest do
     })
 
     # The model is down after its backoff retries: the job waits and answers late (hotfix
-    # 2026-10-09), no error yet.
+    # 2026-10-09), no error yet; PART 4: the asker hears once that Risi is offline.
     job = request_job(rid)
-    assert {:snooze, 30} = perform_job(Job, job.args)
+    assert {:snooze, 15} = perform_job(Job, job.args)
+    assert_receive {:risi_post, _, notice, %{"kind" => "answer", "request_id" => ^rid}}
+    assert notice == "Risi is offline, I'll reply when I'm back."
     refute_receive {:risi_post, _, _, _}
     # 1 call + 3 backoff retries.
     assert length(llm_requests()) == 4
 
-    # Still down after 10 minutes of waiting: the polite error.
-    stale = Map.put(job.args, "t0", System.system_time(:second) - 700)
+    # Still down after 30 minutes of waiting: the polite error.
+    stale = Map.put(job.args, "t0", System.system_time(:second) - 1_900)
     assert :ok = perform_job(Job, stale)
 
     assert_receive {:risi_post, _, body,

@@ -494,6 +494,51 @@ defmodule RisiMe.Agent.MemoryTest do
              "WHOLE answer"
   end
 
+  test "PART 4: @Risi 'what did we decide' in an Official chat searches that chat only and answers there",
+       ctx do
+    d =
+      remember!(
+        ctx.og,
+        ctx.shenika.user,
+        "We decided the venue is the main hall",
+        at("2026-10-08")
+      )
+
+    remember!(ctx.ou, ctx.upali.user, "Upali's private-ish price is 40,000", at("2026-10-08"))
+
+    fake_llm!(fn "risi_next_action", body ->
+      msgs = result_of(body)["messages"]
+      assert Enum.map(msgs, & &1["text"]) == ["We decided the venue is the main hall"]
+      final("You decided the venue is the main hall.", [hd(msgs)["ref"]])
+    end)
+
+    rid = Ecto.UUID.generate()
+
+    envelope!(
+      ctx.og,
+      ctx.harsha.user,
+      %{
+        "v" => 1,
+        "type" => "risi_request",
+        "request_id" => rid,
+        "action" => "ask",
+        "text" => "what did we decide"
+      },
+      ctx.hd
+    )
+
+    [job] = for j <- all_enqueued(worker: Job), j.args["request_id"] == rid, do: j
+    assert :ok = perform_job(Job, job.args)
+
+    # One post, in the Official chat itself (visible to its members), never "I've replied in your Risi chat".
+    assert [{og, body, a}] = posts()
+    assert og == ctx.og and body =~ "main hall"
+    assert a["request_id"] == rid
+    assert [%{"type" => "memory", "message_ids" => [^d]}] = a["sources"]
+    [req] = llm_requests()
+    assert %{"tool" => "memory_search", "args" => %{"conversation_id" => ^og}} = tool_msg(req)
+  end
+
   test "a Tamil question with nothing found gets the server's Tamil answer", ctx do
     remember!(ctx.og, ctx.shenika.user, "unrelated", at("2026-09-20"))
     fake_llm!(fn _, _ -> flunk("no model call") end)

@@ -129,8 +129,14 @@ defmodule RisiMe.Agent.MemoryTools do
           limit: 30
         )
 
-      promises = promises(ctx.asker, s.people_ids, nil, nil, ctx.tz)
-      build(ctx, s, msgs, items, [], promises)
+      # PART 4: a search of the asking Official chat alone (@Risi there) holds only that
+      # chat's own content (its promises too), so its answer goes to that chat (§25.1).
+      here = here(args, ctx, s)
+
+      promises =
+        promises(ctx.asker, s.people_ids, nil, nil, ctx.tz, if(here, do: ctx.conv))
+
+      build(ctx, s, msgs, items, [], promises, personal: not here)
     end
   end
 
@@ -263,13 +269,21 @@ defmodule RisiMe.Agent.MemoryTools do
   end
 
   # The asker's promises (both directions) with the people, due or made in the range.
-  defp promises(asker, people_ids, from, to, tz) do
+  defp here(args, ctx, s) do
+    conv = Map.get(ctx, :conv)
+
+    is_binary(conv) and args["conversation_id"] == conv and s.convs == [conv] and
+      not Map.get(ctx, :in_risi_chat?, false)
+  end
+
+  defp promises(asker, people_ids, from, to, tz, conv \\ nil) do
     case RisiMe.Agent.Rest.commitments(asker, :all) do
       {:ok, cs} ->
         cs
         |> Enum.filter(fn c ->
-          (people_ids == [] or c.owner in people_ids or
-             Enum.any?(List.wrap(c.counterpart), &(&1 in people_ids))) and
+          (conv == nil or c.source_conversation_id == conv) and
+            (people_ids == [] or c.owner in people_ids or
+               Enum.any?(List.wrap(c.counterpart), &(&1 in people_ids))) and
             in_range?(c, from, to)
         end)
         |> Enum.take(30)
@@ -323,7 +337,7 @@ defmodule RisiMe.Agent.MemoryTools do
 
   ## The result
 
-  defp build(ctx, s, msgs, items, summaries, promises, opts \\ []) do
+  defp build(ctx, s, msgs, items, summaries, promises, opts) do
     names = names(Enum.map(msgs, & &1.sender_id), ctx.asker)
 
     labels =
@@ -416,7 +430,7 @@ defmodule RisiMe.Agent.MemoryTools do
     {:ok, result,
      %{
        refs: refs,
-       personal: true,
+       personal: Keyword.get(opts, :personal, true),
        memory: %{
          found: found,
          known_since: since && Clock.local(since, ctx.tz) |> NaiveDateTime.to_date(),

@@ -48,7 +48,8 @@ defmodule RisiMe.Agent.Turn do
     calendar tool the honesty no-read answer (`CalendarHonesty`, with `skill_needed` when the
     Calendar skill is off), for another tool what is unavailable. A step repeating an earlier
     failed step (same tool and args) is not run again: the turn ends. A turn whose model stays
-    down is snoozed only while the request has waited under 2 minutes, then answered.
+    down tells the asker once that Risi is offline (`RisiMe.Agent.Offline`) and is snoozed while
+    the request has waited under 30 minutes, then answered.
   """
   require Logger
 
@@ -81,8 +82,11 @@ defmodule RisiMe.Agent.Turn do
   @max_prompt_tokens 24_000
   @max_writes 2
   @window_s 24 * 3600
-  # A request whose model is down is snoozed (answered late) only this long after it was queued.
-  @max_wait_s 120
+  # A request whose model is down is snoozed (answered late) only this long after it was queued
+  # (PART 4: the asker was told "Risi is offline, I'll reply when I'm back", RisiMe.Agent.Offline).
+  @max_wait_s 1_800
+  # How soon a snoozed request whose model was down tries again.
+  @retry_s 15
   @calendar_checks ~w(calendar_check risi_calendar_check)
   @calendar_tools ~w(calendar_check calendar_add calendar_remove risi_calendar_check risi_calendar_add)
   # v1.35 §34.5: the writes whose people are checked against the asker's friends first.
@@ -104,7 +108,8 @@ defmodule RisiMe.Agent.Turn do
       turn_ms: Keyword.get(cfg, :turn_ms, @turn_ms),
       prompt_tokens: Keyword.get(cfg, :prompt_tokens, @max_prompt_tokens),
       writes: @max_writes,
-      wait_s: Keyword.get(cfg, :wait_s, @max_wait_s)
+      wait_s: Keyword.get(cfg, :wait_s, @max_wait_s),
+      retry_s: Keyword.get(cfg, :retry_s, @retry_s)
     }
   end
 
@@ -625,11 +630,15 @@ defmodule RisiMe.Agent.Turn do
 
       {:error, _} ->
         st = %{st | calls: st.calls + 1}
-        # Nothing done yet: the job waits and the turn runs again later (answer late), but
-        # never for longer than `wait_s` since the request was queued.
-        if st.steps == [] and waited_s() < ctx.bounds.wait_s,
-          do: {:snooze, 30},
-          else: bound_final(st, ctx, :model)
+        # Nothing done yet: the asker hears "Risi is offline, I'll reply when I'm back" once
+        # (PART 4), the job waits and the turn runs again later (answer late), but never for
+        # longer than `wait_s` since the request was queued.
+        if st.steps == [] and waited_s() < ctx.bounds.wait_s do
+          RisiMe.Agent.Offline.notice(ctx.conv, ctx.request_id, ctx.asker)
+          {:snooze, ctx.bounds.retry_s}
+        else
+          bound_final(st, ctx, :model)
+        end
     end
   end
 
@@ -970,7 +979,7 @@ defmodule RisiMe.Agent.Turn do
               %{"role" => "user", "content" => Jason.encode!(reply)}
             ],
         refs: if(ok?, do: Map.merge(st.refs, Map.get(meta, :refs, %{})), else: st.refs),
-        personal: st.personal or (ok? and (tool.personal or Map.get(meta, :personal, false))),
+        personal: st.personal or (ok? and personal_step?(tool, args, ctx, meta)),
         writes: if(ok? and tool.write, do: st.writes + 1, else: st.writes),
         writes_done:
           if(ok? and tool.write and match?(%{"status" => "done"}, result),
@@ -1617,7 +1626,7 @@ defmodule RisiMe.Agent.Turn do
           "range" => range,
           "people" => people,
           "kinds" => kinds,
-          "conversation_id" => nil
+          "conversation_id" => if(memory_here?(ctx), do: ctx.conv)
         }
     end
   end
@@ -1636,9 +1645,24 @@ defmodule RisiMe.Agent.Turn do
     _ -> []
   end
 
+  # PART 4 (Harsha 2026-10-12): @Risi in an Official chat is answered in that chat. A
+  # `memory_search` scoped to the asking conversation reads only that conversation's own content
+  # (§25.1 audience rule: "to that conversation"); any other personal tool still goes to the
+  # asker's Risi chat.
+  defp personal_step?(%{name: "memory_search"}, %{"conversation_id" => c}, ctx, meta)
+       when is_binary(c) do
+    ctx.in_risi_chat? or c != ctx.conv or Map.get(meta, :personal, true)
+  end
+
+  defp personal_step?(tool, _args, _ctx, meta),
+    do: tool.personal or Map.get(meta, :personal, false)
+
+  # The memory route of an Official chat (not the Risi chat) searches that chat only.
+  defp memory_here?(ctx), do: not ctx.in_risi_chat? and ctx.memory.mode != :summarise
+
   defp memory_rule(st, ctx, text) do
     st =
-      %{st | rule_made: true, personal: true}
+      %{st | rule_made: true, personal: not memory_here?(ctx)}
       |> Map.put(:prebuilt, true)
 
     finish(st, ctx, text, [], [])

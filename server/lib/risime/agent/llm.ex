@@ -79,7 +79,8 @@ defmodule RisiMe.Agent.LLM do
     case acquire() do
       :ok ->
         try do
-          run(req)
+          # PART 4: a call of a running request pending 10 s tells the asker Risi is offline.
+          RisiMe.Agent.Offline.during_call(fn -> run(req) end)
         after
           release()
         end

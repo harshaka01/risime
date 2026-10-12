@@ -226,7 +226,7 @@ defmodule RisiMe.Agent.TurnInvalidOutputTest do
 
   test "the model down for longer than wait_s: an answer, not another snooze", ctx do
     fake_llm!(fn _, _ -> {:status, 503} end)
-    {result, _} = ask!(ctx, "hello", %{"t0" => System.system_time(:second) - 600})
+    {result, _} = ask!(ctx, "hello", %{"t0" => System.system_time(:second) - 1_900})
     assert result == :ok
     [{_, body, _}] = posts()
     assert body =~ "I couldn't reach my model"

@@ -438,10 +438,13 @@ defmodule RisiMe.Agent.TurnS11Test do
     assert a["sources"] == [] and a["steps"] == []
   end
 
-  test "the model down before any step: the job waits (answer late), no error post", ctx do
+  test "the model down before any step: the job waits (answer late), the offline notice, no error",
+       ctx do
     fake_llm!(fn _, _ -> {:status, 503} end)
-    {_, result} = ask!(ctx, "hello")
-    assert result == {:snooze, 30}
+    {rid, result} = ask!(ctx, "hello")
+    assert result == {:snooze, 15}
+    assert_receive {:risi_post, _, "Risi is offline, I'll reply when I'm back.", a}
+    assert a["kind"] == "answer" and a["request_id"] == rid
     refute_receive {:risi_post, _, _, _}
   end
 
