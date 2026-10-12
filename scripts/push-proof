@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Push proof without Google Play on redroid (decision 079): from the PILOT server's log, the FCM sends since a time,
+# grouped by Firebase project, app_id and HTTP result, e.g.
+#   risicloud   ai.risicloud.risime   200   3
+#   risime      lk.codegen.risime     200   5
+# Reads the server's per-send audit line "fcm: send project=<p> app=<app_id> http=<status>" (RisiMe.Push.FCM).
+# Never prints tokens, user or device ids, or message ids. Older servers without that line: their dispatcher
+# "push: … result=…" lines are counted under project "(not logged)".
+#   scripts/push-proof [--since 2026-10-12T06:00 | --since -2h] [--log ~/risime-logs/server.log]
+# Without the log file it reads `journalctl --user -u risime`.
+set -euo pipefail
+SINCE="-24h"; LOG="${RISIME_SERVER_LOG:-$HOME/risime-logs/server.log}"
+while [ $# -gt 0 ]; do case "$1" in --since) SINCE="$2"; shift 2;; --log) LOG="$2"; shift 2;; *) echo "usage: $0 [--since T|-Nh|-Nm] [--log FILE]"; exit 2;; esac; done
+src() { if [ -f "$LOG" ]; then cat "$LOG"; else journalctl --user -u risime --no-pager -o cat 2>/dev/null || true; fi; }
+PROOF_PY="$(cat <<'PY'
+import json, re, sys, datetime as dt
+since = sys.argv[1]
+now = dt.datetime.now(dt.timezone.utc)
+m = re.fullmatch(r"-(\d+)([hmd])", since)
+if m:
+    n, u = int(m.group(1)), m.group(2)
+    start = now - dt.timedelta(**{"h": {"hours": n}, "m": {"minutes": n}, "d": {"days": n}}[u])
+else:
+    start = dt.datetime.fromisoformat(since.replace("Z", "+00:00"))
+    if start.tzinfo is None: start = start.replace(tzinfo=dt.timezone.utc)
+SEND = re.compile(r"fcm: send project=(\S+) app=(\S+) http=(\S+)")
+OLD = re.compile(r"^push: kind=(\w+) .*result=(\w+)")
+counts, old, first, last = {}, {}, None, None
+for line in sys.stdin:
+    line = line.strip()
+    t = None; msg = line
+    if line.startswith("{"):
+        try:
+            d = json.loads(line); msg = d.get("msg", ""); t = d.get("time")
+        except ValueError:
+            continue
+    else:
+        mt = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z?)", line); t = mt.group(1) if mt else None
+    if t:
+        try:
+            ts = dt.datetime.fromisoformat(t.replace("Z", "+00:00"))
+            if ts.tzinfo is None: ts = ts.replace(tzinfo=dt.timezone.utc)
+            if ts < start: continue
+            first = first or ts; last = ts
+        except ValueError:
+            pass
+    s = SEND.search(msg)
+    if s:
+        k = s.groups(); counts[k] = counts.get(k, 0) + 1; continue
+    o = OLD.search(msg)
+    if o:
+        k = ("(not logged)", "(not logged)", o.group(2) + " kind=" + o.group(1)); old[k] = old.get(k, 0) + 1
+print(f"FCM sends since {start.isoformat(timespec='minutes')} (pilot log):")
+print("  " + "project".ljust(15) + "app_id".ljust(29) + "http".ljust(17) + "count")
+for (p, a, h), n in sorted(counts.items()):
+    print(f"  {p:<14} {a:<28} {h:<16} {n}")
+if not counts:
+    print("  (no 'fcm: send' audit lines: the pilot runs a server without them, or nothing was pushed)")
+if old and not counts:
+    print("  dispatcher results without project/app (older server):")
+    for (p, a, h), n in sorted(old.items()):
+        print(f"  {p:<14} {a:<28} {h:<16} {n}")
+PY
+)"
+src | python3 -I -c "$PROOF_PY" "$SINCE"

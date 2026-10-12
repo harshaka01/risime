@@ -10,6 +10,10 @@
 #   scripts/publish-release --stage <apk> <dir>   # write version.json + index.html + the APK into <dir>
 #     exactly as a publish would (version from the APK), nothing uploaded, no pruning: the
 #     upgrade gate's local update server (scripts/upgrade-test --via-updater) serves <dir>.
+#   scripts/publish-release --legacy v0.2.0-nightly.50 [--required] [--no-upload]
+#     the old lk.codegen.risime line (decision 079): its APK (from ~/risime-releases/<tag>/) goes into the mirror ROOT,
+#     only the root version.json (the old app's feed, same format) is rewritten, the newest old APKs are kept, and
+#     index.html keeps offering the new app first. The ai.risicloud.risime/ subfolder is never touched or deleted.
 # Test hooks: RISIME_PUBLISH_DEST (default spark1:), RISIME_PUBLISH_RSH (rsync -e program).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -17,9 +21,10 @@ REL="$HOME/risime-releases"; MIRROR="$REL/publish"; KEEP=5
 BASE_ROOT="${RISIME_PUBLISH_BASE_URL:-https://risicloud.ai/app/risime/}"
 NEW_PKG=ai.risicloud.risime
 DEST="${RISIME_PUBLISH_DEST:-spark1:}"
-TAG=""; REQUIRED=false; UPLOAD=1; STAGE=""
+TAG=""; REQUIRED=false; UPLOAD=1; STAGE=""; LEGACY=0
 while [ $# -gt 0 ]; do case "$1" in
   --required) REQUIRED=true; shift;; --no-upload) UPLOAD=0; shift;;
+  --legacy) LEGACY=1; TAG="${2:?--legacy <tag>}"; shift 2;;
   --stage) STAGE_APK="${2:?--stage <apk> <dir>}"; STAGE="${3:?--stage <apk> <dir>}"; shift 3;;
   v*) TAG="$1"; shift;; *) echo "usage: $0 v<version> [--required] [--no-upload] | --stage <apk> <dir>"; exit 2;; esac; done
 if [ -n "$STAGE" ]; then
@@ -37,6 +42,8 @@ fi
 BT="$(printf '%s\n' "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
 # Package + signer gate (decision 079): new app = the Risi key (no "codegen" subject); legacy app only with
 # LEGACY_CODEGEN_BUILD=1 and its old key.
+# --legacy: the old app's own key and package only (scripts/check-apk-signer's legacy branch).
+[ "$LEGACY" = 1 ] && export LEGACY_CODEGEN_BUILD=1
 scripts/check-apk-signer "$apk" || exit 1
 certs="$("$BT/apksigner" verify --print-certs "$apk")"
 cert="$(sed -n 's/.*certificate SHA-256 digest: //p' <<<"$certs" | sed -n 1p)"
@@ -44,6 +51,8 @@ badging="$("$BT/aapt2" dump badging "$apk" | sed -n 1p)"   # not head: SIGPIPE u
 code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<<"$badging")"
 pkg="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
 [ -z "$STAGE" ] || ver="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
+if [ "$LEGACY" = 1 ] && [ "$pkg" != lk.codegen.risime ]; then echo "--legacy needs an lk.codegen.risime APK, not $pkg"; exit 1; fi
+if [ "$LEGACY" = 0 ] && [ -z "$STAGE" ] && [ "$pkg" = lk.codegen.risime ]; then echo "an lk.codegen.risime APK is published only with --legacy <tag>"; exit 1; fi
 # The feed's subdirectory: the new app's own, or the root (legacy app).
 SUB=""; [ "$pkg" = "$NEW_PKG" ] && SUB="$pkg/"
 BASE_URL="$BASE_ROOT$SUB"
@@ -112,6 +121,15 @@ else:
     page_dir = mirror
     newest = feed_info(os.path.join(mirror, new_pkg), new_pkg + "/") or feed_info(mirror, "")
 is_new = newest is not None and newest["href"].startswith(new_pkg + "/") or (stage and base.rstrip("/").endswith(new_pkg))
+# "Old app (lk.codegen.risime)": kept (pointing at the newest old APK) only when the current page already has it.
+old_link = ""
+try:
+    had_old = "Old app (lk.codegen.risime)" in open(os.path.join(page_dir, "index.html")).read()
+except OSError:
+    had_old = False
+old = feed_info(mirror, "") if (had_old and not stage) else None
+if old and not old["href"].startswith(new_pkg + "/"):
+    old_link = f'<h2>Old app (lk.codegen.risime)</h2><p><a href="{e(old["href"])}">RisiMe {e(old["versionName"])} (old app)</a></p>'
 moved = ("<p><strong>Had the previous RisiMe app?</strong> This is a new app: it installs next to the old one and "
          "never touches it. Your account, friends and groups come back when you sign in; old chats stay in the old app "
          "(export them there first if you want to keep them).</p>") if is_new else ""
@@ -125,6 +143,7 @@ code{{word-break:break-all;font-size:.8rem}} pre{{white-space:pre-wrap;backgroun
 <p><a class="btn" href="{e(newest["href"])}">Download RisiMe {e(newest["versionName"])} for Android</a></p>
 <p>After installing, RisiMe keeps itself up to date.</p>
 {moved}
+{old_link}
 <p><strong>Updates install over the app &mdash; never uninstall it: uninstalling deletes your chats. If Android says 'App not installed', don't uninstall &mdash; contact your RisiMe admin.</strong></p>
 <h2>What's new</h2><pre>{e(newest.get("notes", ""))}</pre>
 <h2>Install</h2><ol><li>Open the downloaded file and allow "install unknown apps" for your browser when asked.</li>
@@ -141,6 +160,8 @@ rsh=(); [ -n "${RISIME_PUBLISH_RSH:-}" ] && rsh=(-e "$RISIME_PUBLISH_RSH")
 # 1) APKs first, so version.json never points at a missing file; 2) index + version.json;
 # 3) prune anything not in the mirror (older APKs).
 # Feeds: ai.risicloud.risime/ (new app) and the root (old app); a publish writes only its own feed + index.html.
+# The --delete below mirrors the local tree: without the new app's feed locally it would delete it remotely. Refuse.
+[ -f "$MIRROR/$NEW_PKG/version.json" ] || { echo "the mirror has no $NEW_PKG/version.json: refusing to upload (would delete the new app's feed)"; exit 1; }
 rsync -rt --chmod=F644,D755 "${rsh[@]}" --include='*/' --include='risime-*.apk' --exclude='*' "$MIRROR/" "$DEST"
 rsync -rt --chmod=F644,D755 "${rsh[@]}" --delay-updates "$FEED/version.json" "$DEST$SUB"
 rsync -rt --chmod=F644,D755 "${rsh[@]}" --delay-updates "$MIRROR/index.html" "$DEST"

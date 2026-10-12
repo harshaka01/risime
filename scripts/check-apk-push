@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Release gate (decisions 026, 079): the APK carries the Firebase config for ITS OWN package, i.e. push is on.
+#   scripts/check-apk-push <apk> [google-services.json]
+# The APK's string resources google_app_id (and gcm_defaultSenderId) come from the google-services plugin; they must
+# exist and equal the google-services.json client entry for the APK's package (default file: env GOOGLE_SERVICES_JSON
+# or ~/secrets/firebase/google-services.json). Fails when push is off (no google_app_id), or when the values belong to
+# another app/project. Prints only the package, the project id and whether the ids match (no keys).
+set -euo pipefail
+apk="${1:?usage: $0 <apk> [google-services.json]}"
+gs="${2:-${GOOGLE_SERVICES_JSON:-$HOME/secrets/firebase/google-services.json}}"
+[ -f "$apk" ] || { echo "check-apk-push: no $apk"; exit 1; }
+BT="$(printf '%s\n' "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
+badging="$("$BT/aapt2" dump badging "$apk" | sed -n 1p)"
+pkg="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+res="$("$BT/aapt2" dump resources "$apk")"
+python3 -I -c '
+import json, re, sys
+pkg, gs, res = sys.argv[1], sys.argv[2], sys.stdin.read()
+def val(name):
+    m = re.search(r"string/" + name + r"\b[^\n]*\n\s*(?:\([^)]*\)\s*)?\"([^\"]*)\"", res)
+    return m.group(1) if m else None
+app_id, sender = val("google_app_id"), val("gcm_defaultSenderId")
+if not app_id:
+    print(f"check-apk-push: {pkg}: NO google_app_id in the APK: push is OFF (google-services.json missing or not listing {pkg})"); sys.exit(1)
+try:
+    d = json.load(open(gs))
+except OSError:
+    print(f"check-apk-push: {pkg}: google_app_id present, but {gs} is not readable to compare"); sys.exit(1)
+want = [c["client_info"]["mobilesdk_app_id"] for c in d.get("client", []) if c["client_info"]["android_client_info"]["package_name"] == pkg]
+proj = d.get("project_info", {})
+if not want:
+    print(f"check-apk-push: {pkg}: {gs} has no client for {pkg}"); sys.exit(1)
+if app_id != want[0] or (sender and sender != proj.get("project_number")):
+    print(f"check-apk-push: {pkg}: the APK'"'"'s Firebase ids are not the {proj.get("project_id")} project'"'"'s entry for {pkg}"); sys.exit(1)
+print(f"check-apk-push: OK {pkg}: push on, Firebase project {proj.get("project_id")}, google_app_id matches")
+' "$pkg" "$gs" <<<"$res"

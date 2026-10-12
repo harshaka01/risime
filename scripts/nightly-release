@@ -65,6 +65,8 @@ trap '[ "$RELEASED" = 1 ] || git checkout -q -- VERSION 2>/dev/null || true' EXI
 
 echo "==> no hard-coded IP addresses (scripts/check-no-ip, decision 079)"
 scripts/check-no-ip || exit 1
+echo "==> Keycloak accepts the new app's sign-in redirects (scripts/check-oidc-redirect, decision 079)"
+scripts/check-oidc-redirect || { echo "Keycloak check failed (see above): not releasing"; exit 1; }
 
 echo "==> server gate"
 # Own test DB and keyspace (risime_test_release): other sessions' concurrent `mix test` runs can't
@@ -205,6 +207,8 @@ fi
 # Signer gate (decision 079): ai.risicloud.risime signed with the Risi key (CN=Risi), never a "codegen"
 # certificate (legacy builds only with LEGACY_CODEGEN_BUILD=1).
 scripts/check-apk-signer "$APK" || { echo "release APK is not signed with the release key (CN=Risi)"; exit 1; }
+# Push gate (decisions 026, 079): the release APK carries its own package's Firebase config (push on).
+scripts/check-apk-push "$APK" || { echo "release APK has push OFF or another app's Firebase config: not releasing"; exit 1; }
 
 # Upgrade gate (P0 nightly.10 data loss): the previous published APK, signed in with chats, must
 # upgrade in place to THIS candidate with every message kept and no new sign-in. Needs an adb

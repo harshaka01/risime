@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Release gate (decision 079): Keycloak (client "risime") accepts the new app's sign-in redirect URIs.
+#   scripts/check-oidc-redirect            # checks ai.risicloud.risime.app://callback and ai.risicloud.risime.app.debug://callback
+#   scripts/check-oidc-redirect <uri>...   # other redirect URIs
+# For each URI: GET <issuer>/protocol/openid-connect/auth?client_id=risime&response_type=code&scope=openid&redirect_uri=
+# <uri>&code_challenge=x&code_challenge_method=S256. PASS = HTTP 200 without "Invalid parameter: redirect_uri" (the
+# login page). The issuer comes from the local server's /api/v1/auth/config (key "issuer", 127.0.0.1:4000), else from
+# env OIDC_ISSUER, else infra/pilot/pilot.env / .env keys OIDC_ISSUER*; only key names are printed.
+# Exit 0 all accepted; 1 a URI is rejected; 2 the issuer can't be reached (DNS/TLS/timeout) or isn't known.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+CLIENT="${OIDC_CLIENT_ID:-risime}"
+URIS=("$@"); [ ${#URIS[@]} -gt 0 ] || URIS=("ai.risicloud.risime.app://callback" "ai.risicloud.risime.app.debug://callback")
+issuer=""; src=""
+cfg="$(curl -fsS -m 5 "${RISIME_LOCAL_URL:-http://127.0.0.1:4000}/api/v1/auth/config" 2>/dev/null || true)"
+if [ -n "$cfg" ]; then
+  issuer="$(python3 -I -c 'import json,sys; print(json.loads(sys.stdin.read()).get("issuer") or "")' <<<"$cfg" 2>/dev/null || true)"
+  [ -n "$issuer" ] && src="local server /api/v1/auth/config key 'issuer'"
+fi
+if [ -z "$issuer" ] && [ -n "${OIDC_ISSUER:-}" ]; then issuer="$OIDC_ISSUER"; src="env OIDC_ISSUER"; fi
+if [ -z "$issuer" ]; then
+  for f in infra/pilot/pilot.env .env; do
+    [ -f "$f" ] || continue
+    k="$(grep -oE '^OIDC_ISSUER[A-Z_]*' "$f" | head -1 || true)"
+    [ -n "$k" ] || continue
+    issuer="$(sed -n "s/^$k=//p" "$f" | head -1 | tr -d '"'"'"' ')"; src="$f key $k"; break
+  done
+fi
+[ -n "$issuer" ] || { echo "check-oidc-redirect: CAN'T TELL: no issuer (local /auth/config, OIDC_ISSUER, pilot.env OIDC_ISSUER*)"; exit 2; }
+echo "check-oidc-redirect: issuer from $src; client $CLIENT"
+enc() { python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+rc=0
+for uri in "${URIS[@]}"; do
+  url="${issuer%/}/protocol/openid-connect/auth?client_id=$CLIENT&response_type=code&scope=openid&redirect_uri=$(enc "$uri")&code_challenge=x&code_challenge_method=S256"
+  body="$(mktemp)"
+  code="$(curl -sS -m 15 -o "$body" -w '%{http_code}' "$url" 2>"$body.err" || true)"
+  if [ -z "$code" ] || [ "$code" = 000 ]; then
+    echo "check-oidc-redirect: CAN'T REACH the issuer for $uri ($(head -c 160 "$body.err" | tr '\n' ' ')): fix DNS/hosts/network, then re-run"
+    rm -f "$body" "$body.err"; exit 2
+  fi
+  if [ "$code" = 200 ] && ! grep -qi "Invalid parameter: redirect_uri" "$body"; then
+    echo "check-oidc-redirect: OK $uri (login page, HTTP 200)"
+  elif grep -qi "Invalid parameter: redirect_uri" "$body"; then
+    echo "check-oidc-redirect: REJECTED $uri: Keycloak says 'Invalid parameter: redirect_uri' (add it to client $CLIENT's Valid redirect URIs)"; rc=1
+  else
+    echo "check-oidc-redirect: REJECTED $uri: HTTP $code (no login page)"; rc=1
+  fi
+  rm -f "$body" "$body.err"
+done
+exit $rc
