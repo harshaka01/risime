@@ -182,6 +182,15 @@ fi
 echo "==> boot check (scripts/boot-check: prod release, real env, Risi off/on/reopen/wrong key)"
 BOOTCHECK_INSTANCE=_rel BOOTCHECK_PORT=4591 BOOTCHECK_ENV="$HOME/development/risime/.env" step scripts/boot-check
 
+# P0 2026-10-12 product gates (BLOCKING; own redroids and ports): B = the sign-in screen reaches a slow server and
+# says "This phone is offline"; C = the Official banner is its own row below the tabs at 720 px, font 1.0 and 1.3.
+if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
+  echo "==> server reach (scripts/server-reach-test, bug B)"
+  STEP_T=900 step scripts/server-reach-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "SERVER REACH FAILED: not releasing"; exit 1; }
+  echo "==> Official banner layout (scripts/official-banner-check, bug C)"
+  STEP_T=1800 step scripts/official-banner-check --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "OFFICIAL BANNER CHECK FAILED: not releasing"; exit 1; }
+fi
+
 # Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
 # own redroids (screen off + force-idle, and after removal from Recents: message and call within 10 s).
 # PUSHTEST_SKIP=1 skips it (emergency only; say so in the release notes).
