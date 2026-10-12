@@ -61,7 +61,7 @@ class PdfContentTest {
             ),
             s.blocks,
         )
-        assertEquals("Written by Risi · RisiMe model (risi-l1)", s.writtenBy)
+        assertEquals("Written by Risi", s.writtenBy) // never a model name (Harsha 2026-10-12)
         val r = PdfContent.message(meta("""{"kind":"report","title":"Weekly","sections":[{"heading":"Done","body":"x"}]}"""), "b", now, emptyList(), emptyList(), null, now, zone, Locale.UK)
         assertEquals("Weekly", r.title)
         assertEquals(listOf(PdfBlock.Heading("Done"), PdfBlock.Paragraph("x")), r.blocks)

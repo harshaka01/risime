@@ -1396,9 +1396,10 @@ if [ "$LEDGER" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_LEDGER_ONLY:-0}" = 
   pass "ledger: A's Risi chat: 'Summary of your discussion with ZZ UI B', You agreed (✓ ✗ ✎ on A's item only), ZZ UI B agreed (read-only)"
   # §27.1: ⓘ → Made by.
   tap "ⓘ" || fail "ledger: no ⓘ on the summary card"
-  wait_for "Made by: RisiMe model (risi-l1)" 15 || fail "ledger: the ⓘ sheet doesn't say 'Made by: RisiMe model (risi-l1) · …'"
-  shot "26-made-by"
-  pass "ledger: ⓘ → 'Made by: RisiMe model (risi-l1) · hh:mm'"
+  wait_for "Made by Risi" 15 || fail "ledger: the ⓘ sheet doesn't say 'Made by Risi · …'"
+  has "risi-l1" && fail "ledger: the ⓘ sheet shows a model name (must say only 'Made by Risi')"
+  shot "26-made-by"; shot "64-made-by-risi"
+  pass "ledger: ⓘ → 'Made by Risi · hh:mm' (no model name)"
   A shell input keyevent KEYCODE_BACK; sleep 1
   wait_text "You agreed:" 15 || fail "ledger: the summary card is gone after the Made by sheet"
   mine="$(python3 -I - "$WORK/ui-A.xml" <<'PY'
@@ -1427,6 +1428,18 @@ PY
   wait_for "$mine" 30 || fail "ledger: My promises doesn't list '$mine'"
   shot "28-my-promises"
   pass "ledger: Settings → My promises lists '$mine'"
+  back_to_list || true
+  # Ownership fix (2026-10-12): About says "© 2026 RisiCloud"; the licences live only under About → Legal → Third-party notices.
+  settings_open "Legal" || fail "ledger: Settings → About → 'Legal' didn't open"
+  A shell input keyevent KEYCODE_BACK; sleep 1
+  reveal "© 2026 RisiCloud. All rights reserved." || fail "ledger: About has no '© 2026 RisiCloud. All rights reserved.'"
+  has 'Open-source licences' && fail "ledger: Settings still shows 'Open-source licences'"
+  shot "64-about"
+  tap "Legal" && wait_text "Third-party notices" 10 || fail "ledger: About → Legal has no 'Third-party notices'"
+  shot "64-legal"
+  tap "Third-party notices" && wait_text "Apache License 2.0" 10 || fail "ledger: Third-party notices didn't open"
+  shot "64-third-party-notices"
+  pass "ledger: About '© 2026 RisiCloud', About → Legal → Third-party notices (grouped by licence)"
   back_to_list || true
 fi
 

@@ -33,13 +33,6 @@ fun callsSetupItems(unsupported: String?, fullScreen: Boolean, batteryOptimised:
     add(CallsSetupItem("On Xiaomi and some other phones, also allow \"Show on lock screen\" and \"Display pop-up windows while running in background\"", Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "App settings"))
 }
 
-/** §16.9 (S-i): the notices we ship (the APK is distributed outside Play). */
-const val OPEN_SOURCE_LICENCES = """libwebrtc (io.github.webrtc-sdk:android-prefixed 144.7559.14, LiveKit's build) — BSD-3-Clause, with the WebRTC PATENTS grant. Bundled components include Opus (BSD-3-Clause), libsrtp (BSD-3-Clause), BoringSSL (OpenSSL/ISC), abseil-cpp (Apache-2.0), libyuv (BSD-3-Clause), usrsctp (BSD-3-Clause), protobuf (BSD-3-Clause) and others listed in the WebRTC source tree.
-androidx.core:core-telecom 1.0.1 — Apache-2.0.
-AndroidX, Jetpack Compose, Kotlin, kotlinx.coroutines, kotlinx.serialization, Room, WorkManager — Apache-2.0.
-OkHttp — Apache-2.0. AppAuth — Apache-2.0. libphonenumber-android — Apache-2.0. Firebase Messaging — Apache-2.0.
-OpenMLS and the RisiMe MLS core's Rust dependencies — MIT/Apache-2.0. JNA — Apache-2.0/LGPL-2.1."""
-
 @Composable
 fun CallsSettingsSection() {
     val ctx = LocalContext.current
@@ -74,10 +67,6 @@ fun CallsSettingsSection() {
             Switch(tamper, onCheckedChange = { tamper = it; calls.debugTamperFingerprint = it })
         }
     }
-    SectionHeader("Open-source licences")
-    var open by remember { mutableStateOf(false) }
-    TextButton(onClick = { open = !open }) { Text(if (open) "Hide" else "Show licences") }
-    if (open) Text(OPEN_SOURCE_LICENCES, style = MaterialTheme.typography.bodySmall)
 }
 
 /** §16.9 (A3): after a ring without full-screen permission, one in-app card that opens the setting. */

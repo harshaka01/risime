@@ -42,9 +42,14 @@ class RisiMadeByTest {
         assertEquals("RisiMe model (risi-l1)", MadeByLabels.label("risi-l1", "risime"))
         assertEquals("RisiMe (no AI model)", MadeByLabels.label(null, "risime"))
         assertEquals("Anthropic (claude-x)", MadeByLabels.label("claude-x", "Anthropic"))
-        assertEquals("Made by: RisiMe model (risi-l1) · 09:14", MadeByLabels.title(RisiMadeBy("risi-l1", "risime", at), sameDay, colombo))
-        assertEquals("Made by: RisiMe (no AI model) · Fri 09:14", MadeByLabels.title(RisiMadeBy(null, "risime", at), nextDay, colombo))
-        assertEquals(MadeByLabels.NOT_RECORDED, MadeByLabels.title(null, sameDay, colombo))
+        // Developer view only (no developer UI yet): the model/provider strings.
+        assertEquals("Made by: RisiMe model (risi-l1) · 09:14", MadeByLabels.developerTitle(RisiMadeBy("risi-l1", "risime", at), sameDay, colombo))
+        assertEquals("Made by: RisiMe (no AI model) · Fri 09:14", MadeByLabels.developerTitle(RisiMadeBy(null, "risime", at), nextDay, colombo))
+        assertEquals(MadeByLabels.NOT_RECORDED, MadeByLabels.developerTitle(null, sameDay, colombo))
+        // What users see.
+        assertEquals("Made by Risi · 09:14", MadeByLabels.title(RisiMadeBy("risi-l1", "risime", at), sameDay, colombo))
+        assertEquals("Made by Risi · Fri 09:14", MadeByLabels.title(RisiMadeBy(null, "risime", at), nextDay, colombo))
+        assertEquals("Made by Risi", MadeByLabels.title(null, sameDay, colombo))
         val also = RisiMadeBy("risi-l1", "risime", at, listOf(RisiMadeByAlso("faster-whisper-large-v3", "risime", "transcribe"), RisiMadeByAlso("m2", "Anthropic", "plan")))
         assertEquals(listOf("Transcribed by: RisiMe model (faster-whisper-large-v3)", "Also used: Anthropic (m2)"), MadeByLabels.alsoLines(also))
     }
@@ -76,7 +81,8 @@ class RisiMadeByTest {
         rule.setContent { RisiMeTheme { Column { RisiCardRow(m, r, ctx) } } }
         rule.onNodeWithTag("risi_made_by_open").performClick()
         rule.onNodeWithTag("risi_made_by_sheet").assertExists()
-        rule.onNodeWithText("Made by: RisiMe model (risi-l1)", substring = true).assertExists()
+        rule.onNodeWithText("Made by Risi", substring = true).assertExists()
+        rule.onNodeWithText("risi-l1", substring = true).assertDoesNotExist()
         rule.onNodeWithTag("risi_made_by_up").performClick()
         assertEquals(listOf("feedback:up"), host.calls)
     }
@@ -87,6 +93,31 @@ class RisiMadeByTest {
         val ctx = risiCardContext(host, listOf(m), { "Someone" }, Instant.parse("2026-10-09T10:40:00Z").toEpochMilli(), onRef = {})
         rule.setContent { RisiMeTheme { Column { RisiCardRow(m, r, ctx) } } }
         rule.onNodeWithTag("risi_made_by_open").performClick()
-        rule.onNodeWithText("RisiMe (no AI model)", substring = true).assertExists()
+        rule.onNodeWithText("Made by Risi", substring = true).assertExists()
+        rule.onNodeWithText("no AI model", substring = true).assertDoesNotExist()
+    }
+
+    /** Harsha 2026-10-12: a made_by naming models (and `also` models) never puts a model or vendor name on screen. */
+    @Test fun labelNeverNamesAModelOrVendor() {
+        val m = RisiMadeBy(
+            "gemma-3-27b", "Google", at,
+            listOf(RisiMadeByAlso("faster-whisper-large-v3", "risime", "transcribe"), RisiMadeByAlso("qwen2.5-7b", "Alibaba", "plan"), RisiMadeByAlso("claude-x", "Anthropic", "plan")),
+        )
+        val shown = MadeByLabels.title(m, sameDay, colombo)
+        assertEquals("Made by Risi · 09:14", shown)
+        for (w in listOf("gemma", "google", "whisper", "faster-whisper", "qwen", "alibaba", "anthropic", "claude", "model", "risime")) {
+            assertTrue("label shows '$w': $shown", w !in shown.lowercase())
+        }
+    }
+
+    @Test fun sheetShowsNoAlsoModels() {
+        val host = Host("7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3")
+        val (m, r0) = row("envelope_risi_answer_made_by.json")
+        val r = r0.copy(madeBy = RisiMadeBy("gemma-3-27b", "Google", at, listOf(RisiMadeByAlso("faster-whisper-large-v3", "risime", "transcribe"))))
+        val ctx = risiCardContext(host, listOf(m), { "Someone" }, Instant.parse("2026-10-09T05:00:00Z").toEpochMilli(), onRef = {})
+        rule.setContent { RisiMeTheme { Column { RisiCardRow(m, r, ctx) } } }
+        rule.onNodeWithTag("risi_made_by_open").performClick()
+        rule.onNodeWithText("Made by Risi", substring = true).assertExists()
+        for (w in listOf("gemma", "Google", "whisper", "Transcribed by")) rule.onNodeWithText(w, substring = true, ignoreCase = true).assertDoesNotExist()
     }
 }

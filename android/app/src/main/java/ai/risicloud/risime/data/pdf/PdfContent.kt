@@ -171,7 +171,7 @@ object PdfContent {
         kindLine = kindLine,
         generatedLine = generatedLine(now, zone, locale, l),
         participants = participants(participantNames, l),
-        writtenBy = if (madeBy == null && kindLine.startsWith(l.calendar)) null else listOfNotNull(l.writtenByRisi, madeBy).joinToString(" · "),
+        writtenBy = if (madeBy == null && kindLine.startsWith(l.calendar)) null else l.writtenByRisi, // never a model/vendor name; madeBy only marks presence
         blocks = blocks,
         footer = l.footer,
         pageFormat = l.page,

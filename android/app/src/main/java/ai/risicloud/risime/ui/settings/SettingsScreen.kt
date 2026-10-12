@@ -235,14 +235,15 @@ internal fun AboutSection() {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    // Decision 079: Settings → About → Open-source licences (third-party components + fonts, with licence texts).
-    var licences by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    androidx.compose.material3.TextButton(onClick = { licences = true }, modifier = Modifier.testTag("open_source_licences")) { Text(LICENCES_TITLE) }
-    if (licences) OpenSourceLicencesDialog(onDismiss = { licences = false })
-    Text("© 2026 Risi. All rights reserved.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    // Settings → About → Legal → Third-party notices (decision 079; ToS / Privacy links come later).
+    var legal by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.compose.material3.TextButton(onClick = { legal = true }, modifier = Modifier.testTag("about_legal")) { Text(LEGAL_TITLE) }
+    if (legal) LegalDialog(onDismiss = { legal = false })
+    Text(ABOUT_OWNER_LINE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("about_owner"))
 }
 
-const val LICENCES_TITLE = OPEN_SOURCE_LICENCES_TITLE
+/** The owner users see (matches the top-level LICENSE). "Risi" stays the assistant's name only. */
+const val ABOUT_OWNER_LINE = "© 2026 RisiCloud. All rights reserved."
 const val FONT_LICENCE_LINE = "PDF export embeds Noto Sans, Noto Sans Sinhala and Noto Sans Tamil (SIL Open Font License 1.1)."
 
 /** Debug builds only: force the login screen's sign-in mode (applies after sign-out). */

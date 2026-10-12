@@ -328,8 +328,8 @@ private fun OfferCard(r: RisiMeta, ctx: RisiCardContext) {
 }
 
 /**
- * §27.1 the card's header: a tap on the Risi name or ⓘ opens "Made by: … · 09:14" (with `also` lines and
- * the 👍/👎 of §24.11). A message without `made_by` (an older server) says "Made by: not recorded".
+ * §27.1 the card's header: a tap on the Risi name or ⓘ opens "Made by Risi · 09:14" with the 👍/👎 of
+ * §24.11. No model or vendor names here: those are for a Developer view only.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -347,9 +347,6 @@ fun RisiCardHeader(text: String, r: RisiMeta, ctx: RisiCardContext) {
         ModalBottomSheet(onDismissRequest = { open = false }) {
             Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(Spacing.lg).testTag("risi_made_by_sheet"), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 Text(ai.risicloud.risime.data.tabs.MadeByLabels.title(r.madeBy, ctx.nowMs), style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("risi_made_by"))
-                ai.risicloud.risime.data.tabs.MadeByLabels.alsoLines(r.madeBy).forEach {
-                    Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_made_by_also"))
-                }
                 r.callRef?.let { ref ->
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
                         Text("Was this helpful?", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

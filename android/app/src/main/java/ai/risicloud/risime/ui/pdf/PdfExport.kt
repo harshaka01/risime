@@ -96,7 +96,7 @@ object PdfExport {
                 }
                 PdfContent.message(
                     r, row.body, ai.risicloud.risime.data.messaging.CopyFormat.timeOf(row), sources, people,
-                    r.madeBy?.let { ai.risicloud.risime.data.tabs.MadeByLabels.label(it.model, it.provider) }, now, zone, locale,
+                    r.madeBy?.let { ai.risicloud.risime.data.tabs.MadeByLabels.MADE_BY_RISI }, now, zone, locale,
                 )
             }
             PdfSources.CALENDAR -> {
@@ -127,7 +127,7 @@ object PdfExport {
         val title = RisiNotes.title(me, myName, n.withUsers, nameOf, n.topic, n.endedAt, zone, locale)
         return PdfContent.note(
             title, n, items, { RisiNotes.ownerDue(it, me, nameOf, zone) }, { RisiNotes.eventLine(it, zone) },
-            n.withUsers.map(nameOf), n.madeBy?.let { ai.risicloud.risime.data.tabs.MadeByLabels.label(it.model, it.provider) }, now, zone, locale,
+            n.withUsers.map(nameOf), n.madeBy?.let { ai.risicloud.risime.data.tabs.MadeByLabels.MADE_BY_RISI }, now, zone, locale,
         )
     }
 
