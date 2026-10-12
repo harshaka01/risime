@@ -3656,6 +3656,19 @@ if [ "$OBANNER" = 1 ]; then official_banner_section; fi
 # group…"/"Group" row; the Risi chat opens with "Ask Risi…" (no tab row, no Official, no "Setting up encryption" after
 # the rebuild); a new ask is answered; the server keeps ONE Risi chat for A (same id) and no other group.
 # Shots: docs/status/screens/59-risi-reinstall-{before,list,chat}.png. UITEST_REINSTALL_ONLY=1: steps 1 and 21.
+# Chat-list rows titled "Risi" in the last dump: a "Risi" text that isn't a contact row's company line (the fixture
+# company is "Risi": the line right after a "ZZ …" name).
+count_risi_rows() {
+  python3 -I - "$WORK/ui-$DEV.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+try:
+    texts = [n.get('text') or '' for n in ET.parse(sys.argv[1]).iter('node')]
+except ET.ParseError:
+    texts = []
+texts = [t for t in texts if t]
+print(sum(1 for i, t in enumerate(texts) if t == "Risi" and not (i > 0 and texts[i - 1].startswith("ZZ "))))
+PY
+}
 reinstall_section() {
   DEV=A
   open_risi_chat || fail "reinstall: A can't open its Risi chat"
@@ -3685,7 +3698,7 @@ reinstall_section() {
   for i in $(seq 1 30); do
     if [ "$i" = 15 ]; then A shell am force-stop "$PKG"; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; wait_list 30 || true; fi
     on_list || { back_to_list >/dev/null 2>&1 || true; dump; }
-    risi="$(count_text "Risi")"; pend="$(count_text "Rejoining group…")"; grp="$(count_text "Group")"
+    risi="$(count_risi_rows)"; pend="$(count_text "Rejoining group…")"; grp="$(count_text "Group")"
     if [ "$pend" != 0 ] || [ "$grp" != 0 ]; then bad="sample $i: Risi=$risi 'Rejoining group…'=$pend 'Group'=$grp"; shot "59-risi-reinstall-list"; break; fi
     sleep 1
   done
