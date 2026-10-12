@@ -729,7 +729,7 @@ locked_folder_has_d() {
   local sz w h i
   sz="$(A shell wm size 2>/dev/null || true)"; [[ "$sz" =~ ([0-9]+)x([0-9]+) ]] && { w="${BASH_REMATCH[1]}"; h="${BASH_REMATCH[2]}"; } || { w=720; h=1280; }
   for i in 1 2 3; do
-    A shell input swipe $((w / 2)) $((h * 35 / 100)) $((w / 2)) $((h * 80 / 100)) 600; sleep 1
+    A shell input swipe $((w / 2)) $((h * 50 / 100)) $((w / 2)) $((h * 80 / 100)) 600; sleep 1
     has 'content-desc="Locked chats, ' && break
   done
   has 'content-desc="Locked chats, ' || { echo "    the pull-down shows no \"Locked chats\" row"; return 1; }
