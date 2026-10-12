@@ -166,6 +166,9 @@ defmodule RisiMe.Agent.LLM do
       prompt_sha256: prompt_hash(messages)
     }
 
+    # v1.42 §38.7: a task may add non-text facts (`meta`) to its row.
+    entry = if is_map(req[:meta]), do: Map.put(entry, :meta, req[:meta]), else: entry
+
     case result do
       {:ok, resp, output} ->
         conf = confidence_of.(output)
@@ -177,7 +180,11 @@ defmodule RisiMe.Agent.LLM do
             completion_tokens: resp.completion_tokens,
             confidence: conf,
             status: "ok",
-            output: logged_output(req.task, output)
+            output:
+              if(is_function(req[:log_output], 1),
+                do: req.log_output.(output),
+                else: logged_output(req.task, output)
+              )
           })
         )
 

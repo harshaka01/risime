@@ -731,6 +731,15 @@ defmodule RisiMe.Agent.Ledger do
 
   @doc "A proposed item nobody confirmed within 48 h: `expired`, then deleted."
   def expire(id) do
+    # v1.42 §38.7: an action item nobody confirmed is owner feedback too.
+    case Repo.get(Commitment, id) do
+      %Commitment{item_state: "proposed", kind: k} = c when is_binary(k) ->
+        RisiMe.Agent.ActionItems.feedback(c, c.owner_id, "expired")
+
+      _ ->
+        :ok
+    end
+
     Repo.delete_all(from c in Commitment, where: c.id == ^id and c.item_state == "proposed")
 
     :ok

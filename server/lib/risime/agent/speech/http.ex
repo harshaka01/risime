@@ -144,9 +144,21 @@ defmodule RisiMe.Agent.Speech.Http do
       # v1.41 §37.6: the routing's detection probability (else the model's), and the script
       # check of a Sinhala text (nil otherwise), for `voice_transcript`.
       language_probability: probability(b),
-      script: script(b["script"])
+      script: script(b["script"]),
+      # v1.42 §38.3: the segments' offsets in the audio (an item's `offset_ms`).
+      segments: segments(b["segments"])
     }
   end
+
+  defp segments(list) when is_list(list) do
+    for %{"start" => s, "text" => t} <- list,
+        is_number(s),
+        is_binary(t),
+        String.trim(t) != "",
+        do: %{offset_ms: round(s * 1000), text: String.trim(t)}
+  end
+
+  defp segments(_), do: []
 
   defp probability(%{"routing" => %{"probability" => p}}) when is_number(p), do: p
   defp probability(%{"language_probability" => p}) when is_number(p), do: p

@@ -314,6 +314,8 @@ defmodule RisiMe.Agent.Secretary do
     RisiMe.Agent.Notes.forget(conv)
     # v1.41 §37.6: the voice-note → transcript mapping.
     RisiMe.Agent.Voice.forget(conv)
+    # v1.42 §38.6: the chat's decision/question/number items.
+    RisiMe.Agent.ActionItems.forget(conv)
 
     Repo.transaction(fn ->
       Repo.delete_all(from f in Fact, where: f.conversation_id == ^conv)

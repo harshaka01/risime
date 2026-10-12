@@ -51,6 +51,8 @@ defmodule RisiMe.Workers.Risi do
     RisiMe.Agent.Reminders.prune()
     # v1.27 §27.3: held copies (expired ones go; ready ones are posted).
     if Out.ready?(), do: RisiMe.Agent.LedgerOut.prune()
+    # v1.42 §38.6: decision/question/number items after 30 days.
+    RisiMe.Agent.ActionItems.prune()
     # 30-day summaries are kept 35 days.
     RisiMe.Agent.DailySummaries.prune()
     # v1.29 §29.4–§29.6: purged cancelled events, the 30-day change log, held invites.
@@ -217,7 +219,8 @@ defmodule RisiMe.Workers.Risi do
           RisiMe.Agent.CalendarActions.act(conv, user, env)
 
         # v1.27 §27.5: item actions (and done) on ledger items, in the actor's Risi chat.
-        a when a in ~w(item_confirm item_decline item_edit item_reopen) ->
+        a
+        when a in ~w(item_confirm item_decline item_edit item_reopen item_calendar item_remind item_not_mine) ->
           LedgerActions.act(conv, user, env)
 
         # v1.41 §37.6: the note's sender deletes Risi's transcript (anyone else: ignored).
@@ -236,6 +239,10 @@ defmodule RisiMe.Workers.Risi do
       _ -> :ok
     end
   end
+
+  # v1.42 §38.2: a voice note's action items.
+  defp run(%{"kind" => "voice_actions", "conv" => conv, "message_id" => id}),
+    do: RisiMe.Agent.ActionItems.from_voice(conv, id)
 
   # v1.41 §37.6: voice notes deleted for everyone → Risi deletes their transcripts.
   defp run(%{"kind" => "voice_delete", "conv" => conv, "message_ids" => ids}) when is_list(ids) do

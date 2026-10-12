@@ -236,7 +236,8 @@ defmodule RisiMe.Agent.LedgerS23Test do
     assert length(wire) == 2
 
     for c <- wire do
-      assert Enum.sort(Map.keys(c)) == Enum.sort(Map.keys(hd(ex)))
+      # v1.42 §38.5: + `kind` and `source_ref` on every item.
+      assert Enum.sort(Map.keys(c)) == Enum.sort(Map.keys(hd(ex)) ++ ~w(kind source_ref))
 
       assert c["source"] == "chat" and is_binary(c["summary_id"])
     end

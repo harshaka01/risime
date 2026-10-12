@@ -33,6 +33,10 @@ defmodule RisiMe.Agent.Discussion do
     field :call_ref, :binary_id
     field :made_by, :map
     field :created_at, :utc_datetime_usec
+    # v1.42 §38.3: the whole source of an action-items extraction (SourceRef) and, for a voice
+    # note, its message id (§38.6 deletes).
+    field :source_ref, :map
+    field :note_message_id, :string
     # v1.39 §36.7 (transcribed calls only, not stored): the call's majority language and each
     # speaker's language; they set the optional wire `lang`.
     field :lang, :string, virtual: true

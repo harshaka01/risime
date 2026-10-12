@@ -1,8 +1,10 @@
 defmodule RisiMe.Contract.ExamplesV142Test do
   @moduledoc """
-  Contract v1.42 §38 (decision 082, Risi voice → action items): shape-only coverage of the new
-  example files, added by root with the contract bump (integration). The server replaces these
-  with server-output comparisons when §38 is built.
+  Contract v1.42 §38 (decision 082, Risi voice → action items): every new example file. The
+  server-produced ones are compared against real server output in
+  test/risime/agent/action_items_test.exs (`action_items` for a call, a voice note and unclear,
+  `action_confirm`, `risi_commitments_reply_v142.json`, `auth_config_v142.json`). Here: the shape
+  rules of every example, and the client-sent `risi_action`s are ones the server handles.
   """
   use ExUnit.Case, async: true
 
@@ -71,6 +73,14 @@ defmodule RisiMe.Contract.ExamplesV142Test do
 
     assert %{"action" => "item_not_mine", "edit" => nil} =
              example("envelope_risi_action_item_not_mine.json")
+
+    # The server handles each new action (owner only; test/risime/agent/action_items_test.exs).
+    for f <-
+          ~w(envelope_risi_action_item_calendar.json envelope_risi_action_item_remind.json
+                envelope_risi_action_item_not_mine.json),
+        do: assert(example(f)["action"] in RisiMe.Agent.LedgerActions.actions())
+
+    assert RisiMe.Agent.ActionItems.kinds() == @kinds
   end
 
   test "My promises v1.42 and the switch" do

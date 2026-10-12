@@ -54,6 +54,13 @@ defmodule RisiMeWeb.AuthController do
         do: Map.put(body, :voice_transcribe, "on"),
         else: body
 
+    # v1.42 §38.1: `risi_action_items` "on" while RISI_ACTION_ITEMS=on (with the ledger) and Risi
+    # can post; left out otherwise (absent = off).
+    body =
+      if RisiMe.Agent.ActionItems.config_on?(),
+        do: Map.put(body, :risi_action_items, "on"),
+        else: body
+
     json(conn, body)
   end
 

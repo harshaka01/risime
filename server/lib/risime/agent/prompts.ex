@@ -275,6 +275,80 @@ defmodule RisiMe.Agent.Prompts do
     #{@untrusted}
     """
 
+  @doc """
+  v1.42 §38.3 `extract_actions`: the §27.2 extraction for a call or a voice note, with item kinds
+  and line references. `summary` may be null (a voice note).
+  """
+  def action_schema,
+    do: %{
+      "type" => "object",
+      "properties" => %{
+        "summary" => %{
+          "anyOf" => [%{"type" => "string", "maxLength" => 280}, %{"type" => "null"}]
+        },
+        "items" => %{
+          "type" => "array",
+          "maxItems" => 15,
+          "items" => %{
+            "type" => "object",
+            "properties" => %{
+              "kind" => %{"enum" => ~w(promise task meeting decision question number)},
+              "text" => %{"type" => "string", "maxLength" => 200},
+              "owner" => %{
+                "anyOf" => [%{"type" => "string", "pattern" => @member_ref}, %{"type" => "null"}]
+              },
+              "counterparts" => %{
+                "type" => "array",
+                "maxItems" => 20,
+                "items" => %{"type" => "string", "pattern" => @member_ref}
+              },
+              "due_local" => %{
+                "anyOf" => [
+                  %{
+                    "type" => "string",
+                    "pattern" => "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2})?$"
+                  },
+                  %{"type" => "null"}
+                ]
+              },
+              "due_text" => %{
+                "anyOf" => [%{"type" => "string", "maxLength" => 100}, %{"type" => "null"}]
+              },
+              "source" => %{
+                "type" => "array",
+                "minItems" => 1,
+                "maxItems" => 5,
+                "items" => %{"type" => "string", "pattern" => @message_ref}
+              },
+              "lang" => %{"enum" => ~w(en si ta)},
+              "confidence" => %{"type" => "number", "minimum" => 0, "maximum" => 1}
+            },
+            "required" =>
+              ~w(kind text owner counterparts due_local due_text source lang confidence),
+            "additionalProperties" => false
+          }
+        }
+      },
+      "required" => ~w(summary items),
+      "additionalProperties" => false
+    }
+
+  @doc "v1.42 §38.3: the `extract_actions` system prompt (a call or a voice note)."
+  def action_system(source),
+    do: """
+    You are Risi, a careful note-taker. Below is the transcript of #{if source == "call", do: "a voice call between team members", else: "a voice note a team member sent to the chat"},     one line per spoken chunk ("from" is the speaker). List what was said that people need to     act on or remember:
+    - kind: "promise" (a speaker or named member will do something), "task" (something to be     done, owner maybe unknown), "meeting" (an agreed time together), "decision" (something     agreed), "question" (left open), "number" (a figure stated: price, quantity, date).
+    - text: a short phrase (at most 12 words, without the deadline) in the language it was     spoken; lang: that language, "en", "si" (Sinhala) or "ta" (Tamil).
+    - owner: for promise/task/meeting, the member ref (u1, u2, ...) of who will do it: the     speaker when they say "I will"; a member named in the transcript; else null. Decisions,     questions and numbers: owner null. Never guess an owner.
+    - counterparts: member refs it was promised to, [] if none is clear, never the owner.
+    - due_local: the deadline or meeting time in the owner's local time, "YYYY-MM-DDTHH:MM",     or "YYYY-MM-DD" when only a day is said, or null when no time was said; due_text: the     words as said, or null.
+    - source: the refs (m1, m2, ...) of the lines it comes from, first the line that says it.
+    - confidence: 0 to 1.
+    - summary: one line (at most 280 characters) in the transcript's main language saying what     it was about, without owners or deadlines#{if source == "call", do: "", else: "; null for a voice note"}.
+    Never invent names, amounts or dates: only what the transcript says. When nothing needs     action, return "items": [].
+    #{@untrusted}
+    """
+
   @doc "v1.29 §30.2: the `discussion_summarise` system prompt for a note (topic and meetings too)."
   def note_system,
     do:

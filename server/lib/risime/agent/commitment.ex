@@ -52,6 +52,11 @@ defmodule RisiMe.Agent.Commitment do
     # v1.29 §30.5: when it was marked done and the state it had before (`item_reopen`).
     field :done_at, :utc_datetime_usec
     field :reopen_state, :string
+    # v1.42 §38.3: the item kind (promise | task | meeting; nil = an older item, "promise" on the
+    # wire), the line it came from (SourceRef: ids and times only) and the language spoken.
+    field :kind, :string
+    field :source_ref, :map
+    field :lang, :string
     timestamps()
   end
 

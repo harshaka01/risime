@@ -685,7 +685,9 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
         language: r.language,
         model: r.model,
         ms: meta.duration_ms,
-        romanised: Map.get(r, :romanised) == true
+        romanised: Map.get(r, :romanised) == true,
+        # v1.42 §38.2: the detection probability (the quality gate).
+        p: Map.get(r, :language_probability)
       }
 
       add_segment(st, rt, seg)
@@ -722,6 +724,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
             | end: max_dt(turn.end, seg.end),
               texts: turn.texts ++ [seg.text],
               romanised: turn.romanised or seg.romanised,
+              parts: turn.parts ++ [part(turn.start, seg)],
+              p_ms: add_p(turn.p_ms, seg),
               lang_ms: Map.update(turn.lang_ms, seg.language, seg.ms, &(&1 + seg.ms)),
               model_ms: Map.update(turn.model_ms, seg.model, seg.ms, &(&1 + seg.ms))
           }
@@ -752,6 +756,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       end: seg.end,
       texts: [seg.text],
       romanised: seg.romanised,
+      parts: [part(seg.start, seg)],
+      p_ms: add_p({0.0, 0}, seg),
       lang_ms: %{seg.language => seg.ms},
       model_ms: %{seg.model => seg.ms}
     }
@@ -776,6 +782,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       end: turn.end,
       texts: turn.texts,
       romanised: turn.romanised,
+      parts: turn.parts,
+      p: avg_p(turn.p_ms),
       language: top(turn.lang_ms, "en"),
       model: top(turn.model_ms, Speech.route("en"))
     }
@@ -784,6 +792,19 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     st = enqueue_post(st, {:turn, s, line})
     {st, %{rt | turn: nil, turn_n: n, posts: rt.posts + 1}}
   end
+
+  # v1.42 §38.3: each chunk's offset in its turn (the item's `offset_ms`) and text.
+  defp part(turn_start, seg),
+    do: %{"o" => max(DateTime.diff(seg.start, turn_start, :millisecond), 0), "t" => seg.text}
+
+  # v1.42 §38.2: the turn's detection probability, weighted by speech.
+  defp add_p({sum, ms}, %{p: p, ms: n}) when is_number(p) and is_integer(n),
+    do: {sum + p * n, ms + n}
+
+  defp add_p(acc, _seg), do: acc
+
+  defp avg_p({_sum, 0}), do: nil
+  defp avg_p({sum, ms}), do: Float.round(sum / ms, 3)
 
   defp top(m, default) when map_size(m) == 0, do: default
   defp top(m, _), do: m |> Enum.max_by(fn {_k, v} -> v end) |> elem(0)
@@ -889,7 +910,12 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       "end" => Clock.ts(line.end),
       "text" => line.texts |> Enum.join(" ") |> String.slice(0, 2000),
       "language" => line.language,
-      "model" => line.model
+      "model" => line.model,
+      # v1.42 §38: the posted turn number, its chunks (offset, text), the gate's facts.
+      "turn" => line.n,
+      "parts" => Map.get(line, :parts, []),
+      "p" => Map.get(line, :p),
+      "romanised" => Map.get(line, :romanised) == true
     })
 
     {body, risi} = Lines.transcript(s, line)

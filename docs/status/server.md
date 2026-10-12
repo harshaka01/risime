@@ -17,6 +17,52 @@ Gate green on `main`: `mix format --check-formatted && mix compile --warnings-as
 LiveKit on 2026-10-08); `scripts/interop` (instance `_hs`) last green after v1.15.
 
 
+## v1.42 §38 Risi voice → action items (decision 082) — READY v1.42 (not deployed)
+One pipeline: `server/lib/risime/agent/action_items.ex` runs the §27.2 extraction (`extract_actions`, a
+`risi_discussions` row, ledger items in `risi_commitments`, the §27.5 life cycle and `item_update`s) on Official call
+transcripts (`CallTranscribe.Summary`, the §36.7 trigger) and Official voice-note transcripts (`Agent.Voice` → job
+`voice_actions`). Actions in `ledger_actions.ex` (+ `item_calendar`, `item_remind`, `item_not_mine`); My promises in
+`rest.ex`; dev preview `action_items/dev.ex` + `mix risime.action_items.preview`. Migration
+`20261102100000_risi_action_items` (additive: `risi_commitments.kind/source_ref/lang`,
+`risi_discussions.source_ref/note_message_id`, table `risi_action_extras`). Tests: `test/risime/agent/action_items_test.exs`,
+`test/contract/examples_v142_test.exs`.
+- **Pilot env:** `RISI_ACTION_ITEMS=on` (default off) — needs `RISI_LEDGER=on`; voice notes also need
+  `RISI_VOICE_TRANSCRIBE=on` (§37). `/auth/config` `risi_action_items: "on"` only while both are on and Risi can post.
+  Off: §36.7 runs unchanged (discussion summary/card) and voice notes are not extracted.
+- **Server behaviour the phone should know:**
+  - Quality gate (no model call, no items): call majority-language probability < 0.6 → `low_confidence`; > 25 % of
+    Sinhala turns romanised → `script_check`; voice note `unclear` → its reason (`no_speech` / `low_confidence` /
+    `script_check`). Clear source without items: nothing posted.
+  - Line refs: call `turn` = the `call_transcript` turn number, `offset_ms` = the chunk's offset in that turn; voice
+    `offset_ms` = the speech service's segment start (0 when it gave none).
+  - Ledger items = promise/task/meeting **with** an owner. An unowned task and decision/question/number are
+    `owner: null`, `state: null` (30-day extras, not in My promises).
+  - `action_confirm` only for owners with a `risi_ledger` device (held 24 h if their Risi chat isn't active); others
+    keep the Official card items, which expire at 48 h. `remind` button only with the Reminders skill ask/allowed;
+    `add_calendar` for a meeting or a future timed due.
+  - Actions (owner only, after `expires_at` ignored): `item_confirm`/`item_edit` as §27.5; `item_calendar` confirms and
+    creates exactly one Risi Calendar event (edit's §28.4 shape, else `due` + 60 min; nothing without a usable time;
+    needs a calendar user, RISI_EVENTS); `item_remind` confirms and adds an `item_due` reminder at `remind_at` (future)
+    or `due − 1 h`; `item_not_mine` → `declined`. Each posts `item_update` to the participants' Risi chats.
+  - Confirming an action item does **not** trigger the §28.5/§29.12 proactive calendar offers (the card's buttons are
+    the offers).
+  - Deleting the note for everyone, or `transcript_delete`, → its items `cancelled` (`item_update`) and extras removed.
+  - `GET /risi/commitments`: every item has `kind` ("promise" for older ones) and `source_ref` (null for older);
+    `?source=chat,call,voice_note` filters (unknown value → `400 bad_request`).
+- **Learning log:** `extract_actions` row (meta: source ids, lang, lines/turns, audio_s; output = counts per kind and
+  per owner only); `action_feedback` rows (`confirm`/`edit` (+ changed fields)/`calendar`/`remind`/`not_mine`/`expired`,
+  seconds from posting). No text.
+- **Not done in §38 (left as is):** §30 notes for these sources (a notes user gets the action cards, no note);
+  `decision`/`question`/`number` items aren't yet viewable/deletable via §35.3 REST (they expire at 30 days and go
+  with Official off).
+- **Dev preview (sample card from a real call, nothing posted or stored):** within 24 h of the call, on spark2:
+  `~/risime-run/current/bin/risime rpc 'RisiMe.Agent.ActionItems.Dev.print_call("grp:<official id>", "<session_id>", "<member user id>")'`
+  (or `print_note(conv, note_message_id, member)`). Only works for an Official conversation the member is in; prints
+  the card JSON (items, owners, dues, line refs), never the transcript. The model call writes one `extract_actions`
+  log row (counts). Session ids: `risi_call_transcribe_sessions` (conversation_id, state ended/stopped, discard false).
+  Note: sessions transcribed before this release have no `turn`/`parts`/`p` in the buffer: refs have `turn: null`,
+  `offset_ms: 0`, and the low-confidence gate is skipped.
+
 ## v1.41 §37 voice notes (decision 081) — READY v1.41 (not deployed)
 Code: `server/lib/risime/mls/images.ex` (readiness), `devices.ex` (capability), `messaging.ex` +
 `messaging/group_receipts.ex` + `risime_web/channels/inbox_channel.ex` (`played`), `agent/voice.ex`,

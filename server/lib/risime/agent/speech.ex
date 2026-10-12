@@ -20,6 +20,7 @@ defmodule RisiMe.Agent.Speech do
           optional(:romanised) => boolean,
           optional(:language_probability) => number | nil,
           optional(:script) => script | nil,
+          optional(:segments) => [%{offset_ms: non_neg_integer, text: String.t()}],
           text: String.t(),
           language: String.t(),
           model: String.t(),

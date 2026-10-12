@@ -70,6 +70,24 @@ defmodule RisiMe.Agent.LedgerReminders do
 
   def schedule(_c), do: :ok
 
+  @doc """
+  v1.42 §38.4 `item_remind`: one extra `item_due` `before` reminder of a confirmed or edited item
+  at `at` (the owner's own time).
+  """
+  def remind_at(%Commitment{item_state: state} = c, %DateTime{} = at) when state in @open do
+    %{
+      "kind" => "item_reminder",
+      "conv" => c.conversation_id,
+      "commitment_id" => c.id,
+      "v" => c.schedule_v
+    }
+    |> job("before", c.owner_id, at)
+
+    :ok
+  end
+
+  def remind_at(_c, _at), do: :ok
+
   defp owner_moments(%Commitment{all_day: true} = c, tz) do
     date = due_date(c, tz)
 

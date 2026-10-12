@@ -221,6 +221,15 @@ defmodule RisiMe.Contract.ExamplesV130Test do
     {200, promises} = api(ctx, :h, :get, "/commitments", hd)
     assert [%{"note_id" => nid, "state" => "confirmed"}] = promises["commitments"]
     assert nid == card["note_id"]
+    # v1.42 §38.5 adds `kind` and `source_ref` to every item (risi_commitments_reply_v142.json).
+    promises =
+      update_in(promises, ["commitments"], fn cs ->
+        for c <- cs do
+          assert c["kind"] == "promise" and c["source_ref"] == nil
+          Map.drop(c, ~w(kind source_ref))
+        end
+      end)
+
     check!("risi_commitments_reply_v130.json", promises)
 
     # The Notes list (a search hit) and the note (live states).

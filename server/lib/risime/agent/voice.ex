@@ -208,7 +208,7 @@ defmodule RisiMe.Agent.Voice do
     t = classify(result, note)
     log(conv, t, note, latency)
     posted = post(conv, note_id, sender, note, t)
-    buffer(conv, note_id, sender, t, mode, request_id)
+    buffer(conv, note_id, sender, t, mode, request_id, note.duration_ms)
     if mode == :risi_chat, do: risi_chat(conv, note_id, sender, t, request_id)
     posted
   rescue
@@ -257,14 +257,17 @@ defmodule RisiMe.Agent.Voice do
     romanised = Map.get(r, :romanised) == true
     script = if language == "si", do: Map.get(r, :script)
 
-    status =
+    # v1.42 §38.2: why it was unclear (the action-items card says so).
+    reason =
       cond do
-        not r.speech -> "unclear"
-        is_number(p) and p < @min_probability -> "unclear"
-        romanised -> "unclear"
-        String.trim(r.text || "") == "" -> "unclear"
-        true -> "ok"
+        not r.speech -> "no_speech"
+        String.trim(r.text || "") == "" -> "no_speech"
+        is_number(p) and p < @min_probability -> "low_confidence"
+        romanised -> "script_check"
+        true -> nil
       end
+
+    status = if reason, do: "unclear", else: "ok"
 
     %{
       status: status,
@@ -273,7 +276,10 @@ defmodule RisiMe.Agent.Voice do
       model: r.model,
       script: script,
       romanised: romanised and language == "si",
-      elapsed_ms: r[:elapsed_ms]
+      elapsed_ms: r[:elapsed_ms],
+      reason: reason,
+      p: p,
+      parts: if(status == "ok", do: parts(r), else: [])
     }
   end
 
@@ -285,8 +291,18 @@ defmodule RisiMe.Agent.Voice do
       model: nil,
       script: nil,
       romanised: false,
-      elapsed_ms: nil
+      elapsed_ms: nil,
+      reason: nil,
+      p: nil,
+      parts: []
     }
+
+  defp parts(r) do
+    case Map.get(r, :segments) do
+      [_ | _] = segs -> for s <- segs, do: %{"o" => s.offset_ms, "t" => s.text}
+      _ -> [%{"o" => 0, "t" => r.text |> String.trim() |> String.slice(0, @max_text)}]
+    end
+  end
 
   @doc false
   # The post (§37.6): body and `risi` object.
@@ -389,19 +405,28 @@ defmodule RisiMe.Agent.Voice do
   end
 
   # The 24-h working copy (sealed): a `voice_transcript` in Official, the request in a Risi chat.
-  defp buffer(conv, note_id, sender, t, :official, _rid) do
+  defp buffer(conv, note_id, sender, t, :official, _rid, duration_ms) do
     env = %{
       "v" => 1,
       "type" => "voice_transcript",
       "status" => t.status,
       "text" => t.text,
-      "language" => t.language
+      "language" => t.language,
+      # v1.42 §38: what the action-items extraction needs (no audio, no key).
+      "reason" => t.reason,
+      "p" => t.p,
+      "romanised" => t.romanised,
+      "model" => t.model,
+      "parts" => t.parts,
+      "duration_ms" => duration_ms
     }
 
     put_buffer(conv, note_id, sender, env)
+    # v1.42 §38.2: the action items of the note (a job; ids only).
+    RisiMe.Agent.ActionItems.voice_transcribed(conv, note_id, sender, t.status, duration_ms)
   end
 
-  defp buffer(conv, note_id, sender, %{status: "ok"} = t, :risi_chat, rid) do
+  defp buffer(conv, note_id, sender, %{status: "ok"} = t, :risi_chat, rid, _duration_ms) do
     env = %{
       "v" => 1,
       "type" => "risi_request",
@@ -415,7 +440,7 @@ defmodule RisiMe.Agent.Voice do
     put_buffer(conv, note_id, sender, env)
   end
 
-  defp buffer(_conv, _note_id, _sender, _t, :risi_chat, _rid), do: :ok
+  defp buffer(_conv, _note_id, _sender, _t, :risi_chat, _rid, _duration_ms), do: :ok
 
   defp put_buffer(conv, note_id, sender, env) do
     Transcript.put(conv, %{
@@ -517,7 +542,8 @@ defmodule RisiMe.Agent.Voice do
     case Out.delete(conv, Enum.map(rows, &elem(&1, 1))) do
       :ok ->
         forget_rows(conv, Enum.map(rows, &elem(&1, 0)))
-        Transcript.delete(conv, note_ids)
+        # v1.42 §38.6: the note's action items are cancelled (and its working copy goes).
+        RisiMe.Agent.ActionItems.cancel_notes(conv, note_ids)
         :ok
 
       {:error, reason} when reason in [:not_member, :private_tab] ->

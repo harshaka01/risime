@@ -206,6 +206,11 @@ if v = System.get_env("RISI_CALL_TRANSCRIBE"),
 if v = System.get_env("RISI_VOICE_TRANSCRIBE"),
   do: config(:risime, :risi_voice_transcribe, on?.(v))
 
+# v1.42 §38.1 (decision 082): RISI_ACTION_ITEMS=on makes the action-items cards for Official calls
+# and voice notes (`/auth/config` `risi_action_items`, default off; needs RISI_LEDGER=on). Off:
+# §36.7 runs unchanged and voice notes are not extracted.
+if v = System.get_env("RISI_ACTION_ITEMS"), do: config(:risime, :risi_action_items, on?.(v))
+
 if v = System.get_env("RISI_DEV_USERS") do
   ids =
     v

@@ -112,7 +112,14 @@ defmodule RisiMeWeb.RisiController do
       RisiMe.Agent.Notes.on?() and
         RisiMe.Devices.risi_notes_device?(me(conn), RisiMeWeb.MLSController.caller_device(conn))
 
-    case Rest.commitments(me(conn), state, notes: notes?) do
+    # v1.42 §38.5: `source=call,voice_note` (default all); an unknown value is `400`.
+    sources = Rest.parse_sources(params["source"])
+
+    case sources != :error and
+           Rest.commitments(me(conn), state, notes: notes?, sources: elem(sources, 1)) do
+      false ->
+        GroupController.error(conn, {:error, :bad_request})
+
       # Item 9: `totals` per direction (the personal digest carries the same `totals`).
       {:ok, commitments} ->
         totals = Enum.frequencies_by(commitments, & &1.direction)

@@ -121,7 +121,9 @@ defmodule RisiMe.Agent.Rest do
   list}` or `{:error, :agent_unavailable}` (like `facts/1`).
   """
   def commitments(user, state, opts \\ []) do
-    with {:ok, rows} <- user |> query(state) |> Repo.all() |> opened(&Commitment.open_all/1) do
+    q = user |> query(state) |> by_source(Keyword.get(opts, :sources))
+
+    with {:ok, rows} <- q |> Repo.all() |> opened(&Commitment.open_all/1) do
       names = owner_names(rows)
       list = Enum.map(rows, fn c -> commitment_json(c, user, names) end)
 
@@ -179,6 +181,30 @@ defmodule RisiMe.Agent.Rest do
   def open_commitments(user),
     do: user |> query(:open) |> Repo.all() |> opened(&Commitment.open_all/1)
 
+  # v1.42 §38.5: `source=chat,call,voice_note` (nil = all). An older item without a `source` is
+  # a chat item.
+  defp by_source(q, nil), do: q
+
+  defp by_source(q, sources) do
+    chat? = "chat" in sources
+    where(q, [c], c.source in ^sources or (^chat? and is_nil(c.source)))
+  end
+
+  @sources ~w(chat call voice_note)
+
+  @doc """
+  v1.42 §38.5: parses the `source` query parameter (a comma list of `chat` | `call` |
+  `voice_note`): `{:ok, nil | [source]}` or `:error`.
+  """
+  def parse_sources(nil), do: {:ok, nil}
+
+  def parse_sources(s) when is_binary(s) do
+    list = s |> String.split(",", trim: true) |> Enum.map(&String.trim/1) |> Enum.uniq()
+    if list != [] and Enum.all?(list, &(&1 in @sources)), do: {:ok, list}, else: :error
+  end
+
+  def parse_sources(_), do: :error
+
   defp query(user, state) do
     q =
       from c in Commitment,
@@ -210,7 +236,10 @@ defmodule RisiMe.Agent.Rest do
         all_day: c.all_day == true,
         source_conversation_id: c.conversation_id,
         source_message_id: List.first(c.source_message_ids || []),
-        source_message_ids: c.source_message_ids || []
+        source_message_ids: c.source_message_ids || [],
+        # v1.42 §38.5: every item has a kind ("promise" for older ones) and its line (or null).
+        kind: c.kind || "promise",
+        source_ref: c.source_ref
       })
 
     if Commitment.ledger?(c),

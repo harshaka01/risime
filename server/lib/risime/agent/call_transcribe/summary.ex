@@ -44,38 +44,60 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
 
     total = by_speaker |> Map.values() |> Enum.sum()
 
-    if total >= @min_speech_ms and map_size(by_speaker) >= @min_speakers do
-      call = %{
-        call_id: s.call_id,
-        media: "audio",
-        duration_s: duration_s(s),
-        transcript:
-          Enum.map(rows, &%{message_id: &1.message_id, sender_id: &1.speaker, text: &1.text}),
-        also:
-          rows
-          |> Enum.map(& &1.model)
-          |> Enum.uniq()
-          |> Enum.map(&%{"model" => &1, "provider" => "risime", "task" => "transcribe"}),
-        lang: majority(rows),
-        langs:
-          Map.new(
-            Map.keys(by_speaker),
-            &{&1, majority(Enum.filter(rows, fn r -> r.speaker == &1 end))}
-          )
-      }
+    cond do
+      total < @min_speech_ms or map_size(by_speaker) < @min_speakers ->
+        drop(conv, ids)
+        :ok
 
-      case Ledger.call_ended(conv, call) do
-        :ok ->
-          drop(conv, ids)
-          :ok
+      # v1.42 §38: with RISI_ACTION_ITEMS on, the extraction makes the action-items cards.
+      RisiMe.Agent.ActionItems.on?() ->
+        case RisiMe.Agent.ActionItems.from_call(conv, s, rows) do
+          :ok ->
+            drop(conv, ids)
+            :ok
 
-        other ->
-          other
-      end
-    else
-      drop(conv, ids)
-      :ok
+          other ->
+            other
+        end
+
+      true ->
+        legacy(conv, s, rows, ids, by_speaker)
     end
+  end
+
+  defp legacy(conv, s, rows, ids, by_speaker) do
+    call = %{
+      call_id: s.call_id,
+      media: "audio",
+      duration_s: duration_s(s),
+      transcript:
+        Enum.map(rows, &%{message_id: &1.message_id, sender_id: &1.speaker, text: &1.text}),
+      also: also(rows),
+      lang: majority(rows),
+      langs:
+        Map.new(
+          Map.keys(by_speaker),
+          &{&1, majority(Enum.filter(rows, fn r -> r.speaker == &1 end))}
+        )
+    }
+
+    case Ledger.call_ended(conv, call) do
+      :ok ->
+        drop(conv, ids)
+        :ok
+
+      other ->
+        other
+    end
+  end
+
+  @doc "`made_by.also`: every speech model of the rows, `task: \"transcribe\"`."
+  def also(rows) do
+    rows
+    |> Enum.map(& &1.model)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.map(&%{"model" => &1, "provider" => "risime", "task" => "transcribe"})
   end
 
   @doc "The buffered segments of session `s`, oldest first."
@@ -95,24 +117,32 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
         text: e["text"],
         language: e["language"] || "en",
         model: e["model"],
-        ms: max(DateTime.diff(b, a, :millisecond), 0)
+        ms: max(DateTime.diff(b, a, :millisecond), 0),
+        # v1.42 §38: the turn, its chunks, the gate's facts (absent on older rows).
+        start: a,
+        turn: e["turn"],
+        parts: e["parts"] || [],
+        p: e["p"],
+        romanised: e["romanised"] == true
       }
     end
   end
 
-  defp majority([]), do: "en"
+  @doc "The majority language of rows (by speech time)."
+  def majority([]), do: "en"
 
-  defp majority(rows) do
+  def majority(rows) do
     rows
     |> Enum.reduce(%{}, fn r, acc -> Map.update(acc, r.language, r.ms, &(&1 + r.ms)) end)
     |> Enum.max_by(fn {_l, ms} -> ms end)
     |> elem(0)
   end
 
-  defp duration_s(%Session{started_at: a, ended_at: b}) when not is_nil(a) and not is_nil(b),
+  @doc false
+  def duration_s(%Session{started_at: a, ended_at: b}) when not is_nil(a) and not is_nil(b),
     do: max(DateTime.diff(b, a), 0)
 
-  defp duration_s(_), do: nil
+  def duration_s(_), do: nil
 
   defp drop(_conv, []), do: :ok
 

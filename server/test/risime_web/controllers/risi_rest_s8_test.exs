@@ -133,7 +133,8 @@ defmodule RisiMeWeb.RisiRestS8Test do
       assert keys(reply) == keys(ex)
       assert keys(reply["totals"]) == keys(ex["totals"])
 
-      for c <- cs, do: assert(keys(c) == keys(legacy))
+      # v1.42 §38.5: + `kind` and `source_ref` on every item.
+      for c <- cs, do: assert(keys(c) == Enum.sort(keys(legacy) ++ ~w(kind source_ref)))
 
       mine = Enum.find(cs, &(&1["commitment_id"] == own.id))
 

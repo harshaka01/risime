@@ -25,7 +25,10 @@ defmodule RisiMe.Agent.LedgerActions do
   alias RisiMe.Agent.{Clock, Commitment, Commitments, Discussion, Fact, Ledger, LedgerOut}
   alias RisiMe.{Repo, RisiChat}
 
-  @actions ~w(item_confirm item_edit item_decline done item_reopen)
+  # v1.42 §38.4: `item_calendar`, `item_remind`, `item_not_mine` (owner only, the action items'
+  # confirm card; `RisiMe.Agent.ActionItems`).
+  @actions ~w(item_confirm item_edit item_decline done item_reopen item_calendar item_remind
+              item_not_mine)
   @reopen_s 7 * 86_400
 
   @doc "The actions handled here (from a Risi chat)."
@@ -40,7 +43,7 @@ defmodule RisiMe.Agent.LedgerActions do
          %Discussion{} = d <- Repo.get(Discussion, c.summary_id),
          true <- user in d.recipients,
          {:ok, c} <- Commitment.open(c) do
-      do_act(action, c, d, user, env["edit"])
+      do_act(action, c, d, user, env["edit"], conv)
     else
       _ -> :ok
     end
@@ -51,31 +54,55 @@ defmodule RisiMe.Agent.LedgerActions do
   defp expired?(%Discussion{created_at: at}),
     do: DateTime.compare(Clock.now(), DateTime.add(at, Ledger.expire_s())) != :lt
 
-  defp do_act("item_confirm", %Commitment{item_state: "proposed"} = c, d, user, _edit) do
-    if c.owner_id == user and not expired?(d) do
-      c =
-        c
-        |> Ecto.Changeset.change(
-          state: "confirmed",
-          item_state: "confirmed",
-          by: user,
-          confirmed_at: Clock.usec(Clock.now()),
-          schedule_v: c.schedule_v + 1
-        )
-        |> Repo.update!()
+  defp do_act(action, c, d, user, edit, conv)
 
-      tracked(c)
-      LedgerOut.item_update(c, d, "confirmed", user)
+  defp do_act("item_confirm", %Commitment{item_state: "proposed"} = c, d, user, _edit, _conv) do
+    case confirm(c, d, user) do
+      :ok ->
+        RisiMe.Agent.ActionItems.feedback(c, user, "confirm")
+
+      _ ->
+        :ok
+    end
+  end
+
+  # v1.42 §38.4: the owner's other buttons (the tap is the consent, §26.3).
+  defp do_act(action, %Commitment{item_state: state} = c, d, user, edit, conv)
+       when action in ~w(item_calendar item_remind) and state in ~w(proposed confirmed edited) do
+    cond do
+      c.owner_id != user ->
+        :ok
+
+      state == "proposed" and expired?(d) ->
+        :ok
+
+      action == "item_calendar" ->
+        RisiMe.Agent.ActionItems.calendar(conv, c, d, user, edit)
+
+      true ->
+        RisiMe.Agent.ActionItems.remind(c, d, user, edit)
+    end
+  end
+
+  defp do_act("item_not_mine", %Commitment{item_state: "proposed"} = c, d, user, _edit, _conv) do
+    if c.owner_id == user and not expired?(d) do
+      # Declined; offered to nobody else; the owner's feedback.
+      Commitments.cancel_timers(c.id)
+      Repo.delete!(c)
+      RisiMe.Agent.ActionItems.feedback(c, user, "not_mine")
+      LedgerOut.item_update(c, d, "declined", user)
     else
       :ok
     end
   end
 
-  defp do_act("item_edit", %Commitment{item_state: state} = c, d, user, %{} = edit)
+  defp do_act("item_edit", %Commitment{item_state: state} = c, d, user, %{} = edit, _conv)
        when state in ~w(proposed confirmed edited) do
     with true <- c.owner_id == user,
          false <- state == "proposed" and expired?(d),
          {:ok, text, due, all_day} <- edit_values(c, edit),
+         old_text = c.text,
+         old_due = c.due,
          due_text = if(due == c.due, do: c.due_text, else: nil),
          {:ok, sealed} <- Commitment.sealed_changes(c.id, text, due_text) do
       c =
@@ -97,13 +124,21 @@ defmodule RisiMe.Agent.LedgerActions do
 
       Repo.delete_all(from f in Fact, where: f.commitment_id == ^c.id)
       tracked(c)
+
+      RisiMe.Agent.ActionItems.feedback(
+        c,
+        user,
+        "edit",
+        for({k, true} <- [{"text", text != old_text}, {"due", due != old_due}], do: k)
+      )
+
       LedgerOut.item_update(c, d, "edited", user)
     else
       _ -> :ok
     end
   end
 
-  defp do_act("item_decline", %Commitment{item_state: state} = c, d, user, _edit)
+  defp do_act("item_decline", %Commitment{item_state: state} = c, d, user, _edit, _conv)
        when state in ~w(proposed confirmed edited) do
     if c.owner_id == user do
       # ✗ on a proposal: declined; on a tracked one: cancelled. Either way nothing is kept.
@@ -121,7 +156,7 @@ defmodule RisiMe.Agent.LedgerActions do
     end
   end
 
-  defp do_act("done", %Commitment{item_state: state} = c, d, user, _edit)
+  defp do_act("done", %Commitment{item_state: state} = c, d, user, _edit, _conv)
        when state in ~w(confirmed edited) do
     if user == c.owner_id or user in c.counterpart_ids do
       c =
@@ -145,7 +180,7 @@ defmodule RisiMe.Agent.LedgerActions do
   end
 
   # v1.29 §30.5: un-ticking a done item (a note, My promises or an `item_due` card).
-  defp do_act("item_reopen", %Commitment{item_state: "done"} = c, d, user, _edit) do
+  defp do_act("item_reopen", %Commitment{item_state: "done"} = c, d, user, _edit, _conv) do
     back = if c.reopen_state in ~w(confirmed edited), do: c.reopen_state, else: "confirmed"
 
     recent? =
@@ -172,7 +207,34 @@ defmodule RisiMe.Agent.LedgerActions do
     end
   end
 
-  defp do_act(_action, _c, _d, _user, _edit), do: :ok
+  defp do_act(_action, _c, _d, _user, _edit, _conv), do: :ok
+
+  @doc """
+  `item_confirm` of a proposed item by its owner before it expires: `confirmed`, tracked, the
+  `item_update`s. `:ok`, or `:error` when it can't be confirmed (v1.42 §38.4 reuses it).
+  """
+  def confirm(%Commitment{item_state: "proposed"} = c, d, user) do
+    if c.owner_id == user and not expired?(d) do
+      c =
+        c
+        |> Ecto.Changeset.change(
+          state: "confirmed",
+          item_state: "confirmed",
+          by: user,
+          confirmed_at: Clock.usec(Clock.now()),
+          schedule_v: c.schedule_v + 1
+        )
+        |> Repo.update!()
+
+      tracked(c)
+      LedgerOut.item_update(c, d, "confirmed", user)
+      :ok
+    else
+      :error
+    end
+  end
+
+  def confirm(_c, _d, _user), do: :error
 
   # §27.5: `edit.text` 1–200 characters (absent: unchanged); `due` a future ts or null (absent:
   # unchanged); `all_day` a boolean (absent: unchanged).
@@ -228,7 +290,9 @@ defmodule RisiMe.Agent.LedgerActions do
     Commitments.learn(c)
     RisiMe.Agent.LedgerReminders.schedule(c)
     # Items 8/10: tracked now (counterparts may be offered too), or a new due after an edit.
-    RisiMe.Agent.Offers.consider(c)
+    # v1.42 §38.4: not for an action item: its confirm card's own buttons are the offers, and
+    # nothing proactive runs without the owner's tap.
+    if c.kind == nil, do: RisiMe.Agent.Offers.consider(c)
     :ok
   end
 end
