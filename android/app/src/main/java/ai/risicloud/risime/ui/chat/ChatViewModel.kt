@@ -219,7 +219,10 @@ class ChatViewModel(private val c: AppContainer, private val meId: String, val p
 
     /** Item 3: the user's explicit "Send without encryption" for this one waiting message (the bubble then shows ⚠). */
     fun sendWithoutEncryption(clientMsgId: String) {
-        c.scope.launch { c.engine.sendWithoutEncryption(clientMsgId) }
+        c.scope.launch {
+            val ok = runCatching { c.engine.sendWithoutEncryption(clientMsgId) }.onFailure { android.util.Log.w("RisiMe", "send without encryption failed: ${it.javaClass.simpleName}") }.getOrDefault(false)
+            android.util.Log.i("RisiMe", "send without encryption (user's tap): ${if (ok) "allowed for one message" else "not applicable"}")
+        }
     }
 
     fun delete(clientMsgId: String) {

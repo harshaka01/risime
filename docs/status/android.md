@@ -1,5 +1,49 @@
 # Android status — 0.2 nightlies
 
+## READY chat-list clarity + "hi without a padlock" (12 Oct, next nightly; not released)
+**1. One marker per preview** (`previewMarker()`, ChatsScreen.kt): "🔒 " Private (E2EE), "● " Official, "⚠ Not encrypted · "
+sent/received without E2EE. Never blank for a message; rows from before v17 are judged honestly (group → 🔒, MLS sender
+device → 🔒, my pending row → 🔒, this phone holds the DM's MLS group → 🔒, else ⚠) — never a false padlock.
+**2. System lines** ("Earlier messages aren't available on this device", group events) carry no marker in the list (DM and
+group rows); the chat's system rows never had one.
+**3. No silent plaintext** (`EncryptionHold`, ChatEngine): a 1:1 message with no MLS group on this phone (new chat, this phone
+reinstalled), or while the peer's announced new phone (`mls_membership` added) isn't in the group yet, stays PENDING
+"Waiting for encryption…" and goes out **encrypted** when ready (MLS change → flush; 2 s re-looks during the first 30 s,
+bounded). After 30 s the bubble says "Waiting for encryption… Tap to send without encryption"; only that tap (per message,
+`messages.e2ee = plain_ok`, survives restarts) sends plaintext, and the bubble then shows "⚠ Not encrypted". Photos/files
+never go plaintext (unchanged rule). Room **v17**: one nullable column `messages.e2ee` (Migration16To17, additive, rule 9).
+Debug-only seam `files/debug-dm-add-delay-ms` (delays this phone's DM device adds; compiled out of release and rejected by
+`checkNoGcalSeamInRelease`).
+**Tests:** EncryptionHoldTest (hold / 30 s / explicit fallback / pending adds), EncryptionHoldEngineTest (no plaintext on its
+own, group arrives → encrypted, explicit tap → plaintext + ⚠, peer's new phone holds until added, restart keeps it, core
+opening holds, incoming plaintext marked), PreviewMarkerTest, Migration16To17Test; tests that expected a silent plaintext DM
+send were updated. **Device gate** `scripts/e2ee-clarity-test` (two redroids, temp server, fake-llm): **ECTEST OK** — B's list
+"🔒 ec-private-1", "● ec-official-1"; A→C (C never set up encryption) held 30 s with 0 messages on the server, the tap sent
+exactly 1 plaintext message, bubble + list "⚠ Not encrypted · You: …"; after A's reinstall A's list shows "Earlier messages…"
+without a padlock; B sent at once → "Waiting for encryption…" → encrypted once B added A's new phone (server: plain=0 enc=2),
+A shows it with the lock; no crash/ANR. Shots `docs/status/screens/65-clarity-*.png`.
+
+**4. Why Ashen's "hi" showed without a padlock (server metadata only, ids shortened; Harsha = de9b6235, Ashen = 4dc306b5).**
+- Ashen has sent exactly **one** message ever: 2026-10-08 03:56:39 UTC (09:26 SLT, 8 Oct), DM `dm:4dc306b5…_de9b6235…`,
+  from his only device 78058c7f, as **MLS ciphertext** (inbox payload keys `ciphertext, generation=1, epoch=1`). The DM became
+  E2EE 23 s earlier (`mls_groups.e2ee_since` 03:56:16); from then the server refuses any plaintext send
+  (`server/lib/risime/messaging.ex:256` `plaintext? and group != nil -> e2ee_required`; `mls.ex:47-55`, never reverts).
+- Nothing from Ashen exists on 11 or 12 Oct (message_index: no row with sender 4dc306b5 after 8 Oct); at ~19:05 SLT on 12 Oct
+  (13:35:12 UTC) the only DM traffic is **Harsha's own** ciphertext message to Ashen (device dae5933e, epoch 7, still "sent":
+  Ashen's phone runs nightly.28 and was last seen 07:52 UTC). Harsha's inbox since 11 Oct: 0 plaintext / 475 ciphertext.
+- Harsha reinstalled twice on 12 Oct: device 9ddd90cd at 08:16 UTC (restored the 11 Oct 07:35 backup at 08:16:42) and dae5933e
+  at 09:40 UTC (restored backup c551d6d5 at 09:41:32). The "hi" on the phone is that restored row (BundleImporter.kt:279/283,
+  original timestamp, `origin = backup`) — it was never re-sent and never travelled in plaintext.
+- It showed **no padlock because of the UI**, not the transport: rows had no per-message encryption state at all, and the chat
+  list's 🔒 came only from `tabIcon(row.lastTab)` (ChatsScreen.kt:411-425 at 38998a7, before this change), which is set only while tabs are
+  on **and** the chat has an Official conversation (ChatsViewModel.kt:170 `mergeTabRows`). Ashen's DM has no Official tab
+  (his app is nightly.28), so the row never had a marker — the same row in a chat with Official got "🔒 ". Fixed by item 1.
+- The real silent-plaintext path did exist in code, just not here: `ChatEngine.sendPayload` → `plain()` (ChatEngine.kt:1115-1116
+  at 38998a7) whenever this phone had no MLS group for a DM; the server only refused it if the DM already had a group.
+  A brand-new chat with someone whose phone hadn't set up MLS went out in plaintext without a word. Removed by item 3.
+- Open question for Harsha: if the bubble itself showed 19:05 (not 09:26 under "8 Oct"), tell me; the metadata says no
+  message from Ashen arrived then.
+
 ## READY v1.39 §36 call transcription fast path (12 Oct; not released)
 1:1 Official calls only. Code: `calls/transcribe/` (consent machine, chunker, Ogg/Opus muxer + MediaCodec Opus encoder,
 own-mic tap, upload queue, manager, call-screen UI), `net/Protocol139.kt`, `data/tabs/RisiTranscriptLines.kt`,

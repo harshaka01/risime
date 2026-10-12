@@ -413,13 +413,14 @@ internal fun Bubble(
     )
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
+            // Item 3: the waiting message's own choice comes first (the sheet's end can sit under the navigation bar).
+            if (offerPlain) add(SEND_WITHOUT_ENCRYPTION to { onSendWithoutEncryption?.invoke(m.clientMsgId) })
             if (x != null) {
                 // §33.3 a single message copies its content alone (a photo: its caption; hidden without one).
                 if (ai.risicloud.risime.data.messaging.CopyFormat.content(m, single = true) != null) add(MessagingStrings.COPY to { x.ctl.copy(context, listOf(m), x.nameOrNull) })
                 addAll(messagingMenuItems(m, x, context) { selectText = true })
             } else if (!m.image || m.body.isNotBlank()) add("Copy" to { scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("message", m.body))) } })
             if (retryable) add("Retry" to { onRetry(m.clientMsgId) })
-            if (offerPlain) add(SEND_WITHOUT_ENCRYPTION to { onSendWithoutEncryption?.invoke(m.clientMsgId) })
             // §15.7 (android S-d): with the delete UI on, a never-accepted row's action is "Discard".
             if (failed) add((if (sel != null) "Discard" else "Delete") to { onDelete(m.clientMsgId) })
             if (sel != null && !failed) {

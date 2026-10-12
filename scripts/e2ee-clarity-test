@@ -3,15 +3,15 @@
 # against a temp server from THIS checkout (E2EE on, TABS + Risi with scripts/fake-llm), fresh installs:
 #   scripts/e2ee-clarity-test [--apk app-debug.apk] [--keep]          (a DEBUG build: it uses the debug-only DM-add delay)
 #  1. A, B sign in through the real login UI; C is an account that never signs in (no phone has set up encryption).
-#  2. 1:1 A↔B becomes e2ee; B's chat list shows "🔒 <message>" (Private marker).            shot 65-list-private.png
-#  3. A starts Official in that chat and sends there; B's list shows "● <message>".        shot 65-list-official.png
+#  2. 1:1 A↔B becomes e2ee; B's chat list shows "🔒 <message>" (Private marker).            shot 65-clarity-list-private.png
+#  3. A starts Official in that chat and sends there; B's list shows "● <message>".        shot 65-clarity-list-official.png
 #  4. A → C (no E2EE possible yet): "Waiting for encryption…", never plaintext on its own; after 30 s the bubble offers
 #     "Send without encryption"; the tap sends it (the server stores exactly 1 plaintext message for A↔C) and the
-#     bubble and A's list show "⚠ Not encrypted".               shots 65-waiting-new-chat.png, 65-not-encrypted-*.png
-#  5. Reinstall: B delays adding new devices to its 1:1s by 25 s (debug seam files/debug-dm-add-delay-ms); A uninstalls,
+#     bubble and A's list show "⚠ Not encrypted".               shots 65-clarity-waiting-*.png, 65-clarity-not-encrypted-*.png
+#  5. Reinstall: B delays adding new devices to its 1:1s by 90 s (debug seam files/debug-dm-add-delay-ms); A uninstalls,
 #     reinstalls and signs in (a new device); A's list shows the system line "Earlier messages…" with no padlock;
 #     B sends at once → "Waiting for encryption…" on B; once B adds A's new phone it goes out ENCRYPTED; A receives it
-#     with the lock; the server holds 0 plaintext messages in A↔B.  shots 65-system-line.png, 65-reinstall-*.png
+#     with the lock; the server holds 0 plaintext messages in A↔B.  shots 65-clarity-system-line.png, 65-clarity-reinstall-*.png
 #  6. No FATAL EXCEPTION / ANR / main-thread DB on either phone.
 # Writes ~/risime-logs/e2ee-clarity-test/v<version>.result; prints "ECTEST PASS|FAIL <step>". Never touches :4000,
 # other sessions' redroids or containers. Screens are copied to docs/status/screens/ with --shots.
@@ -105,6 +105,9 @@ case mode do
     for {p, l} <- Enum.zip(phones, ["A", "B", "C"]) do
       {:ok, _} = Accounts.allow(%{phone: p, email: "ectest#{String.downcase(l)}@example.com", display_name: "ZZ EC #{l}", company: "Risi"})
     end
+    # C never signs in: an account with no phone (no device, so no end-to-end encryption is possible with it yet).
+    pc = List.last(phones)
+    Repo.get_by(User, phone: pc) || Repo.insert!(%User{phone: pc, email: "ectestc@example.com", display_name: "ZZ EC C", company: "Risi"})
     IO.puts("ectest: setup ok")
   "friends" ->
     [a, b, c] = Enum.map(phones, &user!.(&1).id)
@@ -334,12 +337,12 @@ logcat_ok() {  # $1 label: both phones, no crash / ANR / main-thread DB for the 
   done
   return 0
 }
-shot() { A exec-out screencap -p > "$SHOTDIR/65-$1.png" 2>/dev/null || true; echo "    shot 65-$1.png"; }
+shot() { A exec-out screencap -p > "$SHOTDIR/65-clarity-$1.png" 2>/dev/null || true; echo "    shot 65-clarity-$1.png"; }
 # The chat list row's subtitle: the first text node after the row whose title is $1 (entities decoded).
 row_sub() {
   dump
   python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
-import sys, xml.etree.ElementTree as ET
+import re, sys, xml.etree.ElementTree as ET
 try:
     nodes = list(ET.parse(sys.argv[1]).iter('node'))
 except ET.ParseError:
@@ -350,6 +353,9 @@ for n in nodes:
     if not t:
         continue
     if seen:
+        # skip the row's meta (time / day / date) and an unread badge
+        if re.fullmatch(r'\d{1,2}:\d{2}( ?[AP]M)?|\d+|Yesterday|Mon|Tue|Wed|Thu|Fri|Sat|Sun|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2} \w{3}', t):
+            continue
         print(t); break
     if t == sys.argv[2]:
         seen = True
@@ -412,10 +418,15 @@ wait_text "~Tap to send without encryption" 60 || fail "A → C: no 'Send withou
 [ "$(fx plain C)" = "ectest: plain=0 enc=0" ] || fail "A → C went out in plaintext on its own: $(fx plain C)"
 pass "A → C held as 'Waiting for encryption…' for 30 s, nothing sent"; CHECKS+=" hold_no_auto_plaintext"
 shot waiting-offer
-tap "^ec-plain-1" || fail "A: can't tap the waiting bubble"
-wait_text "^Send without encryption" 10 || fail "A: the bubble's sheet has no 'Send without encryption'"
-tap "^Send without encryption" || fail "A: tap 'Send without encryption'"
-wait_text "~Not encrypted" 30 || fail "A: the bubble doesn't show ⚠ Not encrypted"
+ok=""
+for _ in 1 2 3; do
+  tap "~You: ec-plain-1" || fail "A: can't tap the waiting bubble"
+  wait_text "^Send without encryption" 10 || fail "A: the bubble's sheet has no 'Send without encryption'"
+  sleep 1.5 # the sheet slides up: tap where it settled
+  tap "^Send without encryption" || true
+  wait_text "~⚠ Not encrypted" 15 && { ok=1; break; }
+done
+[ -n "$ok" ] || fail "A: the bubble doesn't show ⚠ Not encrypted"
 for _ in $(seq 1 30); do [ "$(fx plain C)" = "ectest: plain=1 enc=0" ] && break; sleep 1; done
 [ "$(fx plain C)" = "ectest: plain=1 enc=0" ] || fail "server: A → C should hold exactly 1 plaintext message: $(fx plain C)"
 shot not-encrypted-bubble
@@ -426,7 +437,7 @@ shot list-markers
 pass "explicit 'Send without encryption': 1 plaintext message on the server, ⚠ on the bubble and in the list"; CHECKS+=" explicit_plaintext list_not_encrypted"
 
 # ---------------------------------------------------------------- 5. reinstall: B's message waits, then goes encrypted
-DEV=B; A shell run-as "$PKG" sh -c 'echo 25000 > files/debug-dm-add-delay-ms' || fail "B: debug seam (a debug APK is needed)"
+DEV=B; A shell "run-as $PKG sh -c 'mkdir -p files; echo 90000 > files/debug-dm-add-delay-ms'" && [ "$(A shell "run-as $PKG cat files/debug-dm-add-delay-ms" | tr -d '\r')" = 90000 ] || fail "B: debug seam (a debug APK is needed)"
 open_chat "ZZ EC A" || fail "B: DM before A's reinstall"
 private_tab || fail "B: Private tab"
 DEV=A; install_fresh
@@ -434,14 +445,14 @@ sign_in "+94770000961" "ectesta@example.com" || { skip_restore; wait_list 30; } 
 skip_restore; dismiss_prompts
 for _ in $(seq 1 60); do [ "$(fx a_devices)" = "ectest: a_devices=2" ] && break; sleep 1; done
 [ "$(fx a_devices)" = "ectest: a_devices=2" ] || fail "A's new phone has no MLS device on the server: $(fx a_devices)"
+DEV=A; back_to_list || true
+wait_row "ZZ EC B" "s.startswith('Earlier messages') and '🔒' not in s and '●' not in s" 40 || fail "A's list: the system line should show without a padlock"
+shot system-line
+pass "system line in the list without a padlock"; CHECKS+=" system_line_no_lock"
 DEV=B; send_text "ec-after-reinstall" || fail "B can't send right after A's reinstall"
 wait_text "~Waiting for encryption" 15 || fail "B: no 'Waiting for encryption…' while A's new phone isn't in the chat"
 shot reinstall-b-waiting
 pass "B's message waits for A's new phone"; CHECKS+=" reinstall_hold"
-DEV=A; back_to_list || true
-wait_row "ZZ EC B" "s.startswith('Earlier messages') and '🔒' not in s and '●' not in s" 60 || fail "A's list: the system line should show without a padlock"
-shot system-line
-pass "system line in the list without a padlock"; CHECKS+=" system_line_no_lock"
 DEV=B; ok=""
 for _ in $(seq 1 120); do [ -z "$(node_xy "~Waiting for encryption")" ] && { ok=1; break; }; sleep 1; done
 [ -n "$ok" ] || fail "B's message never left 'Waiting for encryption…'"
@@ -460,6 +471,6 @@ wait_row "ZZ EC A" "s == '🔒 You: ec-after-reinstall'" 30 || fail "B's list do
 # ---------------------------------------------------------------- 6. crash / ANR
 logcat_ok "final"
 pass "no FATAL EXCEPTION / ANR / main-thread DB on A and B"; CHECKS+=" logcat_clean"
-if [ "$SHOTS" = 1 ]; then cp "$SHOTDIR"/65-*.png "$REPO/docs/status/screens/"; echo "==> screens copied to docs/status/screens/65-*.png"; fi
+if [ "$SHOTS" = 1 ]; then cp "$SHOTDIR"/65-clarity-*.png "$REPO/docs/status/screens/"; echo "==> screens copied to docs/status/screens/65-clarity-*.png"; fi
 RESULT=PASS; REASON=ok; write_result
 echo "ECTEST OK"

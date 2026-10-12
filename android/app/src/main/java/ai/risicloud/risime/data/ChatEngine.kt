@@ -195,7 +195,8 @@ class ChatEngine(
         if (step == ai.risicloud.risime.data.mls.EncryptionHold.Step.HOLD || step == ai.risicloud.risime.data.mls.EncryptionHold.Step.HOLD_LONG) {
             // No group here: ask the upgrader (create a new chat's group, or get this phone re-added) now and then.
             val last = holdKicked[m.conversationId]
-            if (group == null && engine != null && (last == null || now - last >= HOLD_REPAIR_EVERY_MS)) {
+            val every = if (step == ai.risicloud.risime.data.mls.EncryptionHold.Step.HOLD) HOLD_REPAIR_EVERY_MS else HOLD_LONG_REPAIR_EVERY_MS
+            if (group == null && engine != null && (last == null || now - last >= every)) {
                 holdKicked[m.conversationId] = now
                 onDmNeedsRepair(m.conversationId)
             }
@@ -1676,6 +1677,9 @@ class ChatEngine(
 
         /** Item 3: how often a held DM asks the upgrader again (create the group / re-add this phone). */
         const val HOLD_REPAIR_EVERY_MS = 5_000L
+
+        /** Item 3: after the first 30 s the upgrader is asked only this often (the chat screen's own loop keeps trying too). */
+        const val HOLD_LONG_REPAIR_EVERY_MS = 60_000L
 
         /** Item 3: the 2 s re-looks per held message (≈ the 30 s wait, with slack). */
         const val MAX_HOLD_PASSES = 20
