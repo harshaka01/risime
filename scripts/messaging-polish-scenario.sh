@@ -87,7 +87,8 @@ wait_node() {  # <regex> [seconds]
 composer() { dump; grep -qE '(text|content-desc)="(Encrypted message|Message)"' "$WORK/ui-$DEV.xml"; }
 send_text() {  # <text> (no shell-special characters)
   { type_into "Encrypted message" "$1" || type_into "Message" "$1"; } || return 1
-  sleep 0.5; tap "Send"
+  sleep 0.5; tap "Send" || return 1
+  sleep 0.5; hide_keyboard
 }
 # Swipe right on the bubble whose content-desc matches $1: the bubble follows, the reply bar shows.
 swipe_reply() {  # <regex of the bubble>
@@ -176,12 +177,15 @@ pass "polish: group Private: swipe-reply quote and the link card on both phones"
 
 # ---------------------------------------------------------------- 5. 1:1 Official: swipe to reply (no URL in Official)
 DEV=A; official_on "ZZ Call B" || fail "polish: A can't open the 1:1's Official tab"
+official_settle() { dump; grep -qF "Risi listens in Official" "$WORK/ui-$DEV.xml" && { tap "OK" || true; sleep 1; }; hide_keyboard; }
+official_settle
 DEV=B; official_on "ZZ Call A" || fail "polish: B can't open the 1:1's Official tab"
+official_settle
 DEV=A; send_text "mp-official-1" || fail "polish: A can't send in Official"
 DEV=B; wait_node 'mp-official-1' 60 || fail "polish: B never got the Official message"
 swipe_reply 'mp-official-1' || fail "polish: B's swipe right in Official showed no reply bar"
 send_text "mp-official-reply" || fail "polish: B can't send the Official reply"
-DEV=A; wait_node 'Replying to You: mp-official-1.*mp-official-reply|mp-official-reply.*Replying to You' 60 || fail "polish: A never saw the Official swipe-reply quote"
+DEV=A; official_settle; wait_node 'Replying to You: mp-official-1.*mp-official-reply|mp-official-reply.*Replying to You' 60 || fail "polish: A never saw the Official swipe-reply quote"
 mshot official-reply-quote
 pass "polish: 1:1 Official: swipe-reply quote on the other phone"
 
