@@ -21,6 +21,8 @@ data class FriendsState(
     val blocked: List<BlockedUser> = emptyList(),
     /** §21.4 (v1.20): lowercased user ids of friends whose phone isn't confirmed ("Phone not verified"). */
     val unconfirmed: Set<String> = emptySet(),
+    /** v1.44 §39.1: lowercased user ids of friends with `group_calls: false` ("can't join calls yet"; absent = can). */
+    val noGroupCalls: Set<String> = emptySet(),
 )
 
 /** §9.2: friends as local contact rows (friend = true). */
@@ -55,6 +57,7 @@ class ContactsRepository(private val api: ApiClient, private val dao: ContactDao
                 _friends.value = FriendsState(
                     r.value.incoming, r.value.outgoing, r.value.blocked,
                     unconfirmed = r.value.friends.filter { !it.phoneConfirmed }.map { it.userId.lowercase() }.toSet(),
+                    noGroupCalls = r.value.friends.filter { it.groupCalls == false }.map { it.userId.lowercase() }.toSet(),
                 )
                 ApiResult.Ok(Unit)
             }

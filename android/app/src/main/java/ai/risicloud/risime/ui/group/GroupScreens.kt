@@ -549,10 +549,13 @@ internal fun GroupMessageList(
                     SystemLineText(item.m.body)
                 } else {
                     val running = !ai.risicloud.risime.calls.GroupCallLines.over(item.m.systemJson)
+                    // v1.44 §39.6: this device rang and nobody answered here.
+                    val missedHere = ai.risicloud.risime.calls.GroupCallLines.missed(item.m.systemJson)
+                    val text = ai.risicloud.risime.calls.GroupCallLines.text(env, nameOf(item.m.from), item.m.from.equals(meId, true), running, missedHere)
                     ai.risicloud.risime.calls.GroupCallLineRow(
-                        ai.risicloud.risime.calls.GroupCallLines.text(env, nameOf(item.m.from), item.m.from.equals(meId, true), running),
+                        text,
                         video = env.video,
-                        missed = !item.m.from.equals(meId, true) && env.reason == ai.risicloud.risime.calls.GroupCallEnvelope.R_TIMEOUT,
+                        missed = !item.m.from.equals(meId, true) && (env.reason == ai.risicloud.risime.calls.GroupCallEnvelope.R_TIMEOUT || ai.risicloud.risime.calls.CallLines.isMissed(text)),
                         onJoin = onJoinCall?.takeIf { ai.risicloud.risime.calls.GroupCallLines.joinable(env, running) }?.let { f -> { f(env, item.m.from) } },
                         onDeleteForMe = del?.let { d -> { d.deleteForMe(listOf(item.m.clientMsgId)) } },
                     )

@@ -166,6 +166,27 @@ data class CallSnapshot(
     val everVideo: Boolean = false,
     /** v1.39 §36.1: placed from the 1:1's Official tab (this phone's offer, or the peer's offer said `"tab": "official"`). */
     val official: Boolean = false,
+    /** v1.44 §39.1: both selected devices listed `add` (Add participant works once the call is connected). */
+    val canAdd: Boolean = false,
+    /** v1.44 §39.1: this device listed `add` (so a disabled button names the peer's app as the reason). */
+    val iCanAdd: Boolean = false,
+    /** v1.44 §39.3: the call is being moved into a group call (P2P still carries the audio). */
+    val moving: Boolean = false,
+)
+
+/** v1.44 §39.3 what the call layer needs to move a connected 1:1 call into a group call. */
+data class MoveInfo(
+    val callId: String,
+    val conversationId: String,
+    val peer: String,
+    val peerDevice: String,
+    /** The 1:1 call's start media (the cleartext `media` of its signals). */
+    val media: String,
+    /** In video mode now (§23.2): the room starts as a video room. */
+    val video: Boolean,
+    val wantCamera: Boolean,
+    val muted: Boolean,
+    val official: Boolean,
 )
 
 /** §23.2 what a switch attempt ended with (the UI names the peer). */
@@ -197,6 +218,10 @@ class CallStateMachine(
     private val ringMs: Long = RING_MS,
     /** §23.1 what this device can do in a call (`switch`, `screen`), sent in `features`. */
     private val features: () -> List<String> = { emptyList() },
+    /** v1.44 §39.5 a valid `call_escalate` from the selected peer device of the connected call (outside the lock). */
+    private val onEscalate: suspend (CallEnvelope.Escalate, String) -> Unit = { _, _ -> },
+    /** v1.44 §39.3 the peer's `call_end` `moved` arrived for the call being moved (called under the lock, before it ends). */
+    private val onMovedByPeer: (callId: String, movedTo: CallEnvelope.MovedTo?) -> Unit = { _, _ -> },
 ) {
     companion object {
         const val RING_MS = 45_000L
@@ -245,6 +270,9 @@ class CallStateMachine(
         const val RENEGOTIATE_WAIT_MS = 15_000L
         /** How long a switch notice line stays. */
         const val SWITCH_NOTICE_MS = 4_000L
+
+        /** v1.44 §39.3: the move gives up when the peer isn't in the room this long after `call_escalate`. */
+        const val MOVE_MS = 30_000L
 
         private val ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
 
@@ -345,6 +373,14 @@ class CallStateMachine(
         var renegotiationFailed = false
         /** The switch, `call_media` and re-offer envelopes go out in the order they were decided. */
         var ordered: kotlinx.coroutines.channels.Channel<Pair<CallEnvelope.Env, (suspend (SignalOutcome) -> Unit)?>>? = null
+
+        // ---- v1.44 §39.3 moving into a group call ----
+        /** A move is pending: the P2P path's loss is expected (the peer switched), not a failure. */
+        var moving = false
+        /** A move was tried (at most one per call). */
+        var moveTried = false
+        /** The last `call_escalate` `move` this device acted on (a repeat is ignored). */
+        var escalateRoom: String? = null
     }
 
     /** §19.5 (android A1): the in-call activity is visible and unlocked (the camera runs only then). */
@@ -556,6 +592,61 @@ class CallStateMachine(
     /** The id of the call that exists now (not ended), if any. */
     fun currentCallId(): String? = current?.takeIf { !it.ended }?.id
 
+    // ---------------------------------------------------------------- v1.44 §39.3 moving into a group call
+
+    /** §39.1: both selected devices listed `add`. */
+    private fun bothAdd(c: Call) = CallEnvelope.FEATURE_ADD in c.peerFeatures && CallEnvelope.FEATURE_ADD in c.myFeatures
+
+    private fun canAdd(c: Call) = bothAdd(c) && live(c) && !c.moveTried && peerDevice(c) != null
+
+    /**
+     * §39.3: marks the connected call as moving (P2P loss is ignored from now on, at most [MOVE_MS])
+     * and says what the move needs. [adder] = this device adds people (the button); false = the
+     * peer's `call_escalate` asked. Null = this call can't move (not connected, no `add`, moved already).
+     */
+    suspend fun beginMove(callId: String? = null, adder: Boolean = true): MoveInfo? = lock.withLock {
+        val c = current?.takeIf { !it.ended && (callId == null || it.id == callId) } ?: return@withLock null
+        if (adder && !canAdd(c)) return@withLock null
+        if (!adder && (!bothAdd(c) || !live(c) || c.moving)) return@withLock null
+        val peerDev = peerDevice(c) ?: return@withLock null
+        c.moving = true
+        c.moveTried = true
+        timer(c, "move", MOVE_MS + 5_000) { x ->
+            log("move of ${x.id}: still pending after ${MOVE_MS + 5_000} ms: P2P counts again")
+            x.moving = false
+            publish(x)
+        }
+        publish(c)
+        log("move of ${c.id} begins (${if (adder) "adder" else "peer"})")
+        MoveInfo(c.id, c.conv, c.peer, peerDev, c.media, c.video, c.wantCamera, c.muted, c.official)
+    }
+
+    /** §39.3 step 6: the move gave up; the call goes on peer to peer (its loss counts again). */
+    suspend fun endMove(callId: String) = lock.withLock {
+        val c = current?.takeIf { !it.ended && it.id == callId } ?: return@withLock
+        c.moving = false
+        c.timers.remove("move")?.cancel()
+        log("move of ${c.id} given up: staying peer to peer")
+        // A drop that happened while moving is judged now.
+        if (lastIce[c.id] == IceState.FAILED) finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED) else publish(c)
+    }
+
+    /**
+     * §39.3 step 5: the group call carries the audio now. The P2P media closes; the adder sends the
+     * durable `call_end` `moved` ([movedTo]); nothing is shown (the group call takes the screen).
+     */
+    suspend fun movedOut(callId: String, sendEnd: Boolean, movedTo: CallEnvelope.MovedTo?) = lock.withLock {
+        val c = current?.takeIf { !it.ended && it.id == callId } ?: return@withLock
+        log("call ${c.id} moved into ${movedTo?.conversationId ?: "a group call"}")
+        finish(c, notice = null, sendEnd = if (sendEnd) CallEnvelope.R_MOVED else null, movedTo = movedTo)
+    }
+
+    /** §39.5 a `call_escalate` to the selected peer device of the current call (`ring: false`, the call's media). */
+    suspend fun sendEscalate(env: CallEnvelope.Escalate): SignalOutcome {
+        val c = lock.withLock { current?.takeIf { !it.ended && it.id == env.callId } } ?: return SignalOutcome.Refused("no_call")
+        return sig(c.conv, c.peer, env, c.media)
+    }
+
     suspend fun setMuted(muted: Boolean) {
         lock.withLock {
             val c = current?.takeIf { !it.ended } ?: return
@@ -679,6 +770,7 @@ class CallStateMachine(
                 is CallEnvelope.Busy -> onBusy(s, own)
                 is CallEnvelope.Cancel -> onCancel(s, own)
                 is CallEnvelope.Media -> onMedia(s, env, own)
+                is CallEnvelope.Escalate -> onEscalateSignal(s, env, own)
                 is CallEnvelope.End -> log("call_end in a call_signal event: dropped")
                 // §20.3: group call envelopes go to the group call machine (the pipeline never routes them here).
                 is CallEnvelope.SfuOffer, is CallEnvelope.Member -> log("${env.type} in a DM: dropped")
@@ -689,7 +781,7 @@ class CallStateMachine(
     /** A durable `call_end` (from a message event, either user, any device; display only). */
     suspend fun onCallEnd(conversationId: String, fromUser: String, fromDevice: String?, end: CallEnvelope.End) {
         if (fromUser.equals(me, true) && fromDevice.equals(myDevice, true)) return
-        lock.withLock { onEndSignal(end.callId, end.reason) }
+        lock.withLock { onEndSignal(end.callId, end.reason, end.movedTo) }
         marks.put((marks.get(end.callId) ?: CallMark(end.callId)).copy(ended = true, at = now()))
     }
 
@@ -978,9 +1070,15 @@ class CallStateMachine(
         finish(c, notice = null, sendEnd = null)
     }
 
-    private fun onEndSignal(callId: String, reason: String) {
+    private fun onEndSignal(callId: String, reason: String, movedTo: CallEnvelope.MovedTo? = null) {
         siblingCalling.entries.removeAll { it.value.first == callId }
         val c = current?.takeIf { !it.ended && it.id == callId } ?: return
+        // §39.3: the adder switched to the group call: this side follows (silently; the group call takes the screen).
+        if (reason == CallEnvelope.R_MOVED && c.moving) {
+            onMovedByPeer(callId, movedTo)
+            finish(c, notice = null, sendEnd = null)
+            return
+        }
         val notice = when {
             c.outgoing && reason == CallEnvelope.R_DECLINED -> CallNotice.DECLINED
             reason == CallEnvelope.R_FAILED -> CallNotice.CANT_CONNECT
@@ -1016,6 +1114,20 @@ class CallStateMachine(
         c.peerCurrentSdp = env.sdp
         c.myCurrentSdp = answer
         scope.launch { sig(c.conv, c.peer, CallEnvelope.Answer(c.id, s.fromDevice.lowercase(), answer), c.media) }
+    }
+
+    /** §39.5: a `call_escalate` counts only from the selected peer device, to this device, in a connected call whose peer listed `add`. */
+    private fun onEscalateSignal(s: InboundCall, env: CallEnvelope.Escalate, own: Boolean) {
+        val c = current?.takeIf { !it.ended && it.id == env.callId } ?: return log("call_escalate for an unknown call: dropped")
+        if (own || !s.fromUser.equals(c.peer, true) || !s.fromDevice.equals(peerDevice(c), true)) return log("call_escalate not from the selected peer device: dropped")
+        if (!env.toDevice.equals(myDevice, true)) return log("call_escalate for another device: dropped")
+        if (!bothAdd(c) || !live(c)) return log("call_escalate in a call that can't move: dropped")
+        if (env.state == CallEnvelope.ESC_MOVE) {
+            if (env.roomCallId == c.escalateRoom) return log("call_escalate move repeated: ignored")
+            if (c.escalateRoom != null) return log("call_escalate: a second move in this call: dropped")
+            c.escalateRoom = env.roomCallId
+        }
+        scope.launch { runCatching { onEscalate(env, s.fromDevice.lowercase()) }.onFailure { log("call_escalate handler: ${it.message}") } }
     }
 
     // ---------------------------------------------------------------- §23 switching and screen sharing
@@ -1512,6 +1624,11 @@ class CallStateMachine(
     private fun onIce(c: Call, state: IceState) {
         if (c.ended || current !== c) return
         lastIce[c.id] = state
+        // §39.3: while moving, the peer may already have closed its side: never "failed", never a restart storm.
+        if (c.moving && (state == IceState.DISCONNECTED || state == IceState.FAILED || state == IceState.CLOSED)) {
+            log("ice ${state.name.lowercase()} while moving ${c.id}: expected, ignored")
+            return
+        }
         when (state) {
             IceState.CONNECTED, IceState.COMPLETED -> {
                 c.timers.remove("reconnect")?.cancel()
@@ -1654,7 +1771,7 @@ class CallStateMachine(
      * Ends [c]: timers, media, a durable `call_end` with [sendEnd] (null = send nothing), and the
      * short ended state (no notice = disappear at once).
      */
-    private fun finish(c: Call, notice: CallNotice?, sendEnd: String?) {
+    private fun finish(c: Call, notice: CallNotice?, sendEnd: String?, movedTo: CallEnvelope.MovedTo? = null) {
         if (c.ended) return
         val connectedAtServer = c.connectedAtServer
         val duration = c.connectedAt?.let { ((now() - it) / 1000).coerceAtLeast(0) }
@@ -1663,11 +1780,12 @@ class CallStateMachine(
         if (sendEnd != null) {
             val end = CallEnvelope.End(
                 c.id, sendEnd,
-                connectedAt = connectedAtServer?.takeIf { sendEnd == CallEnvelope.R_HANGUP || sendEnd == CallEnvelope.R_FAILED }?.let(::iso),
+                connectedAt = connectedAtServer?.takeIf { sendEnd == CallEnvelope.R_HANGUP || sendEnd == CallEnvelope.R_FAILED || sendEnd == CallEnvelope.R_MOVED }?.let(::iso),
                 durationS = duration?.takeIf { connectedAtServer != null },
                 // §19.3/§23.8: "video" if the call was ever in video mode (even if both cameras were off).
                 media = if (c.everVideo || c.media == CallEnvelope.MEDIA_VIDEO) CallEnvelope.MEDIA_VIDEO else CallEnvelope.MEDIA_AUDIO,
                 outgoing = c.outgoing,
+                movedTo = movedTo,
             )
             scope.launch { signals.end(c.conv, c.peer, end) }
         }
@@ -1700,6 +1818,7 @@ class CallStateMachine(
             canSwitch = canSwitch(c), canShare = canShare(c), asking = c.asking?.second, prompt = c.prompt?.second,
             switchNotice = c.switchNotice, videoBlockedUntilMs = c.blockedUntil, sharing = c.screenOn, peerSharing = c.video && c.peerScreen,
             everVideo = c.everVideo, official = c.official,
+            canAdd = canAdd(c), iCanAdd = CallEnvelope.FEATURE_ADD in c.myFeatures, moving = c.moving,
         )
     }
 
@@ -1752,6 +1871,10 @@ class CallStateMachine(
                 }
                 if (bytes > 0 && bytes == last && now() - lastChange >= MEDIA_STALL_MS) {
                     lock.withLock {
+                        if (!c.ended && current === c && c.moving) {
+                            lastChange = now()
+                            return@withLock
+                        }
                         if (!c.ended && current === c) {
                             log("no audio received for ${now() - lastChange} ms: ending ${c.id}")
                             finish(c, CallNotice.CANT_CONNECT, sendEnd = CallEnvelope.R_FAILED)

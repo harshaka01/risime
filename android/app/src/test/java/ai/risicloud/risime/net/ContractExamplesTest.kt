@@ -595,7 +595,66 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + mapOf(
+    /**
+     * v1.44 §39 adding people to a call: the envelopes through the strict validators (and re-encoded
+     * exactly where this app sends them), `Friend.group_calls`, the capability, the paused Session.
+     */
+    private val addToCallV144: Map<String, (String) -> Any> by lazy {
+        fun same(s: String, env: ai.risicloud.risime.calls.CallEnvelope.Env) = require(ai.risicloud.risime.calls.CallEnvelope.toJson(env) == ProtocolJson.parseToJsonElement(s)) { "re-encodes exactly" }
+        mapOf(
+            "device_put_add_to_call.json" to { s ->
+                ProtocolJson.decodeFromString<DevicePut>(s).also { d ->
+                    val caps = d.mls!!.capabilities!!
+                    require(DeviceMls.CAP_ADD_TO_CALL in caps && DeviceMls.CAP_GROUP_CALLS in caps && DeviceMls.CAP_CALL_SWITCH in caps)
+                }
+            },
+            "call_offer_features_add_payload.json" to { s ->
+                (callEnv(s) as ai.risicloud.risime.calls.CallEnvelope.Offer).also { require(ai.risicloud.risime.calls.CallEnvelope.FEATURE_ADD in it.features) }
+            },
+            "call_answer_features_add_payload.json" to { s ->
+                (callEnv(s) as ai.risicloud.risime.calls.CallEnvelope.Answer).also { require(ai.risicloud.risime.calls.CallEnvelope.FEATURE_ADD in it.features) }
+            },
+            "call_escalate_move_payload.json" to { s ->
+                (callEnv(s) as ai.risicloud.risime.calls.CallEnvelope.Escalate).also {
+                    require(it.state == "move" && it.conversationId!!.startsWith("grp:") && it.roomCallId != it.callId && it.media == "audio")
+                    require(!ai.risicloud.risime.calls.CallEnvelope.ringFor(it))
+                    same(s, it)
+                }
+            },
+            "call_escalate_failed_payload.json" to { s ->
+                (callEnv(s) as ai.risicloud.risime.calls.CallEnvelope.Escalate).also {
+                    require(it.state == "failed" && it.reason == "no_group" && it.conversationId == null)
+                    same(s, it)
+                }
+            },
+            "call_end_moved_payload.json" to { s ->
+                (callEnv(s) as ai.risicloud.risime.calls.CallEnvelope.End).also {
+                    require(it.reason == "moved" && it.durationS == 130L && it.movedTo!!.conversationId.startsWith("grp:"))
+                    same(s, it)
+                    require(ai.risicloud.risime.calls.CallLines.line(it.reason, true, it.durationS, false).text == "Voice call · 2:10 · continued as a group call")
+                }
+            },
+            "call_offer_sfu_ring_users_payload.json" to { s ->
+                (callEnv(s) as ai.risicloud.risime.calls.CallEnvelope.SfuOffer).also {
+                    require(it.ringUsers!!.size == 1 && ai.risicloud.risime.calls.CallEnvelope.ringFor(it))
+                    same(s, it)
+                }
+            },
+            "friends_reply_v144.json" to { s ->
+                ProtocolJson.decodeFromString<FriendsReply>(s).also { r ->
+                    require(r.friends.map { it.groupCalls } == listOf(true, false))
+                }
+            },
+            "signal_call_transcribe_paused.json" to { s ->
+                ProtocolJson.decodeFromString<Signal>(s).callTranscribe()!!.also {
+                    require(it.state == CallTranscribeStates.PAUSED && !it.final && it.participants.size == 3)
+                    require(it.participants.count { p -> p.consent == CallTranscribeConsent.PENDING } == 1)
+                }
+            },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV144 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

@@ -68,6 +68,15 @@ class CallActivity : ComponentActivity() {
 
     /** "Call info" and the pre-share dialog ("Your whole screen, including notifications, will be visible"). */
     private var info by mutableStateOf(false)
+
+    /** v1.44 §39.2 the Add participant picker (null = closed). */
+    private var adding by mutableStateOf<ai.risicloud.risime.AppContainer.AddPicker?>(null)
+    private var addingFor: CallSnapshot? = null
+
+    private fun openAdd(snap: CallSnapshot) {
+        addingFor = snap
+        lifecycleScope.launch { adding = runCatching { (application as RisiMeApp).container.callAddPicker(snap) }.getOrNull() }
+    }
     private var shareWarning by mutableStateOf(false)
 
     /** Video in a voice call: CAMERA first (asked only now, android A2), then the request. */
@@ -140,6 +149,8 @@ class CallActivity : ComponentActivity() {
                 val s by calls.state.collectAsStateWithLifecycle()
                 val blind by calls.blindRing.collectAsStateWithLifecycle()
                 val routes by calls.routes.collectAsStateWithLifecycle()
+                // v1.44 §39.3: "Adding Sunil…", "Couldn't add people…".
+                val mv by calls.move.collectAsStateWithLifecycle()
                 // v1.39 §36: the Official-call transcription (button, prompt, red bar); nothing on a Private call.
                 val tx by transcribe.view.collectAsStateWithLifecycle()
                 var txNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -173,7 +184,7 @@ class CallActivity : ComponentActivity() {
                             snap.phase == CallPhase.RINGING_IN -> if (snap.group) (if (snap.video) "Group video call" else "Group voice call") else if (snap.video) "Incoming video call" else "RisiMe voice call"
                             else -> snap.notice?.let { CallTexts.notice(it, title) } ?: CallTexts.status(snap.phase, snap.connectedAtMs, now, video = snap.video).orEmpty()
                         }
-                        val ui = callScreenUi(snap, title, status, routes, now)
+                        val ui = callScreenUi(snap, title, status, routes, now, groupAdd = calls.canAdvertiseAddToCall(), moveLine = mv?.takeIf { it.callId == snap.callId }?.line)
                         val wm = calls.media as? WebRtcCallMedia
                         CallScreen(
                             ui,
@@ -194,6 +205,7 @@ class CallActivity : ComponentActivity() {
                                 onCancelAsk = calls::cancelVideoRequest,
                                 onPrompt = ::answerPrompt,
                                 onStopShare = { calls.stopShare("banner") },
+                                onAdd = { openAdd(snap) },
                             ),
                             remote = if (snap.group) {
                                 calls.groupSession()?.takeIf { snap.video && snap.phase != CallPhase.ENDED }?.let { sess -> { m -> androidx.compose.foundation.layout.Box(m) { GroupVideoGrid(sess, snap, memberNames) } } }
@@ -222,6 +234,16 @@ class CallActivity : ComponentActivity() {
                             }) else null,
                         )
                         if (info) CallInfoDialog(snap, title, routes, wm?.lastStats, onDismiss = { info = false })
+                        adding?.let { p ->
+                            AddPeopleDialog(
+                                p.candidates, p.room, p.peerName, p.groupName, p.official,
+                                onAdd = { ring, add ->
+                                    adding = null
+                                    addingFor?.let { (application as RisiMeApp).container.onCallAddPicked(it, ring, add) }
+                                },
+                                onDismiss = { adding = null },
+                            )
+                        }
                         if (shareWarning) ShareConfirmDialog(
                             dnd = shareDialogShowsDnd(Build.VERSION.SDK_INT),
                             onStart = { shareWarning = false; launchConsent() },

@@ -713,19 +713,46 @@ class ChatEngine(
     }
 
     /** The stored body of a group call line (the chat list preview; the chat renders names from the JSON). */
-    private fun groupCallBody(env: ai.risicloud.risime.calls.GroupCallEnvelope, starterIsMe: Boolean, running: Boolean = true): String =
+    private fun groupCallBody(env: ai.risicloud.risime.calls.GroupCallEnvelope, starterIsMe: Boolean, running: Boolean = true, missed: Boolean = false): String =
         if (env.state == ai.risicloud.risime.calls.GroupCallEnvelope.STARTED && running) {
             if (env.video) "Video call in progress" else "Voice call in progress"
         } else {
-            ai.risicloud.risime.calls.GroupCallLines.text(env, "", starterIsMe, running)
+            ai.risicloud.risime.calls.GroupCallLines.text(env, "", starterIsMe, running, missed)
         }
+
+    /** The local-only flags of a stored group call line (`x_over`, `x_missed`), kept when the JSON is rewritten. */
+    private fun localCallFlags(systemJson: String?): Map<String, kotlinx.serialization.json.JsonElement> =
+        runCatching { ai.risicloud.risime.net.ProtocolJson.parseToJsonElement(systemJson ?: "") as? kotlinx.serialization.json.JsonObject }.getOrNull()
+            ?.filterKeys { it in ai.risicloud.risime.calls.GroupCallLines.LOCAL_FLAGS }.orEmpty()
 
     /** The first `ended` wins; a `started` never overwrites anything. */
     private suspend fun updateGroupCallLine(me: String, row: MessageEntity, env: ai.risicloud.risime.calls.GroupCallEnvelope) {
         if (env.state != ai.risicloud.risime.calls.GroupCallEnvelope.ENDED) return
         val old = ai.risicloud.risime.calls.GroupCallEnvelope.decode(row.systemJson)
         if (old?.state == ai.risicloud.risime.calls.GroupCallEnvelope.ENDED) return
-        messages.updateCallLine(row.clientMsgId, groupCallBody(env, row.from.equals(me, true)), ai.risicloud.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), env.toJson()))
+        val flags = localCallFlags(row.systemJson)
+        val missed = ai.risicloud.risime.calls.GroupCallLines.missed(row.systemJson)
+        messages.updateCallLine(
+            row.clientMsgId, groupCallBody(env, row.from.equals(me, true), missed = missed),
+            ai.risicloud.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.JsonObject(env.toJson() + flags)),
+        )
+    }
+
+    /**
+     * v1.44 §39.6: this device rang for the group call and nobody answered here: the line reads
+     * "Missed voice call" once the call is over (a local flag, never sent, kept across `ended`).
+     */
+    suspend fun markGroupCallMissed(conv: String, callId: String) = withContext(io) {
+        val me = meId() ?: return@withContext
+        val row = messages.callLine(conv, callId) ?: return@withContext
+        if (row.from.equals(me, true) || ai.risicloud.risime.calls.GroupCallLines.missed(row.systemJson)) return@withContext
+        val env = ai.risicloud.risime.calls.GroupCallEnvelope.decode(row.systemJson) ?: return@withContext
+        val json = ai.risicloud.risime.net.ProtocolJson.encodeToString(
+            kotlinx.serialization.json.JsonObject.serializer(),
+            kotlinx.serialization.json.JsonObject(env.toJson() + localCallFlags(row.systemJson) + (ai.risicloud.risime.calls.GroupCallLines.LOCAL_MISSED to kotlinx.serialization.json.JsonPrimitive(true))),
+        )
+        val running = env.state == ai.risicloud.risime.calls.GroupCallEnvelope.STARTED && !ai.risicloud.risime.calls.GroupCallLines.over(row.systemJson)
+        messages.updateCallLine(row.clientMsgId, groupCallBody(env, false, running, missed = true), json)
     }
 
     /**
@@ -783,9 +810,9 @@ class ChatEngine(
         if (env.state != ai.risicloud.risime.calls.GroupCallEnvelope.STARTED) return@withContext
         val json = ai.risicloud.risime.net.ProtocolJson.encodeToString(
             kotlinx.serialization.json.JsonObject.serializer(),
-            kotlinx.serialization.json.JsonObject(env.toJson() + (ai.risicloud.risime.calls.GroupCallLines.LOCAL_OVER to kotlinx.serialization.json.JsonPrimitive(true))),
+            kotlinx.serialization.json.JsonObject(env.toJson() + localCallFlags(row.systemJson) + (ai.risicloud.risime.calls.GroupCallLines.LOCAL_OVER to kotlinx.serialization.json.JsonPrimitive(true))),
         )
-        messages.updateCallLine(row.clientMsgId, groupCallBody(env, row.from.equals(me, true), running = false), json)
+        messages.updateCallLine(row.clientMsgId, groupCallBody(env, row.from.equals(me, true), running = false, missed = ai.risicloud.risime.calls.GroupCallLines.missed(row.systemJson)), json)
     }
 
     /**

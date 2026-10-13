@@ -80,6 +80,8 @@ class FakeGroupPort(private val identity: String) : GroupCallPort {
     var catchUps = 0
     var busy = false
     var signalResult: SignalOutcome = SignalOutcome.Ok
+    val missed = CopyOnWriteArrayList<String>()
+    override suspend fun missed(conv: String, callId: String, from: String, video: Boolean) { missed += callId }
 
     override suspend fun iceServers() = listOf(IceServer(listOf("turn:203.0.113.1:3478"), "u", "p"))
     override suspend fun catchUp(conv: String) { catchUps++ }
@@ -404,6 +406,109 @@ class GroupCallMachineTest {
         advanceTimeBy(GroupCallMachine.LOST_MS + 1)
         runCurrent()
         assertEquals(CallNotice.LOST_CONNECTION, r.m.state.value!!.notice)
+    }
+
+    // ---- v1.44 §39.4 ring_users and re-rings ----
+
+    private fun TestScope.ringOffer(r: Rig, ringUsers: List<String>?, at: Long = testScheduler.currentTime + 1_791_451_200_000L) {
+        backgroundScope.launchNow { r.m.onSignal(InboundCall(conv, "u-b", "b1", at, CallEnvelope.SfuOffer(callId, "audio", CallStateMachine.iso(at), ringUsers = ringUsers), media = "audio")) }
+    }
+
+    @Test fun ringUsersRingOnlyTheNamedUsers() = runTest {
+        val r = rig()
+        ringOffer(r, listOf("u-c"))
+        runCurrent()
+        assertNull("not named: no ring (the line has Join)", r.m.state.value)
+        val c = rig(user = "u-c", device = "c1")
+        ringOffer(c, listOf("u-c"))
+        runCurrent()
+        assertEquals(CallPhase.RINGING_IN, c.m.state.value!!.phase)
+    }
+
+    @Test fun aReRingNamingMeRingsAgainAfterADecline() = runTest {
+        val r = rig(user = "u-c", device = "c1")
+        ringOffer(r, null)
+        runCurrent()
+        r.m.hangUp() // decline
+        runCurrent()
+        assertNull(r.m.currentCallId())
+        // The same offer again (a duplicate): ignored.
+        ringOffer(r, null, at = testScheduler.currentTime + 1_791_451_200_000L - 1)
+        runCurrent()
+        assertNull(r.m.currentCallId())
+        // A re-ring naming me, later: rings.
+        advanceTimeBy(5_000)
+        ringOffer(r, listOf("u-c"))
+        runCurrent()
+        assertEquals(CallPhase.RINGING_IN, r.m.state.value!!.phase)
+        // Missed: the ring runs out unanswered → the line is marked "Missed" (once).
+        advanceTimeBy(GroupCallMachine.RING_MS + 1)
+        runCurrent()
+        assertEquals(listOf(callId), r.port.missed)
+    }
+
+    @Test fun ringAgainSendsTheSameCallIdWithRingUsers() = runTest {
+        val r = rig()
+        r.m.start(conv)
+        runCurrent()
+        r.session.room(remote("u-b/b1"))
+        runCurrent()
+        assertEquals(SignalOutcome.Ok, r.m.ringAgain(listOf("u-c", "u-a")))
+        val again = r.port.signals.filterIsInstance<CallEnvelope.SfuOffer>().last()
+        assertEquals(callId, again.callId)
+        assertEquals(listOf("u-c"), again.ringUsers)
+        assertEquals(setOf("u-a", "u-b"), r.m.presentUsers())
+    }
+
+    @Test fun aHeldCallPublishesNothingUntilReleased() = runTest {
+        val r = rig()
+        var ready = 0
+        var failed = 0
+        val hold = HoldSpec("u-b/b1", beforeRing = { r.port.signals += CallEnvelope.Ringing("marker") }, onReady = { ready++ }, onFailed = { failed++ })
+        assertTrue(r.m.startHeld(conv, callId, video = false, camera = false, ringUsers = listOf("u-c"), hold = hold))
+        runCurrent()
+        val s = r.session
+        assertFalse(s.micPublished)
+        // beforeRing (the escalate) went out before the ring.
+        assertEquals(listOf("call_ringing", "call_offer"), r.port.signals.map { it.type })
+        assertEquals(listOf("u-c"), (r.port.signals.last() as CallEnvelope.SfuOffer).ringUsers)
+        // A non-member identity never makes it ready; the peer as a member does (once).
+        s.room(remote("u-x/x1"))
+        runCurrent()
+        assertEquals(0, ready)
+        s.room(remote("u-b/b1"))
+        runCurrent()
+        s.room(remote("u-b/b1"), remote("u-c/c1"))
+        runCurrent()
+        assertEquals(1, ready)
+        assertFalse(s.micPublished)
+        assertTrue(r.m.release(callId))
+        runCurrent()
+        assertTrue(s.micPublished)
+        assertEquals(0, failed)
+    }
+
+    @Test fun anAbortedHeldCallCancelsTheRing() = runTest {
+        val r = rig()
+        var failed = 0
+        r.m.startHeld(conv, callId, video = false, camera = false, ringUsers = listOf("u-c"), hold = HoldSpec("u-b/b1", onFailed = { failed++ }))
+        runCurrent()
+        r.m.abortHeld(callId)
+        runCurrent()
+        assertEquals(CallEnvelope.Cancel(callId, CallEnvelope.CANCEL_ENDED), r.port.signals.last())
+        assertEquals(GroupCallEnvelope.R_TIMEOUT, r.port.ended.single().reason)
+        assertTrue(r.session.disconnected)
+        assertNull(r.m.state.value)
+        assertEquals(0, failed) // the mover gave up itself
+    }
+
+    @Test fun aHeldCallWhoseRoomFailsReportsFailed() = runTest {
+        val r = rig()
+        var failed = 0
+        r.port.room = { _ -> RoomOutcome.Failed("503") }
+        r.m.startHeld(conv, callId, video = false, camera = false, ringUsers = listOf("u-c"), hold = HoldSpec("u-b/b1", onFailed = { failed++ }))
+        runCurrent()
+        assertEquals(1, failed)
     }
 
     @Test fun ringRefusedWhenNobodyCanJoin() = runTest {

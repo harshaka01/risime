@@ -61,7 +61,24 @@ interface GroupCallPort {
 
     /** android A4: a 1:1 call (or a cellular call) is going on: a group ring doesn't ring, a group call can't start. */
     fun busy(): Boolean = false
+
+    /** v1.44 §39.6: this device rang for [callId] and the ring ran out unanswered: its line reads "Missed …" (and notifies once). */
+    suspend fun missed(conv: String, callId: String, from: String, video: Boolean) = Unit
 }
+
+/**
+ * v1.44 §39.3 a group call joined **in hold** (the move of a 1:1 call): connected with keys, nothing
+ * published until [GroupCallMachine.release]. [peerIdentity] is the 1:1 peer's device; [onReady] fires
+ * once it is in the room as an MLS member; [onFailed] when the held call ends before that.
+ */
+class HoldSpec(
+    val peerIdentity: String,
+    val muted: Boolean = false,
+    /** The adder's `call_escalate` to the peer, sent after the keys and before the ring (§39.3 step 3). */
+    val beforeRing: (suspend () -> Unit)? = null,
+    val onReady: () -> Unit = {},
+    val onFailed: () -> Unit = {},
+)
 
 /**
  * The group call state machine (§20.3–§20.6, android A2–A9, crypto K3–K10). Pure Kotlin: the SFU,
@@ -151,7 +168,18 @@ class GroupCallMachine(
         var ended = false
         var shown = false
         val video get() = media == CallEnvelope.MEDIA_VIDEO
+
+        // ---- v1.44 §39.3/§39.4 ----
+        /** In hold (a move): connected and keyed, nothing published until [release]. */
+        var hold: HoldSpec? = null
+        var readyFired = false
+        var micPublished = false
+        /** §39.4: who the starter's offer rings (null = everyone). */
+        var ringUsers: List<String>? = null
     }
+
+    /** §39.4 the `sent_at` (ms) of the last offer of each call id this device acted on (the re-ring rule). */
+    private val lastOfferAt = HashMap<String, Long>()
 
     private var current: GCall? = null
 
@@ -188,6 +216,96 @@ class GroupCallMachine(
         scope.launch { setup(c, CallsRoomRequest.START) }
         return true
     }
+
+    /**
+     * v1.44 §39.3 the adder: start [callId] in [conv] **in hold** while the 1:1 call goes on (the one
+     * allowed overlap with a 1:1 call), ringing only [ringUsers]. False = another group call exists.
+     */
+    suspend fun startHeld(conv: String, callId: String, video: Boolean, camera: Boolean, ringUsers: List<String>, hold: HoldSpec): Boolean {
+        val c = lock.withLock {
+            if (current?.let { !it.ended } == true) return false
+            GCall(callId, conv, me, outgoing = true, media = if (video) CallEnvelope.MEDIA_VIDEO else CallEnvelope.MEDIA_AUDIO, phase = CallPhase.CALLING).also {
+                it.wantCamera = video && camera
+                it.muted = hold.muted
+                it.hold = hold
+                it.ringUsers = ringUsers.map(String::lowercase).distinct().take(CallEnvelope.MAX_RING_USERS)
+                current = it
+                marks.put(CallMark(it.id, answered = true, at = now()))
+                publish(it)
+            }
+        }
+        log("group call ${c.id} start in hold in ${c.conv} (${c.media}), ringing ${c.ringUsers?.size}")
+        scope.launch { setup(c, CallsRoomRequest.START) }
+        return true
+    }
+
+    /** v1.44 §39.3 the peer: join [callId] of [conv] **in hold** (started by [starter], the 1:1 peer). */
+    suspend fun joinHeld(conv: String, callId: String, media: String, starter: String, camera: Boolean, hold: HoldSpec): Boolean {
+        val c = lock.withLock {
+            val cur = current?.takeIf { !it.ended }
+            if (cur != null) {
+                // The ring of this very call (an old app's sibling path): take it over in hold.
+                if (cur.id != callId || cur.phase != CallPhase.RINGING_IN) return false
+                cur.timers.remove("ring")?.cancel()
+                finishQuiet(cur)
+            }
+            GCall(callId, conv, starter.lowercase(), outgoing = false, media = media, phase = CallPhase.ANSWERING).also {
+                it.wantCamera = it.video && camera
+                it.muted = hold.muted
+                it.hold = hold
+                current = it
+                marks.put((marks.get(callId) ?: CallMark(callId)).copy(answered = true, at = now()))
+                publish(it)
+            }
+        }
+        log("group call ${c.id} join in hold in ${c.conv} (${c.media})")
+        scope.launch { setup(c, CallsRoomRequest.JOIN) }
+        return true
+    }
+
+    /** v1.44 §39.3 step 5: the switch: publish the microphone (and the camera) of the held call. */
+    suspend fun release(callId: String): Boolean {
+        val c = lock.withLock {
+            val c = current?.takeIf { !it.ended && it.id == callId } ?: return false
+            c.hold ?: return true
+            c.hold = null
+            c
+        }
+        log("group call ${c.id}: released (the group call carries the audio now)")
+        publishMicIfReady(c)
+        return true
+    }
+
+    /** v1.44 §39.3 step 6: the move gave up: leave the held call (the adder also stops the invitees' ring). */
+    suspend fun abortHeld(callId: String) {
+        lock.withLock {
+            val c = current?.takeIf { !it.ended && it.id == callId && it.hold != null } ?: return
+            log("group call ${c.id}: the move gave up: leaving the held call")
+            if (c.outgoing && c.session != null) {
+                scope.launch { sig(c.conv, CallEnvelope.Cancel(c.id, CallEnvelope.CANCEL_ENDED), c.media) }
+                if (c.participants.none { !it.local && !it.identity.equals(c.hold?.peerIdentity, true) }) {
+                    scope.launch { runCatching { port.ended(c.conv, GroupCallEnvelope.ended(c.id, c.media, GroupCallEnvelope.R_TIMEOUT, null, null)) } }
+                }
+            }
+            c.hold = null
+            finish(c, null)
+        }
+    }
+
+    /**
+     * v1.44 §39.4 "Add participant" in a running group call: ring [users] again (the same call id, a
+     * fresh `sent_at`, `ring_users`). The server's limit is 1 per 10 s per group.
+     */
+    suspend fun ringAgain(users: List<String>): SignalOutcome {
+        val c = lock.withLock { current?.takeIf { !it.ended && it.session != null && it.hold == null } } ?: return SignalOutcome.Refused("no_call")
+        val list = users.map(String::lowercase).filter { !it.equals(me, true) }.distinct().take(CallEnvelope.MAX_RING_USERS)
+        if (list.isEmpty()) return SignalOutcome.Refused("nobody")
+        log("group call ${c.id}: ringing ${list.size} again")
+        return sig(c.conv, CallEnvelope.SfuOffer(c.id, c.media, CallStateMachine.iso(serverNow()), ringUsers = list), c.media)
+    }
+
+    /** The identities in the current call's room (for the picker: who isn't in the call). */
+    fun presentUsers(): Set<String> = current?.takeIf { !it.ended }?.participants?.map { it.identity.substringBefore('/').lowercase() }?.toSet().orEmpty()
 
     /** Answer the ringing group call ([camera]: "Answer" on a video call; false for "Answer without video"). */
     suspend fun answer(callId: String? = null, camera: Boolean = false): Boolean {
@@ -309,16 +427,28 @@ class GroupCallMachine(
             log("group offer ${env.callId}: from my other device: not ringing")
             return
         }
-        if (marks.get(env.callId) != null || markedEnded) {
-            log("group offer ${env.callId}: already seen")
+        // v1.44 §39.4: `ring_users` names who rings; the others only note the call (its line has Join).
+        val named = env.ringUsers?.any { it.equals(me, true) }
+        if (named == false) {
+            log("group offer ${env.callId}: not in ring_users: not ringing")
             return
         }
-        val sn = serverNow()
         val sentAt = runCatching { Instant.parse(env.sentAt).toEpochMilli() }.getOrNull() ?: return
+        if (marks.get(env.callId) != null || markedEnded) {
+            // §39.4 re-ring: only when it names me, is newer than what I acted on, and I'm not in that call.
+            val again = named == true && sentAt > (lastOfferAt[env.callId] ?: 0L) && current?.takeIf { !it.ended }?.id != env.callId
+            if (!again) {
+                log("group offer ${env.callId}: already seen")
+                return
+            }
+            log("group offer ${env.callId}: rung again")
+        }
+        val sn = serverNow()
         if (sn - s.serverTsMs >= FRESH_MS || kotlin.math.abs(sn - sentAt) >= FRESH_MS) {
             log("group offer ${env.callId}: stale")
             return
         }
+        lastOfferAt[env.callId] = sentAt
         // android A4: one call at a time; no call_busy in groups (the chat line keeps Join).
         if (current?.let { !it.ended } == true || port.busy()) {
             log("group offer ${env.callId}: busy, not ringing")
@@ -331,6 +461,8 @@ class GroupCallMachine(
         marks.put(CallMark(env.callId, rang = true, at = now()))
         timer(c, "ring", (s.serverTsMs + ringMs - sn).coerceAtLeast(0)) { x ->
             log("group ring over for ${x.id}")
+            // v1.44 §39.6: rang and never answered here: the line says "Missed …" (once).
+            scope.launch { runCatching { port.missed(x.conv, x.id, x.starter, x.video) } }
             finish(x, null)
         }
         if (s.inPage) c.pendingRing = true else publish(c)
@@ -396,12 +528,8 @@ class GroupCallMachine(
         if (!keep) return session.disconnect()
         // K4: keys of the newest epoch before anything is published.
         if (!rekey(c)) return
-        if (!session.publishMic()) {
-            log("group call ${c.id}: microphone not published")
-            return locked(c) { leave(it, CallNotice.CANT_CONNECT) }
-        }
-        session.setMicMuted(c.muted)
-        applyCamera(c)
+        // v1.44 §39.3: a held call publishes nothing until the switch (the 1:1 path carries the audio).
+        if (!publishMicIfReady(c)) return
         lock.withLock {
             if (c.ended || current !== c) return
             c.timers.remove("setup")?.cancel()
@@ -420,8 +548,10 @@ class GroupCallMachine(
             }
         }
         if (c.outgoing) {
+            // v1.44 §39.3 step 3: the adder tells the peer before the invitees ring.
+            c.hold?.beforeRing?.let { runCatching { it() }.onFailure { e -> log("group call ${c.id}: before ring: ${e.message}") } }
             runCatching { port.started(c.conv, GroupCallEnvelope.started(c.id, c.media)) }
-            when (val r = sig(c.conv, CallEnvelope.SfuOffer(c.id, c.media, CallStateMachine.iso(serverNow())), c.media)) {
+            when (val r = sig(c.conv, CallEnvelope.SfuOffer(c.id, c.media, CallStateMachine.iso(serverNow()), ringUsers = c.ringUsers), c.media)) {
                 is SignalOutcome.Refused -> {
                     log("group call ${c.id}: ring refused: ${r.reason}")
                     if (r.reason == ai.risicloud.risime.net.CallErrors.CALLS_NOT_READY) return locked(c) { leave(it, CallNotice.GROUP_NOT_READY) }
@@ -445,6 +575,27 @@ class GroupCallMachine(
                 }
             }
         }
+    }
+
+    /**
+     * Publishes the microphone (and the camera) once the session is keyed, unless the call is held
+     * (v1.44 §39.3). Idempotent. @return false when the call ended (the microphone couldn't be published).
+     */
+    private suspend fun publishMicIfReady(c: GCall): Boolean {
+        val session = lock.withLock {
+            if (c.ended || current !== c) return false
+            if (c.hold != null || c.micPublished || c.ring?.epoch == null) return true
+            c.micPublished = true
+            c.session
+        } ?: return true
+        if (!session.publishMic()) {
+            log("group call ${c.id}: microphone not published")
+            locked(c) { leave(it, CallNotice.CANT_CONNECT) }
+            return false
+        }
+        session.setMicMuted(c.muted)
+        applyCamera(c)
+        return true
     }
 
     /**
@@ -525,6 +676,13 @@ class GroupCallMachine(
             // K7 here; K6 (a track that says it isn't encrypted) is enforced per track by the session and the UI.
             session?.setPlayable(p.identity, member)
         }
+        // v1.44 §39.3 step 5: the held call's 1:1 peer is in the room as an MLS member: switch.
+        val hold = c.hold
+        if (hold != null && !c.readyFired && c.ring?.epoch != null && others.any { it.identity.equals(hold.peerIdentity, true) && it.identity in roster }) {
+            c.readyFired = true
+            log("group call ${c.id}: the 1:1 peer is in the room: ready to switch")
+            runCatching { hold.onReady() }
+        }
         if (others.isNotEmpty()) {
             if (!c.everOthers) {
                 c.everOthers = true
@@ -568,7 +726,7 @@ class GroupCallMachine(
     private suspend fun applyCamera(c: GCall) {
         if (!c.video) return
         val session = c.session ?: return
-        val want = c.wantCamera && screenVisible && !c.ended
+        val want = c.wantCamera && screenVisible && !c.ended && c.hold == null && c.micPublished
         if (want == c.cameraOn) return
         val ok = runCatching { session.setCamera(want) }.getOrDefault(false)
         lock.withLock {
@@ -610,10 +768,20 @@ class GroupCallMachine(
         finish(c, notice)
     }
 
+    /** A ringing call replaced by the same call joined in hold: gone without a trace. */
+    private fun finishQuiet(c: GCall) {
+        c.ended = true
+        c.timers.values.forEach { it.cancel() }
+        c.timers.clear()
+        if (current === c) current = null
+    }
+
     /** Ends [c]: timers, keys (K10), the room; then the short ended state (no notice = disappear at once). */
     private fun finish(c: GCall, notice: CallNotice?) {
         if (c.ended) return
         c.ended = true
+        // v1.44 §39.3: a held call that ends before the switch is a failed move (the 1:1 call goes on).
+        c.hold?.takeIf { !c.readyFired }?.let { h -> runCatching { h.onFailed() } }
         c.timers.values.forEach { it.cancel() }
         c.timers.clear()
         // K10: keys are overwritten before the room (and its key provider) goes.

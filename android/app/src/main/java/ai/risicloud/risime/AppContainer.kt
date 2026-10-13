@@ -1514,6 +1514,7 @@ class AppContainer(
             videoSupported = { runCatching { calls.canAdvertiseVideo() }.getOrDefault(false) },
             groupCallsSupported = { runCatching { calls.canAdvertiseGroupCalls() }.getOrDefault(false) },
             callSwitchSupported = { runCatching { calls.canAdvertiseSwitch() }.getOrDefault(false) },
+            addToCallSupported = { runCatching { calls.canAdvertiseAddToCall() }.getOrDefault(false) },
             screenShareSupported = { runCatching { calls.canAdvertiseScreenShare() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
@@ -1876,12 +1877,128 @@ class AppContainer(
             return peer?.let { runCatching { displayName(it) }.getOrNull() } ?: "Group"
         }
         override fun dmChatForCall(conv: String): String? = chatTabs.dmChatForCall(conv)
+
+        // ---- v1.44 §39 adding people to a call ----
+        override suspend fun createCallGroup(members: List<String>, official: Boolean): ai.risicloud.risime.calls.MoveGroup? {
+            val myName = sessionStore.current()?.user?.displayName?.trim()?.substringBefore(' ')?.takeIf { it.isNotBlank() } ?: "me"
+            val firsts = members.map { displayName(it).trim().substringBefore(' ').ifBlank { "…" } }.sortedBy { it.lowercase() }
+            var name = ai.risicloud.risime.calls.CallMover.joinNames(firsts + myName)
+            if (ai.risicloud.risime.data.IcuGraphemes.count(name) > ai.risicloud.risime.ui.group.GROUP_NAME_MAX) {
+                name = ai.risicloud.risime.calls.CallMover.joinNames(firsts.take(3) + "${firsts.size - 3 + 1} others")
+            }
+            val payload = ai.risicloud.risime.net.ProtocolJson.encodeToString(ai.risicloud.risime.data.groups.CreatePayload.serializer(), ai.risicloud.risime.data.groups.CreatePayload(name, members))
+            val id = groupStore.queueLocal(null, ai.risicloud.risime.data.groups.GroupOpType.CREATE, payload, clientGroupId = java.util.UUID.randomUUID().toString())
+            val done = kotlinx.coroutines.withTimeoutOrNull(25_000) {
+                db.groupOps().observe(id).filterNotNull().first { it.state == ai.risicloud.risime.data.groups.GroupOpType.DONE || it.state == ai.risicloud.risime.data.groups.GroupOpType.FAILED }
+            }
+            val conv = done?.takeIf { it.state == ai.risicloud.risime.data.groups.GroupOpType.DONE }?.conversationId ?: return null
+            if (!official) {
+                // A new group gets its Official tab as usual (§24.2); the call stays on the Private conversation.
+                startOfficialForNewGroup(conv)
+                return ai.risicloud.risime.calls.MoveGroup(conv)
+            }
+            // §39.0: an Official call moves into the Official conversation, if it is active within 15 s.
+            val off = (startOfficial(conv) as? ApiResult.Ok)?.value?.id
+            if (off != null) chatTabs.setLastTab(conv, ai.risicloud.risime.data.tabs.Tab.OFFICIAL)
+            val active = off != null && kotlinx.coroutines.withTimeoutOrNull(15_000) {
+                while (withContext(Dispatchers.IO) { mlsEngine?.group(off) == null || db.groups().get(off)?.state != "active" }) kotlinx.coroutines.delay(300)
+                true
+            } == true
+            return if (active) ai.risicloud.risime.calls.MoveGroup(off!!) else ai.risicloud.risime.calls.MoveGroup(conv, privateFallback = true)
+        }
+
+        override suspend fun awaitGroup(conv: String, identities: List<String>, timeoutMs: Long): Boolean {
+            val want = identities.map { it.lowercase() }.toSet()
+            return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+                var n = 0
+                while (true) {
+                    val have = withContext(Dispatchers.IO) {
+                        mlsEngine?.takeIf { it.group(conv) != null }?.members(conv)?.map { "${it.userId}/${it.deviceId}".lowercase() }?.toSet()
+                    }
+                    if (have != null && have.containsAll(want)) return@withTimeoutOrNull true
+                    // The Welcome comes with the group's `created` (§12.7); a catch-up now and then covers a lost push.
+                    if (n++ % 6 == 5) runCatching { engine.catchUpGroup(conv) }
+                    kotlinx.coroutines.delay(500)
+                }
+                @Suppress("UNREACHABLE_CODE") false
+            } == true
+        }
+
+        override suspend fun groupMembers(conv: String): List<String> = withContext(Dispatchers.IO) {
+            runCatching { mlsEngine?.members(conv)?.map { it.userId.lowercase() }?.distinct() }.getOrNull().orEmpty()
+        }
+
+        override suspend fun groupCallMissed(conv: String, callId: String, from: String, video: Boolean) { engine.markGroupCallMissed(conv, callId) }
     }
 
     val calls: ai.risicloud.risime.calls.CallManager by lazy {
         ai.risicloud.risime.calls.CallManager(appContext, callPort).also { m ->
             m.openConversation = { openConversation.value }
             m.onHangUpHook = { if (callTranscribeSwitch.serverOn.value) callTranscribe.onHangUp() }
+        }
+    }
+
+    /** v1.44 §39.2/§39.4 what the Add participant picker shows for the call [s]. */
+    data class AddPicker(val candidates: List<ai.risicloud.risime.calls.AddCandidate>, val room: Int, val peerName: String?, val groupName: String?, val official: Boolean)
+
+    suspend fun callAddPicker(s: ai.risicloud.risime.calls.CallSnapshot): AddPicker = withContext(Dispatchers.IO) {
+        val me = sessionStore.current()?.user?.id?.lowercase() ?: ""
+        val noCalls = contacts.friendsState.value.noGroupCalls
+        val friends = contacts.contacts.first().filter { it.friend && it.userId != null }.map {
+            ai.risicloud.risime.calls.FriendLite(it.userId!!.lowercase(), it.displayName, it.groupReady, it.userId.lowercase() !in noCalls)
+        }
+        val cap = ai.risicloud.risime.calls.AddPeople.cap(s.video)
+        if (!s.group) {
+            val peer = s.peerUserId.lowercase()
+            AddPicker(ai.risicloud.risime.calls.AddPeople.forOneToOne(friends, setOf(me, peer)), cap - 2, callPort.displayName(peer), null, s.official)
+        } else {
+            val conv = s.conversationId
+            val rows = db.groups().members(conv).filter { it.current && it.kind != "agent" }
+            val admin = db.groups().get(conv)?.myRole == "admin"
+            val present = calls.groupCallUsers()
+            val names = rows.associate { it.userId.lowercase() to it.displayName }
+            val list = ai.risicloud.risime.calls.AddPeople.forGroup(names.keys, present, me, admin, friends) { names[it] ?: "…" }
+            AddPicker(list, cap - present.size.coerceAtLeast(1), null, callPort.groupName(conv), chatTabs.dmChatForCall(conv) == null && db.chatTabs().get(conv)?.official == true)
+        }
+    }
+
+    /** v1.44 §39.2/§39.4 the picker's Add: move a 1:1 call, or ring members / add friends to the group and ring them. */
+    fun onCallAddPicked(s: ai.risicloud.risime.calls.CallSnapshot, ring: List<String>, add: List<String>) {
+        if (!s.group) return calls.addPeople(add)
+        scope.launch {
+            if (ring.isNotEmpty()) {
+                val r = calls.ringAgain(ring)
+                android.util.Log.i("RisiMe", "calls: ring again ${ring.size}: $r")
+            }
+            if (add.isEmpty()) return@launch
+            // §39.4 (b): the group add (both tabs, §24.3), then the ring once the add commit is merged here.
+            val conv = s.conversationId
+            val payload = ai.risicloud.risime.net.ProtocolJson.encodeToString(ai.risicloud.risime.data.groups.UsersPayload.serializer(), ai.risicloud.risime.data.groups.UsersPayload(add))
+            val id = groupStore.queueLocal(conv, ai.risicloud.risime.data.groups.GroupOpType.ADD, payload)
+            val done = kotlinx.coroutines.withTimeoutOrNull(30_000) {
+                db.groupOps().observe(id).filterNotNull().first { it.state == ai.risicloud.risime.data.groups.GroupOpType.DONE || it.state == ai.risicloud.risime.data.groups.GroupOpType.FAILED }
+            }
+            if (done?.state != ai.risicloud.risime.data.groups.GroupOpType.DONE) {
+                android.util.Log.w("RisiMe", "calls: add to the group failed (${done?.lastError})")
+                return@launch
+            }
+            val leaves = kotlinx.coroutines.withTimeoutOrNull(30_000) {
+                while (withContext(Dispatchers.IO) { mlsEngine?.members(conv)?.map { it.userId.lowercase() }?.toSet()?.containsAll(add.map { it.lowercase() }) != true }) {
+                    runCatching { engine.catchUpGroup(conv) }
+                    kotlinx.coroutines.delay(1_000)
+                }
+                true
+            } == true
+            if (!leaves) {
+                android.util.Log.w("RisiMe", "calls: the added people are not in the group MLS state yet")
+                return@launch
+            }
+            // §20.3: 1 ring per group per 10 s (v1.44): a ring a moment ago waits its turn.
+            repeat(3) {
+                val r = calls.ringAgain(add)
+                if (r is ai.risicloud.risime.calls.SignalOutcome.Ok) return@launch
+                kotlinx.coroutines.delay(10_000)
+            }
         }
     }
 

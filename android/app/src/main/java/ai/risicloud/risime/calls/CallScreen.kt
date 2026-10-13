@@ -124,9 +124,14 @@ data class CallScreenUi(
     val prompt: String? = null,
     /** A short line after a switch attempt. */
     val notice: String? = null,
-    /** Group calls: no add-participant upgrade from here. */
-    val addParticipantHint: String = "Adding people to a call isn't available yet",
+    /** v1.44 §39.1/§39.4 Add participant: enabled, or disabled with why. */
+    val addControl: ControlUi = ControlUi(enabled = false, description = "Add participant", hint = ADD_UNAVAILABLE),
+    /** v1.44 §39.3 the move ("Adding Sunil…", "Couldn't add people…"). */
+    val moveLine: String? = null,
 )
+
+/** v1.44: the build without the feature (or a call that can't add anyone). */
+const val ADD_UNAVAILABLE = "Adding people to a call isn't available yet"
 
 /** What the call screen's controls do. */
 data class CallScreenActions(
@@ -147,6 +152,8 @@ data class CallScreenActions(
     /** The switch prompt: (accept, my camera on). */
     val onPrompt: (Boolean, Boolean) -> Unit = { _, _ -> },
     val onStopShare: () -> Unit = {},
+    /** v1.44 §39.2 Add participant (the picker). */
+    val onAdd: () -> Unit = {},
 )
 
 /** Controls hide after this in video mode (a tap brings them back). */
@@ -311,13 +318,14 @@ private fun TopBar(ui: CallScreenUi, a: CallScreenActions, scrim: Boolean) {
             }
             if (ui.stage != CallStage.INCOMING && ui.stage != CallStage.ENDED) {
                 Box {
-                    // §20/§23 have no 1:1 → group upgrade yet: shown, disabled, with why on a tap.
+                    // v1.44 §39.1: enabled when the call can take more people; otherwise shown, disabled, with why on a tap.
+                    val add = ui.addControl
                     IconButton(
-                        onClick = { hint = true },
-                        modifier = Modifier.semantics { contentDescription = "Add participant (unavailable)" },
-                    ) { Icon(RisiIcons.PersonAdd, null, tint = Color.White.copy(alpha = 0.45f)) }
+                        onClick = { if (add.enabled) a.onAdd() else hint = true },
+                        modifier = Modifier.testTag("call-add").semantics { contentDescription = if (add.enabled) add.description else "${add.description} (unavailable)" },
+                    ) { Icon(RisiIcons.PersonAdd, null, tint = Color.White.copy(alpha = if (add.enabled) 1f else 0.45f)) }
                     DropdownMenu(hint, onDismissRequest = { hint = false }) {
-                        DropdownMenuItem(text = { Text(ui.addParticipantHint) }, onClick = { hint = false })
+                        DropdownMenuItem(text = { Text(add.hint ?: ADD_UNAVAILABLE) }, onClick = { hint = false })
                     }
                 }
             } else {
@@ -368,6 +376,7 @@ private fun Banners(ui: CallScreenUi, a: CallScreenActions) {
             }
         }
         ui.notice?.let { Pill(it) }
+        ui.moveLine?.let { Pill(it) }
     }
 }
 
@@ -634,8 +643,27 @@ fun shareControl(s: CallSnapshot, name: String, nowMs: Long): ControlUi = when {
     else -> ControlUi(description = "Share screen")
 }
 
+/**
+ * v1.44 §39.1/§39.4 Add participant: a 1:1 call when both devices listed `add` and it is connected;
+ * a group call when this phone can add ([groupAdd]) and it is connected.
+ */
+fun addControl(s: CallSnapshot, name: String, groupAdd: Boolean): ControlUi {
+    val d = "Add participant"
+    return when {
+        s.phase == CallPhase.ENDED || s.phase == CallPhase.RINGING_IN -> ControlUi(enabled = false, description = d, hint = ADD_UNAVAILABLE)
+        s.group -> if (!groupAdd) ControlUi(enabled = false, description = d, hint = ADD_UNAVAILABLE)
+        else if (!live(s)) ControlUi(enabled = false, description = d, hint = "Add people once the call has connected")
+        else ControlUi(description = d)
+        s.moving -> ControlUi(enabled = false, description = d, hint = "Adding people…")
+        !s.iCanAdd -> ControlUi(enabled = false, description = d, hint = ADD_UNAVAILABLE)
+        !live(s) -> ControlUi(enabled = false, description = d, hint = "Add people once the call has connected")
+        !s.canAdd -> ControlUi(enabled = false, description = d, hint = "$name needs to update RisiMe to add people")
+        else -> ControlUi(description = d)
+    }
+}
+
 /** The one call screen's state for a call snapshot ([status] already worded by the caller). */
-fun callScreenUi(s: CallSnapshot, name: String, status: String, routes: CallRoutes, nowMs: Long): CallScreenUi = CallScreenUi(
+fun callScreenUi(s: CallSnapshot, name: String, status: String, routes: CallRoutes, nowMs: Long, groupAdd: Boolean = false, moveLine: String? = null): CallScreenUi = CallScreenUi(
     name = name,
     status = status,
     stage = callStage(s.phase),
@@ -658,4 +686,6 @@ fun callScreenUi(s: CallSnapshot, name: String, status: String, routes: CallRout
     asking = s.asking?.let { CallTexts.askingLine(it, name) },
     prompt = s.prompt.takeIf { s.phase != CallPhase.ENDED },
     notice = s.switchNotice?.let { CallTexts.switchNotice(it, name) },
+    addControl = addControl(s, name, groupAdd),
+    moveLine = moveLine,
 )
