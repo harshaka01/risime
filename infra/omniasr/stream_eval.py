@@ -74,7 +74,7 @@ def main():
     p.add_argument("--sets")
     p.add_argument("--langs")
     p.add_argument("--limit", type=int)
-    p.add_argument("--group", type=int, default=96)
+    p.add_argument("--group", type=int, default=64)
     p.add_argument("--chunk-s", type=float, default=15.0)
     p.add_argument("--check", action="store_true",
                    help="also run the resident model (must fit) and compare texts")
@@ -98,6 +98,14 @@ def main():
     print(f"{len(clips)} clips to run", file=sys.stderr, flush=True)
     if not clips:
         return
+
+    # Chunks exactly like the harness.
+    pieces = []  # (clip, index, audio)
+    for c in clips:
+        for i, (_name, data) in enumerate(H.chunks(c["audio"], a.chunk_s)):
+            audio, sr = sf.read(io.BytesIO(data), dtype="float32")
+            assert sr == 16000, c["id"]
+            pieces.append((c, i, audio))
 
     spec = S.served()[a.model]
     S.cards()
@@ -145,23 +153,37 @@ def main():
           f"MemAvailable {avail0} -> {S.mem_available_mb()} MB, {n_layers} encoder layers",
           file=sys.stderr, flush=True)
 
-    # Chunks exactly like the harness.
-    pieces = []  # (clip, index, audio)
-    for c in clips:
-        for i, (_name, data) in enumerate(H.chunks(c["audio"], a.chunk_s)):
-            audio, sr = sf.read(io.BytesIO(data), dtype="float32")
-            assert sr == 16000, c["id"]
-            pieces.append((c, i, audio))
-
     texts = collections.defaultdict(dict)
     compute = collections.Counter()
+    n_pieces = collections.Counter(c["id"] for c, _i, _a in pieces)
+    written = set()
     peak, min_avail, t_wall = 0, S.mem_available_mb(), time.monotonic()
+
+    def flush_done():
+        """Append every clip whose chunks are all transcribed (so a stop loses one group)."""
+        runner = (f"stream_eval.py: encoder streamed layer by layer from the mmap'd checkpoint, "
+                  f"{dtype}, GPU; peak CUDA {peak} MB; min MemAvailable {min_avail} MB")
+        with open(a.out, "a") as out:
+            for c in clips:
+                parts = texts[c["id"]]
+                if c["id"] in written or len(parts) < n_pieces[c["id"]]:
+                    continue
+                rec = {"model": a.model, "id": c["id"], "lang": c["lang"],
+                       "forced_language": H.base_lang(c["lang"]),
+                       "duration_s": c.get("duration_s"), "chunks": len(parts),
+                       "text": " ".join(parts[k] for k in sorted(parts)).strip(),
+                       "served_by": a.model, "language": H.base_lang(c["lang"]),
+                       "processing_s": round(compute[c["id"]], 3), "wall_s": None,
+                       "runner": runner}
+                out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                written.add(c["id"])
     torch.cuda.reset_peak_memory_stats()
     with torch.inference_mode():
         for g in range(0, len(pieces), a.group):
             group = pieces[g:g + a.group]
             hs, layouts, langs_ = [], [], []
             for c, _i, audio in group:
+                floor_guard()
                 torch.cuda.synchronize()
                 t0 = time.monotonic()
                 wav = postprocess_waveform(torch.from_numpy(np.ascontiguousarray(audio)),
@@ -191,6 +213,7 @@ def main():
                     print(f"  group {g // a.group}: layer {li + 1}/{n_layers} "
                           f"(MemAvailable {S.mem_available_mb()} MB)", file=sys.stderr, flush=True)
             for j, (c, i, audio) in enumerate(group):
+                floor_guard()
                 torch.cuda.synchronize()
                 t0 = time.monotonic()
                 stand_in.out = enc_norm(hs[j]) if enc_norm is not None else hs[j]
@@ -200,24 +223,12 @@ def main():
                 compute[c["id"]] += time.monotonic() - t0
                 hs[j] = None
             peak = max(peak, torch.cuda.max_memory_allocated() >> 20)
+            flush_done()
             print(f"group {g // a.group} done, {time.monotonic() - t_wall:.0f}s wall",
                   file=sys.stderr, flush=True)
 
     wall = time.monotonic() - t_wall
-    runner = (f"stream_eval.py: encoder streamed layer by layer from the mmap'd checkpoint, "
-              f"{dtype}, GPU; resident part {load_s:.0f}s load; peak CUDA {peak} MB; "
-              f"min MemAvailable {min_avail} MB")
-    with open(a.out, "a") as out:
-        for c in clips:
-            parts = texts[c["id"]]
-            rec = {"model": a.model, "id": c["id"], "lang": c["lang"],
-                   "forced_language": H.base_lang(c["lang"]), "duration_s": c.get("duration_s"),
-                   "chunks": len(parts),
-                   "text": " ".join(parts[k] for k in sorted(parts)).strip(),
-                   "served_by": a.model, "language": H.base_lang(c["lang"]),
-                   "processing_s": round(compute[c["id"]], 3), "wall_s": None,
-                   "runner": runner}
-            out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    runner = f"peak CUDA {peak} MB, min MemAvailable {min_avail} MB, resident load {load_s:.0f}s"
     audio_s = sum(c.get("duration_s") or 0 for c in clips)
     print(f"done: {len(clips)} clips, {audio_s:.0f}s audio, compute {sum(compute.values()):.0f}s "
           f"(RTF {sum(compute.values()) / audio_s:.3f}), streaming wall {wall:.0f}s; {runner}",

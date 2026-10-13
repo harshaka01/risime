@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# omniASR eval with the encoder streamed layer by layer (infra/omniasr/stream_eval.py), for the
+# checkpoints that can't be resident next to risi-l1 (7B) and as the low-memory path for the rest.
+# Waits while a release gate runs or host MemAvailable is under NEED_MB, runs, and resumes (the
+# results file is appended per finished group) until every clip is done. 2026-10-14.
+#   scripts/asr-omni-stream <model alias> <results.jsonl> [stream_eval args, e.g. --sets omni-si]
+#   NEED_MB (default 9000): MemAvailable needed to start (resident part + the 4 GB floor + margin)
+# Audio stays in ~/risime-eval-data; the container has no network.
+set -uo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+model="$1"; out="$2"; shift 2
+need="${NEED_MB:-9000}"
+image="${OMNI_IMAGE:-risime/omniasr:fs2-0.6.0-oa-0.2.0}"
+data="$HOME/risime-eval-data"
+outdir="$(cd "$(dirname "$out")" && pwd)"
+avail() { awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; }
+for attempt in $(seq 1 40); do
+  while pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null || [ "$(avail)" -lt "$need" ]; do
+    sleep 30
+  done
+  echo "$(date -u +%T) attempt $attempt, MemAvailable $(avail) MB" >&2
+  log="$(mktemp)"
+  docker run --rm --gpus all --network none --user 1000:1000 -e HOME=/tmp -e OMNI_API_KEY=unused \
+    -v "$HOME/risime-eval-models:/models:ro" -v "$data:$data:ro" -v "$outdir:/res" \
+    -v "$root/scripts:/scripts:ro" --entrypoint python3 "$image" -I /app/stream_eval.py \
+    --manifest "$data/manifests/all.jsonl" --model "$model" --out "/res/$(basename "$out")" "$@" \
+    2>&1 | grep -v -E '^(=+|== vLLM ==|NVIDIA Release|vLLM Version|Container image|Various files|GOVERNING|\(found|NOTE:|   insuff|   docker|   https|  Using CUDA|  See https|)$|INFO (Found|Using provided|Pipeline)' \
+    | tee "$log" >&2
+  if grep -q -E '^done:|^0 clips to run' "$log"; then rm -f "$log"; exit 0; fi
+  rm -f "$log"
+  sleep 60
+done
+echo "gave up after 40 attempts" >&2
+exit 1
