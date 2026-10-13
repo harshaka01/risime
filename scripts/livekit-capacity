@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Group-call capacity on spark2 (contract v1.45 §40.10, decision 086): a THROWAWAY LiveKit (the pilot's
+# image and room/media settings, loopback only: signalling 127.0.0.1:$CAP_PORT, media UDP 41700-41899 on
+# 127.0.0.1, throwaway keys) under `lk load-test` rooms of N synthetic participants:
+#   scripts/livekit-capacity [voice|video|all]      (default all)
+# Each scenario runs $CAP_SECONDS (default 45 s); the SFU container's CPU and memory are sampled every
+# 5 s after a 15-s warm-up (docker stats), and the subscribers' total receive bitrate is LiveKit's
+# egress (lk's summary). Voice: N publishers + N subscribers (everyone talking: the worst case; real
+# calls with Opus DTX send far less). Video: N camera publishers (simulcast, the 3x3 layout: small
+# layers for the grid) + N subscribers. Prints one line per scenario and a summary with the honest
+# participant limit against the measured uplink ($CAP_UPLINK_MBIT, default 31 Mbit/s, measured
+# 2026-10-13). The live LiveKit (7880, risime-livekit-livekit-1) and coturn are never touched.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+img=livekit/livekit-server:v1.13.9
+cli=livekit/livekit-cli:v2.18.8
+name=risime-livekit-capacity
+port="${CAP_PORT:-17895}"
+secs="${CAP_SECONDS:-45}"
+uplink="${CAP_UPLINK_MBIT:-31}"
+what="${1:-all}"
+tmp=$(mktemp -d)
+cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"; }
+trap cleanup EXIT
+fail() { echo "CAPACITY FAIL $*" >&2; exit 1; }
+ss -ltnH "sport = :$port" | grep -q . && fail "port $port busy"
+
+sed -e "s/^port: 7880/port: $port/" \
+    -e 's/^  port_range_start: .*/  port_range_start: 41700/' \
+    -e 's/^  port_range_end: .*/  port_range_end: 41899/' \
+    -e 's/^  node_ip: .*/  node_ip: 127.0.0.1/' \
+    -e 's#^      - 10\.20\.20\.15/32#      - 127.0.0.1/32#' \
+    -e 's/^  enable_loopback_candidate: .*/  enable_loopback_candidate: true/' \
+    -e 's/^    - host: 203\.189\.69\.76/    - host: 127.0.0.1/' \
+    -e 's/^  max_participants: 32/  max_participants: 0/' \
+    infra/livekit/livekit.yaml > "$tmp/livekit.yaml"
+! grep -q '10\.20\.20\.15\|203\.189\.69\.76\|203\.115\.26\.139' <(grep -v '^ *#' "$tmp/livekit.yaml") || fail "public address left in the throwaway config"
+chmod 644 "$tmp/livekit.yaml"
+export LIVEKIT_API_KEY="APIcap$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+export LIVEKIT_API_SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+TURN_SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '/+=')"; export TURN_SECRET
+docker rm -f "$name" >/dev/null 2>&1 || true
+docker run -d --name "$name" --network host --user 65534:65534 \
+  -e LIVEKIT_API_KEY -e LIVEKIT_API_SECRET -e TURN_SECRET \
+  -v "$tmp/livekit.yaml:/etc/livekit/livekit.yaml:ro" -v "$PWD/infra/livekit/entrypoint.sh:/risime-entrypoint.sh:ro" \
+  --read-only --tmpfs /tmp:size=4m,mode=1777 --cap-drop ALL --security-opt no-new-privileges:true \
+  --ulimit nofile=65536 --entrypoint /risime-entrypoint.sh "$img" >/dev/null
+for _ in $(seq 1 30); do [ "$(curl -s --max-time 1 "http://127.0.0.1:$port/" || true)" = OK ] && break; sleep 1; done
+[ "$(curl -s --max-time 2 "http://127.0.0.1:$port/" || true)" = OK ] || { docker logs "$name" 2>&1 | tail -5; fail "LiveKit didn't start"; }
+tcp="$(ss -ltnH | awk '{print $4}' | grep -E ":$port$" | sort -u || true)"
+[ "$tcp" = "127.0.0.1:$port" ] || fail "binds $tcp (want 127.0.0.1:$port only)"
+echo "throwaway LiveKit on 127.0.0.1:$port (loopback only); idle: $(docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' "$name")"
+lk() { docker run --rm --network host -e LIVEKIT_API_KEY -e LIVEKIT_API_SECRET "$cli" "$@"; }
+ncpu="$(nproc)"
+
+# run <label> <audio pubs> <video pubs> <subs> [extra lk args…] → one result line
+run() {
+  local label="$1" ap="$2" vp="$3" sub="$4"; shift 4
+  local room="cap-$RANDOM-$RANDOM"
+  lk room create --url "ws://127.0.0.1:$port" "$room" >/dev/null 2>&1 || fail "room create"
+  ( lk load-test --url "ws://127.0.0.1:$port" --room "$room" --audio-publishers "$ap" --video-publishers "$vp" \
+      --subscribers "$sub" --duration "${secs}s" --num-per-second 10 "$@" > "$tmp/lt.out" 2>&1 || true ) &
+  local pid=$!
+  sleep 15
+  : > "$tmp/samples"
+  while kill -0 "$pid" 2>/dev/null; do
+    docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}}' "$name" >> "$tmp/samples" 2>/dev/null || true
+    sleep 5
+  done
+  wait "$pid" || true
+  python3 -I - "$tmp/samples" "$tmp/lt.out" "$label" "$ap" "$vp" "$sub" "$ncpu" <<'PY'
+import re, sys
+samples, out, label, ap, vp, sub, ncpu = sys.argv[1], open(sys.argv[2]).read(), sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[7])
+cpu, mem = [], []
+for l in open(samples):
+    m = re.match(r'([\d.]+)%\s+([\d.]+)(KiB|MiB|GiB)', l)
+    if m:
+        cpu.append(float(m.group(1)))
+        mem.append(float(m.group(2)) * {'KiB': 1/1024, 'MiB': 1, 'GiB': 1024}[m.group(3)])
+def mbps(cell):
+    m = re.match(r'([\d.]+)\s*([kKmMgG]?)bps', cell.strip())
+    if not m: return None
+    return float(m.group(1)) * {'': 1e-6, 'k': 1e-3, 'K': 1e-3, 'm': 1, 'M': 1, 'g': 1e3, 'G': 1e3}[m.group(2)]
+tot = [l for l in out.splitlines() if re.search(r'│\s*Total\s*│', l)]
+cells = [c.strip() for c in tot[-1].split('│') if c.strip()] if tot else []
+tracks = cells[1] if len(cells) > 1 else '?'
+rate = mbps(cells[2]) if len(cells) > 2 else None
+errs = cells[4] if len(cells) > 4 else '?'
+n = max(ap + vp, sub)
+c = sum(cpu) / len(cpu) if cpu else float('nan')
+mx = max(cpu) if cpu else float('nan')
+mm = max(mem) if mem else float('nan')
+print(f"RESULT {label}: participants={n} tracks={tracks} errors={errs} sfu_cpu_avg={c:.0f}% (max {mx:.0f}%, of {ncpu*100}%) "
+      f"cpu_per_participant={c/n:.1f}% sfu_mem_max={mm:.0f}MiB egress={'%.2f' % rate if rate is not None else '?'}Mbit/s "
+      f"egress_per_participant={'%.3f' % (rate/n) if rate else '?'}Mbit/s")
+PY
+}
+
+if [ "$what" = voice ] || [ "$what" = all ]; then
+  for n in 4 8 16 32 48; do run "voice-$n" "$n" 0 "$n"; done
+fi
+if [ "$what" = video ] || [ "$what" = all ]; then
+  for n in 2 4 8 12; do run "video-$n" 0 "$n" "$n" --layout 3x3 --video-resolution medium; done
+fi
+echo "uplink assumed: ${uplink} Mbit/s (measured 2026-10-13); LiveKit's egress to remote phones crosses it."

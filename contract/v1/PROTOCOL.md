@@ -11135,9 +11135,13 @@ call, or a 1:1 Official call moved there), with these differences (server and an
   `call_transcribe`); the red bar names who is pending while `paused`.
 
 ### 40.10 Limits on spark2 (measured 2026-10-13)
-The §20.9 caps (32 voice, 8 video) stay the contract. Measured with a test LiveKit (the pilot's image and
-configuration, its own ports) and synthetic participants; the numbers and the honest limits are in
-decision 086.
+The §20.9 caps (32 voice, 8 video) stay the contract. Measured with `scripts/livekit-capacity` (a throwaway
+LiveKit with the pilot's settings, loopback, synthetic participants; table in decision 086): the SFU needs
+under 1.5 % of one core and 5–10 MiB per participant, so **spark2's 31 Mbit/s uplink is the bound**:
+- **voice:** ≈ 0.12 Mbit/s per participant with several talkers: a 32-person call ≈ 4 Mbit/s; about 7 full
+  voice calls (≈ 250 participants) at once;
+- **video:** an 8-person room at worst-case layers took the whole uplink (32 Mbit/s); with the app's simulcast
+  and adaptive stream ≈ 11 Mbit/s: about 2 full 8-person video rooms at once (≈ 20 video participants).
 
 ### 40.11 Examples, gate
 - **Examples:** `device_put_add_to_call.json`, `call_offer_features_add_payload.json`,

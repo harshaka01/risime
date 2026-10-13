@@ -84,4 +84,34 @@ ringing invite, E2EE keys per §20, voice first, then video; old clients defined
   video. Server and android unit gates as usual.
 
 ## Measured participant limits on spark2 (2026-10-13)
-Filled in by the measurement run (see §40.10 and `docs/status/server.md`).
+`scripts/livekit-capacity` (a throwaway LiveKit v1.13.9 with the pilot's room and media settings, loopback
+only; `lk load-test` 2.18.8 synthetic participants, 45 s per room, SFU sampled with `docker stats` after a
+15-s warm-up; spark2 has 20 ARM cores = 2000 %). Egress = what LiveKit sends, i.e. what crosses spark2's
+uplink for remote phones (31 Mbit/s measured today).
+
+| Room | SFU CPU (avg) | CPU per participant | SFU memory | Egress | Egress per participant |
+|---|---|---|---|---|---|
+| voice 4 | 4 % | 0.9 % | 67 MiB | 0.33 Mbit/s | 0.08 Mbit/s |
+| voice 8 | 7 % | 0.9 % | 86 MiB | 0.97 Mbit/s | 0.12 Mbit/s |
+| voice 16 | 15 % | 0.9 % | 125 MiB | 1.90 Mbit/s | 0.12 Mbit/s |
+| voice 32 | 26 % | 0.8 % | 212 MiB | 3.70 Mbit/s | 0.12 Mbit/s |
+| voice 48 | 37 % | 0.8 % | 257 MiB | 5.50 Mbit/s | 0.12 Mbit/s |
+| video 2 | 2 % | 0.8 % | 30 MiB | 1.7 Mbit/s | 0.85 Mbit/s |
+| video 4 | 4 % | 1.0 % | 48 MiB | 8.3 Mbit/s | 2.1 Mbit/s |
+| video 8 | 10 % | 1.3 % | 82 MiB | 32.1 Mbit/s | 4.0 Mbit/s |
+| video 12 | 15 % | 1.3 % | 130 MiB | 57.6 Mbit/s | 4.8 Mbit/s |
+
+(Voice: every participant publishing, lk's "speaker" layout subscribing to the active talkers, about 6 tracks
+each; video: medium resolution, simulcast, the 3x3 layout.) **CPU and memory are never the bound**: under 1.5 %
+of one core and about 5–10 MiB per participant, so spark2's SFU could carry hundreds of participants.
+**The uplink is the bound, and the honest limits are:**
+- **Voice: 32 per call (the contract cap) holds easily.** About 0.12 Mbit/s per participant with several people
+  talking (much less with Opus DTX in a real call where one talks), so a full 32-person call uses ≈ 4 Mbit/s;
+  about **7 full 32-person calls at once**, or ≈ 250 voice participants in total, before the 31 Mbit/s uplink fills.
+- **Video: 8 per call (the cap) holds, but only one full room at a time at worst-case layers.** At lk's medium
+  layers an 8-person video room used 32 Mbit/s: the whole uplink. The app's own profile (simulcast 320×180 at
+  150 kbit/s for the small tiles and 640×360 at 500 kbit/s for the large one, adaptive stream, §20.5) receives
+  about 1.4 Mbit/s per participant, ≈ 11 Mbit/s for a full room, so **about 2 full 8-person video rooms at once**
+  (or ≈ 20 video participants in total). A 12-person video room (58 Mbit/s here) would not fit: the cap of 8 stays.
+- Not measured here: real phones over the internet (the test is loopback), relay through coturn (it shares the
+  same uplink), and battery/CPU on mid-range phones decoding 7 VP8 streams (§20.9's reason for 8).
