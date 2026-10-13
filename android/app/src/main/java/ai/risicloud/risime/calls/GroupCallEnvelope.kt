@@ -24,6 +24,8 @@ data class GroupCallEnvelope(
     val durationS: Long? = null,
     /** v1.27 §27.7: `"listen"` on a `started` whose starter chose Risi listening; null = absent ("off"). */
     val risi: String? = null,
+    /** Proposal 2026-10-14-call-risi §41.3: `"risi"` on a Call Risi's `started`/`ended`; null = absent (every other call). */
+    val with: String? = null,
 ) {
     val video: Boolean get() = media == CallEnvelope.MEDIA_VIDEO
 
@@ -39,6 +41,7 @@ data class GroupCallEnvelope(
             put("connected_at", connectedAt?.let { JsonPrimitive(it) } ?: JsonNull)
             put("duration_s", durationS?.let { JsonPrimitive(it) } ?: JsonNull)
         }
+        with?.let { put("with", it) }
     }
 
     fun encode(): ByteArray = ProtocolJson.encodeToString(JsonObject.serializer(), toJson()).toByteArray(Charsets.UTF_8)
@@ -49,6 +52,9 @@ data class GroupCallEnvelope(
         const val ENDED = "ended"
         const val R_HANGUP = "hangup"
         const val R_TIMEOUT = "timeout"
+
+        /** Proposal 2026-10-14-call-risi §41.3: the `with` of a Call Risi. */
+        const val WITH_RISI = "risi"
 
         fun started(callId: String, media: String) = GroupCallEnvelope(callId, media, STARTED)
 
@@ -70,15 +76,16 @@ data class GroupCallEnvelope(
             if (!CallEnvelope.isLowerUuid(callId)) return drop("call_id")
             val media = str("media")
             if (media !in CallEnvelope.MEDIAS) return drop("media")
+            val with = str("with")?.takeIf { it == WITH_RISI }
             return when (str("state")) {
-                STARTED -> GroupCallEnvelope(callId!!, media!!, STARTED, risi = str("risi")?.takeIf { it.length <= 32 })
+                STARTED -> GroupCallEnvelope(callId!!, media!!, STARTED, risi = str("risi")?.takeIf { it.length <= 32 }, with = with)
                 ENDED -> {
                     val reason = str("reason")
                     if (reason != R_HANGUP && reason != R_TIMEOUT) return drop("reason")
                     // Display-only claims of the sender: a malformed one is ignored, not fatal.
                     val connectedAt = str("connected_at")?.takeIf { runCatching { Instant.parse(it) }.isSuccess }
                     val dur = (obj["duration_s"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it in 0..(24 * 3600L) }
-                    if (reason == R_TIMEOUT) GroupCallEnvelope(callId!!, media!!, ENDED, R_TIMEOUT) else GroupCallEnvelope(callId!!, media!!, ENDED, reason, connectedAt, dur)
+                    (if (reason == R_TIMEOUT) GroupCallEnvelope(callId!!, media!!, ENDED, R_TIMEOUT) else GroupCallEnvelope(callId!!, media!!, ENDED, reason, connectedAt, dur)).copy(with = with)
                 }
                 else -> drop("state")
             }
@@ -120,6 +127,8 @@ object GroupCallLines {
     fun startedText(starterName: String, video: Boolean): String = "$starterName started a ${if (video) "video" else "voice"} call"
 
     fun text(env: GroupCallEnvelope, starterName: String, starterIsMe: Boolean, running: Boolean, missed: Boolean = false): String {
+        // Proposal 2026-10-14-call-risi §41.3: "Call with Risi · 3:12" / "Call with Risi · Didn't connect".
+        if (env.with == GroupCallEnvelope.WITH_RISI) return ai.risicloud.risime.calls.risi.CallRisiTexts.historyLine(env, running)
         val call = if (env.video) CallLines.VIDEO_CALL else CallLines.VOICE_CALL
         return when {
             env.state == GroupCallEnvelope.STARTED && running -> startedText(if (starterIsMe) "You" else starterName, env.video)
@@ -132,5 +141,5 @@ object GroupCallLines {
     }
 
     /** The line shows Join (a `started` line whose call is running). */
-    fun joinable(env: GroupCallEnvelope?, running: Boolean): Boolean = env?.state == GroupCallEnvelope.STARTED && running
+    fun joinable(env: GroupCallEnvelope?, running: Boolean): Boolean = env?.state == GroupCallEnvelope.STARTED && running && env.with == null
 }

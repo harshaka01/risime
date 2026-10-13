@@ -79,6 +79,8 @@ class DeviceRegistrar(
     private val voiceSupported: () -> Boolean = { false },
     /** v1.45 §40.1: this phone moves 1:1 calls into group calls (the build flag on, with `group_calls` and `call_switch`). */
     private val addToCallSupported: () -> Boolean = { false },
+    /** Proposal 2026-10-14-call-risi §41.1: the developer flag `call_risi` is on (advertised only with `group_calls` and `risi_tools`). */
+    private val callRisiSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -145,6 +147,14 @@ class DeviceRegistrar(
             // v1.39 §36.1: only with `calls` and `tabs` (Official 1:1 calls), while the server switch is on.
             DeviceMls.CAP_CALL_TRANSCRIBE.takeIf {
                 mls.deletesSupported && imagesSupported() && callsSupported() && mls.tabsSupported && tabsSupported() && callTranscribeSupported()
+            },
+            // Proposal 2026-10-14-call-risi §41.1: only with `group_calls` and `risi_tools`, while the developer flag is on.
+            DeviceMls.CAP_CALL_RISI.takeIf {
+                ai.risicloud.risime.calls.risi.CallRisiRules.advertise(
+                    flagOn = callRisiSupported(),
+                    groupCalls = mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && mls.callKeysSupported && groupCallsSupported(),
+                    risiTools = mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported(),
+                )
             },
         )
         else -> null

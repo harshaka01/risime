@@ -431,6 +431,34 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
         c.calls.openCallScreen()
     }
 
+    // ---- Proposal 2026-10-14-call-risi (decision 090): the Risi chat's Call Risi button ----
+
+    private val _callRisiUser = MutableStateFlow(false)
+
+    /** §41.1: `User.call_risi`, the developer flag `call_risi`, and this device advertising `group_calls`. */
+    val callRisiVisible: StateFlow<Boolean> = combine(_callRisiUser, c.callRisiFlag.on) { user, flag ->
+        ai.risicloud.risime.calls.risi.CallRisiRules.buttonVisible(
+            userCallRisi = user, flagOn = flag,
+            groupCalls = c.deviceRegistrar.advertised?.contains(ai.risicloud.risime.net.DeviceMls.CAP_GROUP_CALLS) == true,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** A fresh `GET /me` for `call_risi` (only called in the Risi chat while the developer flag is on). */
+    fun refreshCallRisi() {
+        viewModelScope.launch {
+            (c.api.me() as? ai.risicloud.risime.net.ApiResult.Ok)?.value?.user?.let { _callRisiUser.value = it.callRisi }
+        }
+    }
+
+    /** §41.4: the one-time explainer was shown on this phone. */
+    fun callRisiExplained(): Boolean = c.callRisiFlag.explained()
+
+    fun startRisiCall() {
+        c.callRisiFlag.setExplained()
+        c.calls.placeRisiCall(conversationId)
+        c.calls.openCallScreen()
+    }
+
     /** §20.4 Join on a running call's line. */
     fun joinGroupCall(env: ai.risicloud.risime.calls.GroupCallEnvelope, starter: String, camera: Boolean) {
         c.calls.joinGroupCall(conversationId, env.callId, env.media, starter, camera)

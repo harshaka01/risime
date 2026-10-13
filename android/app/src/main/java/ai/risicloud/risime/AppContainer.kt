@@ -1144,6 +1144,9 @@ class AppContainer(
         )
     }
 
+    /** Decision 090: the developer flag `call_risi` (off unless a `risi_dev` account turns it on). */
+    val callRisiFlag by lazy { ai.risicloud.risime.calls.risi.CallRisiFlag(voicePrefs) }
+
     /** Part 12 quick fix 2: the developer flag `phone_stt` (off unless a `risi_dev` account turns it on). */
     val phoneSttFlag by lazy { ai.risicloud.risime.voice.PhoneSttFlag(voicePrefs) }
 
@@ -1549,6 +1552,8 @@ class AppContainer(
             groupCallsSupported = { runCatching { calls.canAdvertiseGroupCalls() }.getOrDefault(false) },
             callSwitchSupported = { runCatching { calls.canAdvertiseSwitch() }.getOrDefault(false) },
             addToCallSupported = { runCatching { calls.canAdvertiseAddToCall() }.getOrDefault(false) },
+            // Decision 090: the developer flag `call_risi` (off: never advertised, the PUT body is v1.47's).
+            callRisiSupported = { callRisiFlag.on.value },
             screenShareSupported = { runCatching { calls.canAdvertiseScreenShare() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },

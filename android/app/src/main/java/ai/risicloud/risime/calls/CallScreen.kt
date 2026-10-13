@@ -128,6 +128,11 @@ data class CallScreenUi(
     val addControl: ControlUi = ControlUi(enabled = false, description = "Add participant", hint = ADD_UNAVAILABLE),
     /** v1.45 §40.3 the move ("Adding Sunil…", "Couldn't add people…"). */
     val moveLine: String? = null,
+    /**
+     * Proposal 2026-10-14-call-risi §41.4: a call with Risi: the "Risi hears this call" banner (never a lock),
+     * the agent badge, and only Speaker, Mute and End.
+     */
+    val risiCall: Boolean = false,
 )
 
 /** v1.45: the build without the feature (or a call that can't add anyone). */
@@ -268,6 +273,7 @@ fun CallScreen(
                     AnimatedVisibility(controls || !videoStage, enter = fadeIn(), exit = fadeOut()) {
                         TopBar(ui, a, scrim = videoStage)
                     }
+                    if (ui.risiCall) ai.risicloud.risime.calls.risi.RisiHearsBanner()
                     statusBar?.invoke()
                     if (!videoStage) {
                         Column(Modifier.fillMaxWidth().weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -316,7 +322,9 @@ private fun TopBar(ui: CallScreenUi, a: CallScreenActions, scrim: Boolean) {
                     Text("End-to-end encrypted", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
                 }
             }
-            if (ui.stage != CallStage.INCOMING && ui.stage != CallStage.ENDED) {
+            if (ui.risiCall) {
+                Spacer(Modifier.size(48.dp))
+            } else if (ui.stage != CallStage.INCOMING && ui.stage != CallStage.ENDED) {
                 Box {
                     // v1.45 §40.1: enabled when the call can take more people; otherwise shown, disabled, with why on a tap.
                     val add = ui.addControl
@@ -332,6 +340,7 @@ private fun TopBar(ui: CallScreenUi, a: CallScreenActions, scrim: Boolean) {
                 Spacer(Modifier.size(48.dp))
             }
         }
+        if (ui.risiCall) ai.risicloud.risime.calls.risi.RisiCallBadge()
         Text(
             ui.name ?: "Incoming RisiMe call",
             style = MaterialTheme.typography.headlineSmall,
@@ -406,6 +415,21 @@ private fun BottomPanel(ui: CallScreenUi, a: CallScreenActions, compact: Boolean
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
         ) {
+            if (ui.risiCall) {
+                // §41.4: mute, speaker, hang up only (no video, share, add people or Transcribe).
+                Row(Modifier.fillMaxWidth().padding(vertical = if (compact) Spacing.sm else Spacing.lg), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.Top) {
+                    RouteControl(InCallUi(ui.name ?: "", ui.status, endpoints = ui.endpoints, current = ui.current, ended = false), { onTouch(); a.onEndpoint(it) }, speakerLabel = true)
+                    CallControl(
+                        label = if (ui.muted) "Muted" else "Mute",
+                        description = if (ui.muted) "Unmute" else "Mute",
+                        icon = if (ui.muted) RisiIcons.MicOff else RisiIcons.Mic,
+                        on = ui.muted,
+                        onClick = { onTouch(); a.onMute(!ui.muted) },
+                    )
+                    EndControl(a.onEnd)
+                }
+                return@Surface
+            }
             Column(Modifier.padding(vertical = if (compact) Spacing.sm else Spacing.lg), verticalArrangement = Arrangement.spacedBy(if (compact) Spacing.sm else Spacing.lg)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     RouteControl(InCallUi(ui.name ?: "", ui.status, endpoints = ui.endpoints, current = ui.current, ended = false), { onTouch(); a.onEndpoint(it) }, speakerLabel = true)
@@ -688,4 +712,15 @@ fun callScreenUi(s: CallSnapshot, name: String, status: String, routes: CallRout
     notice = s.switchNotice?.let { CallTexts.switchNotice(it, name) },
     addControl = addControl(s, name, groupAdd),
     moveLine = moveLine,
+    risiCall = s.risiCall,
 )
+
+/**
+ * Proposal 2026-10-14-call-risi §41.4: the status line of a Call Risi ("Connecting…" → "Listening" →
+ * "Speaking"; an ended call's notice as usual). [ended] is the worded notice of an ended call.
+ */
+fun risiCallStatus(s: CallSnapshot, ended: String): String = when {
+    s.phase == CallPhase.ENDED -> ended
+    s.phase == CallPhase.RECONNECTING -> "Reconnecting…"
+    else -> ai.risicloud.risime.calls.risi.CallRisiTexts.stateLine(s.risiPresent && s.phase == CallPhase.ACTIVE, s.risiSpeaking)
+}

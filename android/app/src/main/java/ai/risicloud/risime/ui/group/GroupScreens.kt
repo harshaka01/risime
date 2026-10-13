@@ -311,6 +311,20 @@ fun GroupChatScreen(
                         val toastOf: (String) -> Unit = { vm.imgs.toast.value = it; vm.refreshGroupCalls() }
                         ai.risicloud.risime.ui.chat.VideoHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = true), toastOf) { cam -> vm.startGroupCall(video = true, camera = cam) }
                         ai.risicloud.risime.ui.chat.CallHeaderButton(vm.groupCallBlockedText(encrypted == true, ready, video = false), toastOf) { vm.startGroupCall(video = false, camera = false) }
+                    } else if (risiChat && !readOnly) {
+                        // Proposal 2026-10-14-call-risi §41.1: Call Risi (User.call_risi + the developer flag + group_calls).
+                        val flagOn by vm.container.callRisiFlag.on.collectAsStateWithLifecycle()
+                        LaunchedEffect(flagOn) { if (flagOn) vm.refreshCallRisi() }
+                        val callRisi by vm.callRisiVisible.collectAsStateWithLifecycle()
+                        var explain by remember { mutableStateOf(false) }
+                        if (callRisi) {
+                            ai.risicloud.risime.calls.risi.CallRisiButton(onBlocked = { vm.imgs.toast.value = it }) {
+                                if (vm.callRisiExplained()) vm.startRisiCall() else explain = true
+                            }
+                        }
+                        if (explain) {
+                            ai.risicloud.risime.calls.risi.RisiCallExplainer(onOk = { explain = false; vm.startRisiCall() }, onCancel = { explain = false })
+                        }
                     }
                     ai.risicloud.risime.ui.chat.ChatOverflowMenu(
                         onClear = { clearAsk = false }, onDelete = { clearAsk = true }, lock = lock.takeIf { !risiChat },

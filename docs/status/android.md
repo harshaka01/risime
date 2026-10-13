@@ -1,5 +1,27 @@
 # Android status — 0.2 nightlies
 
+## Call Risi v1 (14 Oct; decision 090, proposal 2026-10-14-call-risi) — built, behind the developer flag `call_risi` (off)
+- **Flag:** Settings → About → tap the version 7 times → Developer → "Call Risi (voice call with Risi)" (only `risi_dev`
+  accounts; a fresh non-developer `GET /me` turns it off). Toggling re-advertises: `call_risi` joins `mls.capabilities`
+  only with the flag on and `group_calls` + `risi_tools` (flag off = the v1.47 list, unit-tested).
+- **Button:** the Risi chat's top bar, only with `User.call_risi` (parsed from `GET /me`), the flag and `group_calls`;
+  RECORD_AUDIO, then a one-time explainer.
+- **Call:** `GroupCallMachine.startRisi`: `POST /calls/rooms start` with `risi_call: true` → LiveKit **without
+  E2EEOptions for this room only** (`SfuConnect.e2ee = false`; remote audio not muted for "not encrypted" only here),
+  WebRTC NS/AEC/AGC/high-pass written out as LiveKit's defaults and checked at connect for every call; no `call_offer`,
+  no `call_member`; durable `group_call` `started`/`ended` with `"with": "risi"`; only `risi_identity` is played (any
+  other identity → leave, "This call isn't safe any more"); Risi absent 12 s after connect → leave with "Risi couldn't
+  answer. Try again in a moment." (`ended` `timeout`); Risi leaving ends the call. `call_risi_off` / `not_risi_chat` /
+  `risi_busy` / `risi_unavailable` show their texts. Line: "Call with Risi · 3:12" / "Call with Risi · Didn't connect" (no Join).
+- **Screen:** "Risi" + agent badge, Connecting… → Listening → Speaking, persistent "Risi hears this call" + "Not
+  end-to-end encrypted: audio is processed by Risi on RisiMe's server. Audio isn't kept." (never a lock); Speaker, Mute,
+  End only (no add, video, share, Transcribe).
+- **Transcript:** Risi kind `call_transcript` **with `lines`** renders as a card (filler lines dimmed); a §36.5
+  `call_transcript` (no `lines`) keeps its old rendering. NOTE for root: the proposal's kind name collides with §36.5's
+  `call_transcript`; the app also accepts `risi_call_transcript` — renaming it in the contract is recommended.
+- **Gate:** `./gradlew assembleDebug testDebugUnitTest` green: 1938 JVM tests, 0 failed (new `CallRisiTest`, `CallRisiMachineTest`,
+  incl. parity: normal start body, `group_call` without `with`, normal group call still E2EE + ring). Not yet on a device.
+
 ## v1.45 §40 adding people to a call (13 Oct; decision 086) — built, behind `ADD_TO_CALL_ENABLED` (off); device gate pending
 **Agent design (decision 085/086): no agent: infrastructure** (call media, the move, keys); Official group-call
 transcription reuses the §36/§38 Voice-agent path. Flag: `-Prisime.addToCall=true` turns on `add_to_call`, `features: ["add"]`

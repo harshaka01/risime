@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 
 /** Settings → About: seven taps on the version open the Developer section (like Android's own). */
@@ -62,10 +63,20 @@ fun RisiDevSection(c: AppContainer) {
         dev = (me as? ApiResult.Ok)?.value?.user?.risiDev == true
         // Part 12 quick fix 2: the `phone_stt` flag follows a fresh `risi_dev` (a non-developer account turns it off).
         if (me is ApiResult.Ok) c.phoneSttFlag.setDeveloper(dev == true)
+        // Decision 090: so does `call_risi` (and the device re-advertises without it).
+        if (me is ApiResult.Ok) {
+            val before = c.callRisiFlag.on.value
+            c.callRisiFlag.setDeveloper(dev == true)
+            if (before != c.callRisiFlag.on.value) c.refreshCapabilities()
+        }
         if (dev == true) {
             when (val r = c.api.risiDev()) {
                 is ApiResult.Ok -> compare = r.value.transcribeCompare
-                is ApiResult.Error -> if (r.code == CallTranscribeErrors.NOT_DEVELOPER) { dev = false; c.phoneSttFlag.setDeveloper(false) } else error = "Couldn't load the developer settings"
+                is ApiResult.Error -> if (r.code == CallTranscribeErrors.NOT_DEVELOPER) {
+                    dev = false
+                    c.phoneSttFlag.setDeveloper(false)
+                    if (c.callRisiFlag.on.value) { c.callRisiFlag.setDeveloper(false); c.refreshCapabilities() }
+                } else error = "Couldn't load the developer settings"
                 is ApiResult.NetworkError -> error = "Not connected"
             }
         }
@@ -104,6 +115,23 @@ fun RisiDevSection(c: AppContainer) {
             }
             error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             PhoneRecogniserSection(c)
+            CallRisiDevRow(c)
         }
+    }
+}
+
+const val CALL_RISI_FLAG_LABEL = "Call Risi (voice call with Risi)"
+const val CALL_RISI_FLAG_HELP = "Shows Call Risi in your Risi chat when the server allows it for this account. Risi hears the call; it isn't end-to-end encrypted."
+
+/** Decision 090: the developer flag `call_risi` (off by default; toggling it re-advertises the device's capabilities). */
+@Composable
+fun CallRisiDevRow(c: AppContainer) {
+    val on by c.callRisiFlag.on.collectAsStateWithLifecycle()
+    Row(Modifier.fillMaxWidth().testTag("dev_call_risi"), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(CALL_RISI_FLAG_LABEL, style = MaterialTheme.typography.bodyMedium)
+            Text(CALL_RISI_FLAG_HELP, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = { c.callRisiFlag.set(it); c.refreshCapabilities() }, modifier = Modifier.testTag("dev_call_risi_switch"))
     }
 }

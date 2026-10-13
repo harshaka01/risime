@@ -433,6 +433,13 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                 }
                 else -> RoomOutcome.Failed("network")
             }
+        // Proposal 2026-10-14-call-risi §41.2: `start` with `risi_call: true` (only from a Call Risi).
+        override suspend fun risiRoom(conv: String, callId: String): RoomOutcome =
+            when (val r = withTimeoutOrNull(10_000) { port.api.callsRoom(ai.risicloud.risime.net.CallsRoomRequest(conv, callId, CallEnvelope.MEDIA_AUDIO, ai.risicloud.risime.net.CallsRoomRequest.START, risiCall = true), port.deviceId()) }) {
+                is ApiResult.Ok -> RoomOutcome.Ok(r.value)
+                is ApiResult.Error -> RoomOutcome.Failed("${r.httpStatus} ${r.code}", r.code)
+                else -> RoomOutcome.Failed("network")
+            }
         override suspend fun signal(conv: String, env: CallEnvelope.Env, media: String): SignalOutcome {
             repeat(3) { attempt ->
                 when (val r = port.sendGroupSignal(conv, env, media)) {
@@ -537,6 +544,15 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     // ---------------------------------------------------------------- user actions
 
     fun hasMicPermission(): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Proposal 2026-10-14-call-risi §41.3: the Call Risi button of the Risi chat [risiChat] (a `grp:`;
+     * RECORD_AUDIO granted and the flags checked by the UI). Group-call machinery, no ring, no frame keys.
+     */
+    fun placeRisiCall(risiChat: String) {
+        if (ai.risicloud.risime.data.tabs.callPathOf(risiChat) != ai.risicloud.risime.data.tabs.CallPath.SFU) return
+        scope.launch { _group.value?.startRisi(risiChat) }
+    }
 
     /** The call button (RECORD_AUDIO already granted by the UI); [video] with [camera] = CAMERA granted (§19.6). */
     fun placeCall(conversationId: String, video: Boolean = false, camera: Boolean = video, official: Boolean = false) {
@@ -1565,6 +1581,12 @@ object CallTexts {
         CallNotice.LOST_CONNECTION -> "Lost connection"
         CallNotice.REMOVED -> "You're no longer in this group"
         CallNotice.GROUP_NOT_READY -> GROUP_NOT_READY_TEXT
+        CallNotice.RISI_OFF -> ai.risicloud.risime.calls.risi.CallRisiTexts.error(ai.risicloud.risime.net.CallErrors.CALL_RISI_OFF)!!
+        CallNotice.RISI_NOT_CHAT -> ai.risicloud.risime.calls.risi.CallRisiTexts.error(ai.risicloud.risime.net.CallErrors.NOT_RISI_CHAT)!!
+        CallNotice.RISI_BUSY -> ai.risicloud.risime.calls.risi.CallRisiTexts.error(ai.risicloud.risime.net.CallErrors.RISI_BUSY)!!
+        CallNotice.RISI_UNAVAILABLE -> ai.risicloud.risime.calls.risi.CallRisiTexts.error(ai.risicloud.risime.net.CallErrors.RISI_UNAVAILABLE)!!
+        CallNotice.RISI_NO_ANSWER -> ai.risicloud.risime.calls.risi.CallRisiTexts.NO_ANSWER
+        CallNotice.RISI_UNSAFE -> ai.risicloud.risime.calls.risi.CallRisiTexts.UNSAFE
     }
 
     /** §20.1 the disabled group call buttons. */

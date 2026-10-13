@@ -81,7 +81,11 @@ class LiveKitSfu(
             RoomOptions(
                 adaptiveStream = true,
                 dynacast = true,
-                e2eeOptions = E2EEOptions(keyProvider = keyProvider, encryptionType = LivekitModels.Encryption.Type.GCM),
+                // Proposal 2026-10-14-call-risi: a Call Risi (and only it) connects without frame encryption.
+                e2eeOptions = if (p.e2ee) E2EEOptions(keyProvider = keyProvider, encryptionType = LivekitModels.Encryption.Type.GCM) else null,
+                // WebRTC's audio processing stays ON for every call (noise suppression, echo cancellation, AGC,
+                // high-pass): decision 090 relies on the phone's echo cancellation so Risi never hears itself.
+                audioTrackCaptureDefaults = CAPTURE,
                 // Opus with DTX and in-band FEC; no RED (redundant audio around encrypted frames).
                 audioTrackPublishDefaults = AudioTrackPublishDefaults(audioBitrate = 32_000, dtx = true, red = false),
                 // §20.5 (android A6): VP8, two simulcast layers (320×180 at 150 kbit/s, 640×360 at 500 kbit/s).
@@ -105,7 +109,7 @@ class LiveKitSfu(
                 ),
             ),
         )
-        val session = LiveKitSession(room, keyProvider, listener, p.video, debug && fakeCamera())
+        val session = LiveKitSession(room, keyProvider, listener, p.video, debug && fakeCamera(), requireEncrypted = p.e2ee)
         try {
             val servers = p.iceServers.map { s ->
                 PeerConnection.IceServer.builder(s.urls).apply {
@@ -121,8 +125,9 @@ class LiveKitSfu(
             }
             session.start()
             withTimeout(CONNECT_MS) { room.connect(p.url, p.token, ConnectOptions(autoSubscribe = true, rtcConfig = rtc)) }
-            // Fail closed: no frame encryption → no call.
-            if (room.e2eeManager == null) throw IllegalStateException("frame encryption is not available")
+            // Fail closed: no frame encryption → no call (a Call Risi says so on its screen instead).
+            if (p.e2ee && room.e2eeManager == null) throw IllegalStateException("frame encryption is not available")
+            check(room.audioTrackCaptureDefaults.let { it.echoCancellation && it.noiseSuppression && it.autoGainControl && it.highPassFilter }) { "audio processing is off" }
             session.connected()
             return session
         } catch (e: Throwable) {
@@ -135,6 +140,15 @@ class LiveKitSfu(
         /** §20.5 (crypto K6). */
         const val RATCHET_SALT = "risime-call-v1"
         const val CONNECT_MS = 15_000L
+
+        /** LiveKit's defaults, written out so nobody turns them off by accident (decision 090). */
+        val CAPTURE = io.livekit.android.room.track.LocalAudioTrackOptions(
+            noiseSuppression = true,
+            echoCancellation = true,
+            autoGainControl = true,
+            highPassFilter = true,
+            typingNoiseDetection = true,
+        )
     }
 }
 
@@ -154,6 +168,8 @@ private class LiveKitSession(
     private val listener: SfuListener,
     private val video: Boolean,
     private val fakeCamera: Boolean,
+    /** False only for a Call Risi (no frame encryption): remote audio isn't muted for "not encrypted". */
+    private val requireEncrypted: Boolean = true,
 ) : SfuSession, LiveKitRoomHolder {
     private val tag = "RisiMe"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -323,7 +339,7 @@ private class LiveKitSession(
     }
 
     /** K6: LiveKit's track info says the track is end-to-end encrypted. */
-    private fun encrypted(pub: TrackPublication) = pub.encryptionType != LivekitModels.Encryption.Type.NONE
+    private fun encrypted(pub: TrackPublication) = !requireEncrypted || pub.encryptionType != LivekitModels.Encryption.Type.NONE
 
     override suspend fun stats(): List<SfuStats> = room.remoteParticipants.values.mapNotNull { p ->
         val id = p.identity?.value ?: return@mapNotNull null

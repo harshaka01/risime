@@ -103,6 +103,25 @@ enum class CallNotice {
 
     /** §20.3 `calls_not_ready` in a group: nobody else can join group calls yet. */
     GROUP_NOT_READY,
+
+    // Proposal 2026-10-14-call-risi §41.2/§41.3 (a Call Risi only).
+    /** `403 call_risi_off`. */
+    RISI_OFF,
+
+    /** `422 not_risi_chat`. */
+    RISI_NOT_CHAT,
+
+    /** `409 risi_busy`. */
+    RISI_BUSY,
+
+    /** `503 risi_unavailable`. */
+    RISI_UNAVAILABLE,
+
+    /** Risi's identity wasn't in the room 12 s after connect. */
+    RISI_NO_ANSWER,
+
+    /** Another identity than Risi's showed up in the room (fail closed). */
+    RISI_UNSAFE,
 }
 
 /** §20.5 one participant of a group call as the call screen shows it (named from the app's database, android A7). */
@@ -172,6 +191,12 @@ data class CallSnapshot(
     val iCanAdd: Boolean = false,
     /** v1.45 §40.3: the call is being moved into a group call (P2P still carries the audio). */
     val moving: Boolean = false,
+    /** Proposal 2026-10-14-call-risi: a call with Risi in this user's Risi chat (not frame-encrypted, said on the screen). */
+    val risiCall: Boolean = false,
+    /** Risi's identity is in the room now. */
+    val risiPresent: Boolean = false,
+    /** Risi is speaking now (LiveKit's speaking flag of Risi's track). */
+    val risiSpeaking: Boolean = false,
 )
 
 /** v1.45 §40.3 what the call layer needs to move a connected 1:1 call into a group call. */

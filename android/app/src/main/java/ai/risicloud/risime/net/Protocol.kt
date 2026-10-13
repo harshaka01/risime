@@ -46,6 +46,8 @@ data class User(
     @SerialName("phone_confirmed") val phoneConfirmed: Boolean = true,
     /** §36.1 (v1.39): true only for the users in the server's `RISI_DEV_USERS`; absent = false. */
     @SerialName("risi_dev") val risiDev: Boolean = false,
+    /** Proposal 2026-10-14-call-risi §41.1 (decision 090): true while the server's RISI_CALL_RISI applies to this user; absent = false. */
+    @SerialName("call_risi") val callRisi: Boolean = false,
 )
 
 /** §21.3 (v1.20) `POST /auth/signup`. */
@@ -709,6 +711,9 @@ data class DeviceMls(
 
         /** v1.45 §40.1: adding people to a call (with `group_calls` and `call_switch`). */
         const val CAP_ADD_TO_CALL = "add_to_call"
+
+        /** Proposal 2026-10-14-call-risi §41.1: Call Risi (with `group_calls` and `risi_tools`; developer flag `call_risi` in v1). */
+        const val CAP_CALL_RISI = "call_risi"
 
         /** v1.24 §24.7: two tabs, only while `/auth/config` says `tabs: on` and the core enforces §24.1. */
         const val CAP_TABS = CAPABILITY_TABS
@@ -1416,7 +1421,24 @@ object CallErrors {
 
     /** §20.3 a group signal from someone who isn't an active member. */
     const val NOT_MEMBER = "not_member"
+
+    // Proposal 2026-10-14-call-risi §41.2 (only on `start` with `risi_call`).
+    const val CALL_RISI_OFF = "call_risi_off"
+    const val NOT_RISI_CHAT = "not_risi_chat"
+    const val RISI_BUSY = "risi_busy"
+    const val RISI_UNAVAILABLE = "risi_unavailable"
 }
+
+/** Proposal 2026-10-14-call-risi §41.2 the `risi_call` object of a Call Risi `start` reply. */
+@Serializable
+data class RisiCallReply(
+    val state: String,
+    /** v1 is always false: the media isn't frame-encrypted end to end (the screen says so, decision 048). */
+    val e2ee: Boolean = false,
+    @SerialName("risi_identity") val risiIdentity: String,
+    @SerialName("max_s") val maxS: Long = 1_800,
+    val lang: String = "en",
+)
 
 // ---- Group calls with LiveKit (§20, v1.19) ----
 
@@ -1431,6 +1453,10 @@ data class CallsRoomRequest(
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("risi_listen") val risiListen: Boolean? = null,
+    /** Proposal 2026-10-14-call-risi §41.2: `start` of a Call Risi room only; omitted (never `null`/`false`) otherwise. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("risi_call") val risiCall: Boolean? = null,
 ) {
     companion object {
         const val START = "start"
@@ -1453,6 +1479,8 @@ data class CallsRoomReply(
     @SerialName("max_participants") val maxParticipants: Int,
     /** v1.27 §27.7: Risi's state for this call (absent = off). */
     val risi: CallRisiState? = null,
+    /** Proposal 2026-10-14-call-risi §41.2: the Call Risi room's facts (absent = a normal room). */
+    @SerialName("risi_call") val risiCall: RisiCallReply? = null,
 ) {
     override fun toString() = "CallsRoomReply(room=$room, identity=$identity, max=$maxParticipants)" // never the token
 }

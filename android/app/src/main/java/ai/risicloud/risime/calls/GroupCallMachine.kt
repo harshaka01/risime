@@ -27,8 +27,8 @@ sealed interface RoomOutcome {
     /** `409 call_full`. */
     data object Full : RoomOutcome
 
-    /** 503 calls_unavailable, 403, 429, offline… (the reason only for the log). */
-    data class Failed(val reason: String) : RoomOutcome
+    /** 503 calls_unavailable, 403, 429, offline… (the reason only for the log; [code] the error code, if any). */
+    data class Failed(val reason: String, val code: String? = null) : RoomOutcome
 }
 
 /** What the group call machine needs from the app (the container implements it; a fake in tests). */
@@ -46,6 +46,9 @@ interface GroupCallPort {
     suspend fun frameKeys(conv: String, callId: String): CallKeys
 
     suspend fun room(conv: String, callId: String, media: String, action: String): RoomOutcome
+
+    /** Proposal 2026-10-14-call-risi §41.2: `start` with `risi_call: true` for the caller's Risi chat. */
+    suspend fun risiRoom(conv: String, callId: String): RoomOutcome = RoomOutcome.Failed("unsupported")
 
     /** §20.3 a group `call:signal` (`conversation_id`, `media`). */
     suspend fun signal(conv: String, env: CallEnvelope.Env, media: String): SignalOutcome
@@ -176,6 +179,12 @@ class GroupCallMachine(
         var micPublished = false
         /** §40.4: who the starter's offer rings (null = everyone). */
         var ringUsers: List<String>? = null
+
+        // ---- Proposal 2026-10-14-call-risi ----
+        /** A Call Risi: no frame keys, no ring, only Risi's identity is played. */
+        var risiCall = false
+        var risiIdentity: String? = null
+        var risiStarted = false
     }
 
     /** §40.4 the `sent_at` (ms) of the last offer of each call id this device acted on (the re-ring rule). */
@@ -215,6 +224,96 @@ class GroupCallMachine(
         log("group call ${c.id} start in ${c.conv} (${c.media})")
         scope.launch { setup(c, CallsRoomRequest.START) }
         return true
+    }
+
+    /**
+     * Proposal 2026-10-14-call-risi §41.3: call Risi in this user's Risi chat [conv] (the UI checked the
+     * flags and RECORD_AUDIO). No ring, no frame keys; Risi answers by joining the room. False = busy.
+     */
+    suspend fun startRisi(conv: String): Boolean {
+        val c = lock.withLock {
+            if (current?.let { !it.ended } == true || port.busy()) {
+                publishNotice(conv, CallNotice.IN_ANOTHER_CALL)
+                return false
+            }
+            GCall(newCallId(), conv, me, outgoing = true, media = CallEnvelope.MEDIA_AUDIO, phase = CallPhase.CALLING).also {
+                it.risiCall = true
+                current = it
+                marks.put(CallMark(it.id, answered = true, at = now()))
+                publish(it)
+            }
+        }
+        log("risi call ${c.id} start in ${c.conv}")
+        scope.launch { setupRisi(c) }
+        return true
+    }
+
+    /** §41.2–§41.3: room (`risi_call`), connect without frame keys, publish, `started`, wait for Risi. */
+    private suspend fun setupRisi(c: GCall) {
+        timer(c, "setup", SETUP_MS) { x ->
+            log("risi call ${x.id}: setup timed out")
+            leave(x, CallNotice.CANT_CONNECT)
+        }
+        val servers = runCatching { withTimeoutOrNull(3_000) { port.iceServers() } }.getOrNull().orEmpty()
+        if (c.ended) return
+        val reply = when (val r = runCatching { port.risiRoom(c.conv, c.id) }.getOrElse { RoomOutcome.Failed(it.message ?: "error") }) {
+            is RoomOutcome.Ok -> r.reply
+            is RoomOutcome.Failed -> {
+                log("risi call ${c.id}: rooms start failed: ${r.reason}")
+                val n = when (r.code) {
+                    ai.risicloud.risime.net.CallErrors.CALL_RISI_OFF -> CallNotice.RISI_OFF
+                    ai.risicloud.risime.net.CallErrors.NOT_RISI_CHAT -> CallNotice.RISI_NOT_CHAT
+                    ai.risicloud.risime.net.CallErrors.RISI_BUSY -> CallNotice.RISI_BUSY
+                    ai.risicloud.risime.net.CallErrors.RISI_UNAVAILABLE -> CallNotice.RISI_UNAVAILABLE
+                    else -> CallNotice.CANT_CONNECT
+                }
+                return locked(c) { finish(it, n) }
+            }
+            else -> return locked(c) { finish(it, CallNotice.CANT_CONNECT) }
+        }
+        val info = reply.risiCall
+        // Fail closed: a reply without `risi_call` (an old server) or a token for another device is no Risi call.
+        if (info == null || info.risiIdentity.isBlank() || !reply.identity.equals(myIdentity, true)) {
+            log("risi call ${c.id}: not a Call Risi room")
+            return locked(c) { finish(it, CallNotice.CANT_CONNECT) }
+        }
+        val session = try {
+            sfu.connect(SfuConnect(reply.url, reply.token, servers, video = false, e2ee = false), listener(c))
+        } catch (e: Exception) {
+            log("risi call ${c.id}: connect failed: ${e.javaClass.simpleName}: ${e.message}")
+            return locked(c) { finish(it, CallNotice.CANT_CONNECT) }
+        }
+        val keep = lock.withLock {
+            if (c.ended || current !== c) false else {
+                c.session = session
+                c.risiIdentity = info.risiIdentity
+                true
+            }
+        }
+        if (!keep) return session.disconnect()
+        if (!session.publishMic()) {
+            log("risi call ${c.id}: microphone not published")
+            return locked(c) { leave(it, CallNotice.CANT_CONNECT) }
+        }
+        session.setMicMuted(c.muted)
+        lock.withLock {
+            if (c.ended || current !== c) return
+            c.micPublished = true
+            c.timers.remove("setup")?.cancel()
+            c.phase = if (c.everOthers) CallPhase.ACTIVE else CallPhase.RINGING_OUT
+            publish(c)
+            timer(c, "max", (info.maxS.coerceIn(60, 4 * 3_600L)) * 1000) { x -> leave(x, CallNotice.CALL_ENDED) }
+            timer(c, "risi_join", ai.risicloud.risime.calls.risi.CallRisiRules.JOIN_TIMEOUT_MS) { x ->
+                if (!x.everOthers) {
+                    log("risi call ${x.id}: Risi didn't join")
+                    leave(x, CallNotice.RISI_NO_ANSWER)
+                }
+            }
+            refresh(c)
+        }
+        // §41.3: the durable line (no `call_offer`, no ring, no `call_member`).
+        c.risiStarted = true
+        runCatching { port.started(c.conv, GroupCallEnvelope.started(c.id, c.media).copy(with = GroupCallEnvelope.WITH_RISI)) }
     }
 
     /**
@@ -665,8 +764,35 @@ class GroupCallMachine(
         }
     }
 
+    /** §41.3 a Call Risi's roster: only Risi's identity is played; anyone else ends the call (fail closed). */
+    private fun refreshRisi(c: GCall) {
+        val risi = c.risiIdentity ?: return publish(c)
+        val others = c.participants.filter { !it.local }
+        val stranger = others.firstOrNull { !ai.risicloud.risime.calls.risi.CallRisiRules.allowedRemote(it.identity, risi) }
+        if (stranger != null) {
+            log("risi call ${c.id}: another participant in the room: leaving")
+            others.forEach { c.session?.setPlayable(it.identity, false) }
+            return leave(c, CallNotice.RISI_UNSAFE)
+        }
+        others.forEach { c.session?.setPlayable(it.identity, true) }
+        if (others.isNotEmpty()) {
+            if (!c.everOthers) {
+                c.everOthers = true
+                c.connectedAt = now()
+                c.connectedAtServer = serverNow()
+                c.timers.remove("risi_join")?.cancel()
+            }
+            if (c.phase == CallPhase.RINGING_OUT) c.phase = CallPhase.ACTIVE
+        } else if (c.everOthers && c.phase == CallPhase.ACTIVE) {
+            log("risi call ${c.id}: Risi left")
+            return leave(c, CallNotice.CALL_ENDED)
+        }
+        publish(c)
+    }
+
     /** Under the lock: roster rules (K6, K7), "connected", alone, catch-up on a missing key, then publish. */
     private fun refresh(c: GCall) {
+        if (c.risiCall) return refreshRisi(c)
         val session = c.session
         val roster = c.ring?.roster.orEmpty()
         val others = c.participants.filter { !it.local }
@@ -716,7 +842,7 @@ class GroupCallMachine(
     }
 
     /** K6: this participant's frames don't decrypt (an error state, or never OK within [VERIFY_MS]). */
-    private fun failing(c: GCall, p: SfuParticipant, t: Long): Boolean = when (p.cryptor) {
+    private fun failing(c: GCall, p: SfuParticipant, t: Long): Boolean = if (c.risiCall) false else when (p.cryptor) {
         CryptorState.MISSING_KEY, CryptorState.FAILED -> true
         CryptorState.NEW, CryptorState.NONE -> (p.hasAudio || p.hasVideo) && c.trackSince[p.identity]?.let { t - it >= VERIFY_MS } == true
         CryptorState.OK -> false
@@ -749,6 +875,22 @@ class GroupCallMachine(
      */
     private fun leave(c: GCall, notice: CallNotice?, announce: Boolean = true) {
         if (c.ended) return
+        if (c.risiCall) {
+            // §41.3: the only human sends the `ended` (with `"with": "risi"`) once its `started` went out.
+            if (c.risiStarted) {
+                val env = if (!c.everOthers) {
+                    GroupCallEnvelope.ended(c.id, c.media, GroupCallEnvelope.R_TIMEOUT, null, null)
+                } else {
+                    GroupCallEnvelope.ended(
+                        c.id, c.media, GroupCallEnvelope.R_HANGUP,
+                        c.connectedAtServer?.let(CallStateMachine::iso),
+                        c.connectedAt?.let { ((now() - it) / 1000).coerceAtLeast(0) },
+                    )
+                }.copy(with = GroupCallEnvelope.WITH_RISI)
+                scope.launch { runCatching { port.ended(c.conv, env) } }
+            }
+            return finish(c, notice)
+        }
         // Only a device that really sees the room may claim the call is over (not after the SFU dropped it).
         val connected = c.session != null && announce
         val alone = c.participants.none { !it.local }
@@ -837,6 +979,9 @@ class GroupCallMachine(
             c.muted, c.connectedAt, badge, null,
             video = c.video, cameraOn = c.cameraOn, wantCamera = c.wantCamera,
             group = true, members = members,
+            risiCall = c.risiCall,
+            risiPresent = c.risiCall && c.participants.any { !it.local && it.identity.equals(c.risiIdentity, true) },
+            risiSpeaking = c.risiCall && c.participants.any { !it.local && it.identity.equals(c.risiIdentity, true) && it.speaking },
         )
     }
 

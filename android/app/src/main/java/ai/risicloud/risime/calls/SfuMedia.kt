@@ -26,6 +26,11 @@ data class SfuConnect(
      * (its audio prewarming) while the 1:1 call still captures it.
      */
     val prewarmAudio: Boolean = true,
+    /**
+     * Proposal 2026-10-14-call-risi §41.3: false only for a Call Risi (the reply said `"e2ee": false`): no
+     * `E2EEOptions`, and remote audio is played without the frame-encryption check. Every other call: true.
+     */
+    val e2ee: Boolean = true,
 ) {
     override fun toString() = "SfuConnect($url, ${iceServers.size} ICE servers, video=$video)" // never the token
 }

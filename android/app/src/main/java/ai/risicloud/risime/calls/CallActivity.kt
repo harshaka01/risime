@@ -179,8 +179,10 @@ class CallActivity : ComponentActivity() {
                     snap == null -> CallScreen(CallScreenUi(name = name, status = "Call ended", stage = CallStage.ENDED), CallScreenActions())
                     else -> {
                         val now = System.currentTimeMillis()
-                        val title = name.ifEmpty { "RisiMe" }
+                        // Proposal 2026-10-14-call-risi §41.4: "Risi", and Connecting… → Listening → Speaking.
+                        val title = if (snap.risiCall) ai.risicloud.risime.calls.risi.CallRisiTexts.TITLE else name.ifEmpty { "RisiMe" }
                         val status = when {
+                            snap.risiCall -> risiCallStatus(snap, snap.notice?.let { CallTexts.notice(it, title) } ?: "Call ended")
                             snap.phase == CallPhase.RINGING_IN -> if (snap.group) (if (snap.video) "Group video call" else "Group voice call") else if (snap.video) "Incoming video call" else "RisiMe voice call"
                             else -> snap.notice?.let { CallTexts.notice(it, title) } ?: CallTexts.status(snap.phase, snap.connectedAtMs, now, video = snap.video).orEmpty()
                         }
@@ -215,8 +217,8 @@ class CallActivity : ComponentActivity() {
                             local = if (snap.group) null else wm?.let { m -> { mod -> LiveLocalVideo(m, mod) } },
                             allowAutoHide = !keepControls,
                             // v1.45 §40.9: Official group calls too (the manager shows nothing for a Private call).
-                            statusBar = { ai.risicloud.risime.calls.transcribe.TranscribeBar(tx, onStop = transcribe::stop, name = { txNames[it] ?: "Someone" }) },
-                            extraBanners = ({
+                            statusBar = if (snap.risiCall) null else ({ ai.risicloud.risime.calls.transcribe.TranscribeBar(tx, onStop = transcribe::stop, name = { txNames[it] ?: "Someone" }) }),
+                            extraBanners = if (snap.risiCall) null else ({
                                 ai.risicloud.risime.calls.transcribe.TranscribeControls(
                                     tx, title, name = { txNames[it] ?: title },
                                     onTranscribe = transcribe::request,
@@ -224,13 +226,13 @@ class CallActivity : ComponentActivity() {
                                     onNoticeShown = transcribe::dismissNotice,
                                 )
                             }),
-                            overlay = ({
+                            overlay = if (snap.risiCall) null else ({
                                 ai.risicloud.risime.calls.transcribe.TranscribePrompt(
                                     tx, name = { txNames[it] ?: title }, serverNow = { (application as RisiMeApp).container.serverClock.serverNow() },
                                     onAllow = transcribe::allow, onDecline = transcribe::decline,
                                 )
                             }),
-                            center = if (snap.group && snap.members.isNotEmpty() && !(snap.video && snap.phase != CallPhase.ENDED)) ({
+                            center = if (snap.risiCall) ({ ai.risicloud.risime.ui.tabs.RisiAvatar(androidx.compose.ui.unit.Dp(132f)) }) else if (snap.group && snap.members.isNotEmpty() && !(snap.video && snap.phase != CallPhase.ENDED)) ({
                                 GroupParticipantList(snap.members.map { m -> groupMemberUi(m, memberNames[m.userId] ?: "…") })
                             }) else null,
                         )
