@@ -200,7 +200,7 @@ gate_ports() { local d; for d in "$@"; do fport "${d%%=*}" "${d#*=}"; done; }
 gate_ports CALLTEST_LLM_PORT=8197 CALLTEST_PORT=4410 CALLTEST_REDROID_A_PORT=5730 CALLTEST_REDROID_B_PORT=5731 \
   UITEST_LLM_PORT=8217 UITEST_PORT=4677 UITEST_REDROID_A_PORT=5877 UITEST_REDROID_B_PORT=5878 \
   EC_LLM_PORT=8165 EC_PORT=4165 EC_REDROID_A_PORT=5751 EC_REDROID_B_PORT=5752 \
-  RC_LLM_PORT=8166 RC_PORT=4166 RC_PROXY_PORT=8167 RC_REDROID_A_PORT=5761 RC_REDROID_B_PORT=5762 RC_CLIP_PORT=8169 TX_CLIP_PORT=8766 VN_CLIP_PORT=8768 \
+  RC_LLM_PORT=8166 RC_PORT=4166 RC_PROXY_PORT=8167 RC_REDROID_A_PORT=5761 RC_REDROID_B_PORT=5762 RC_CLIP_PORT=8169 TX_CLIP_PORT=8766 VN_CLIP_PORT=8768 MP_OG_PORT=8781 \
   OSTEST_PORT=4188 OSTEST_LLM_PORT=8188 OSTEST_REDROID_A_PORT=5881 OSTEST_REDROID_B_PORT=5882 OSTEST_REDROID_C_PORT=5883
 # P0 2026-10-12 product gates (BLOCKING; own redroids and ports): B = the sign-in screen reaches a slow server and
 # says "This phone is offline"; C = the Official banner is its own row below the tabs at 720 px, font 1.0 and 1.3.
@@ -224,6 +224,8 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   STEP_T=2400 step scripts/risi-chat-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "RISI CHAT TEST FAILED: not releasing"; exit 1; }
   echo "==> voice notes (scripts/voice-note-test: record, play, played receipt, Official transcript, forward, ciphertext only)"
   STEP_T=2400 step scripts/voice-note-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "VOICE NOTE TEST FAILED: not releasing"; exit 1; }
+  echo "==> messaging polish (scripts/messaging-polish-test: swipe-to-reply, sender-side link previews, no URL on the server)"
+  STEP_T=2400 step scripts/messaging-polish-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "MESSAGING POLISH TEST FAILED: not releasing"; exit 1; }
 fi
 
 # Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
