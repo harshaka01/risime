@@ -80,8 +80,21 @@ defmodule RisiMe.Agents.Scoreboard do
           "by_task" => cs |> Enum.frequencies_by(& &1.task)
         }
       }
+      |> health(agent, day)
     end
   end
+
+  # Decision 088: the Health agent's day: stuck conversations, the share repaired, and the
+  # reliability (1 - stuck / conversations) as its accuracy.
+  defp health(row, "health", day) do
+    s = RisiMe.Agents.Health.day_score(day)
+
+    row
+    |> Map.merge(%{n: s.n, acceptance: s.repaired, accuracy: s.reliability})
+    |> Map.put(:detail, Map.put(row.detail, "stuck", s.n))
+  end
+
+  defp health(row, _agent, _day), do: row
 
   @doc "Computes and upserts `day`'s rows; returns them."
   def run(%Date{} = day) do

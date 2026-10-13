@@ -231,6 +231,9 @@ defmodule RisiMe.Chats do
         off?(chat_id) ->
           {:error, :official_off}
 
+        og != nil and og.state == "creating" and og.created_by != me ->
+          {:ok, :existing, Groups.group_json(take_over(me, og), me)}
+
         og != nil ->
           {:ok, :existing, Groups.group_json(og, me)}
 
@@ -241,6 +244,42 @@ defmodule RisiMe.Chats do
             insert_official(me, chat)
           end
       end
+    end
+  end
+
+  @doc """
+  v1.46 §12.12.9 creation hand-over: an Official group still `creating` (no epoch 0) more than
+  `:official_handover_s` (60 s) after its creation, by another user, gets the caller as its creator.
+  Under the group lock (shared with the epoch-0 commit), so exactly one of a hand-over and the old
+  creator's commit wins. Returns the group as it is now.
+  """
+  def take_over(me, %Group{} = og) do
+    limit = Application.get_env(:risime, :official_handover_s, 60)
+
+    result =
+      Groups.locked(og.id, fn ->
+        g = Repo.get(Group, og.id)
+
+        cond do
+          g == nil ->
+            {:ok, og}
+
+          g.state == "creating" and g.created_by != me and MLS.group(g.id) == nil and
+              DateTime.diff(DateTime.utc_now(), g.created_at) > limit ->
+            {1, _} =
+              Repo.update_all(from(x in Group, where: x.id == ^g.id), set: [created_by: me])
+
+            Logger.info("official creation handed over after #{limit}s")
+            {:ok, %{g | created_by: me}}
+
+          true ->
+            {:ok, g}
+        end
+      end)
+
+    case result do
+      {:ok, g} -> g
+      _ -> og
     end
   end
 

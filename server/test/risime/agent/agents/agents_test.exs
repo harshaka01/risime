@@ -71,11 +71,12 @@ defmodule RisiMe.AgentsTest do
       )
 
   describe "flags" do
-    test "defaults: master on, router shadow, every other agent off" do
+    test "defaults: master on, router shadow, health canary (decision 088), every other agent off" do
       assert Flags.master() == :on
       assert Flags.mode("router") == :shadow
+      assert Flags.mode("health") == :canary
 
-      for n <- RisiMe.Agents.names() -- ["router"], do: assert(Flags.mode(n) == :off)
+      for n <- RisiMe.Agents.names() -- ["router", "health"], do: assert(Flags.mode(n) == :off)
     end
 
     test "the table wins over the default, is validated, and RISI_AGENTS=legacy turns all off" do

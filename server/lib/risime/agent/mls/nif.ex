@@ -41,7 +41,8 @@ defmodule RisiMe.Agent.Mls.Nif do
   ## Official only
   `join_from_welcome/2` into a group whose `group_meta` is not `tab: official` (a `dm:` group, a
   Private group) returns `{:error, {:private_tab, _}}` and changes nothing; `encrypt/4`,
-  `process_detailed/3`, `process_commits/3` and `self_update/2` refuse such a group too (§24.0).
+  `process_detailed/3`, `process_commits/3`, `self_update/2` and `change_members/4` refuse such a
+  group too (§24.0).
 
   ## Results
   - `join_from_welcome/2`: `%{group_id, epoch, members}`.
@@ -128,6 +129,15 @@ defmodule RisiMe.Agent.Mls.Nif do
 
   @spec self_update(handle(), binary()) :: result(map())
   def self_update(_h, _group_id), do: nif()
+
+  @doc """
+  v1.46 §12.12.9: one commit adding the owners of `key_packages` and removing `remove`
+  (`[{user_id, device_id}]`) in an Official group (Risi re-adds a member's new device). Same result
+  as `self_update/2`; follow with `commit_accepted/2` or `commit_rejected/2`.
+  """
+  @spec change_members(handle(), binary(), [binary()], [{String.t(), String.t()}]) ::
+          result(map())
+  def change_members(_h, _group_id, _key_packages, _remove), do: nif()
 
   @spec commit_accepted(handle(), binary()) :: result(non_neg_integer())
   def commit_accepted(_h, _group_id), do: nif()

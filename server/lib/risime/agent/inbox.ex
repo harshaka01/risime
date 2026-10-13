@@ -31,7 +31,8 @@ defmodule RisiMe.Agent.Inbox do
   alias RisiMe.{Groups, Messaging, Repo, Risi, TimeUUID}
 
   @page 100
-  @kinds ~w(mls_welcome mls_commit message group_event)
+  # v1.46 §12.12.9: `group_op` naming Risi's device for a re-add in Official.
+  @kinds ~w(mls_welcome mls_commit message group_event group_op)
   @max_attempts 3
 
   def start_link(_opts \\ []), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)

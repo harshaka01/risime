@@ -356,7 +356,7 @@ defmodule RisiMe.Groups.Commit do
 
     with true <- MapSet.member?(in_group, {me, dev}) || {:error, :bad_request},
          true <- (req.op_id == nil or op != nil) || {:error, :bad_request},
-         :ok <- agent_self_update_only(me, agents, req),
+         :ok <- agent_self_update_only(me, agents, req, g, op, in_group),
          :ok <- Policy.check(policy),
          :ok <- member_needs_op(me in admins, Policy.others?(policy), op),
          {:ok, role} <- match_op(op, ctx, req),
@@ -368,11 +368,24 @@ defmodule RisiMe.Groups.Commit do
     end
   end
 
-  # v1.24 §24.5: an agent device commits nothing but self-updates of its own leaf.
-  defp agent_self_update_only(me, agents, req) do
-    if me in agents and (req.added != [] or req.removed != [] or req.meta_changed),
-      do: {:error, :not_admin},
-      else: :ok
+  # v1.24 §24.5: an agent device commits nothing but self-updates of its own leaf. v1.46
+  # §12.12.9: except Risi's re-add of a member's device in Official, with the op's `op_id` (the
+  # lists are matched exactly by match_op/3).
+  defp agent_self_update_only(me, agents, req, g, op, in_group) do
+    cond do
+      me not in agents ->
+        :ok
+
+      not (req.added != [] or req.removed != [] or req.meta_changed) ->
+        :ok
+
+      not req.meta_changed and me == RisiMe.Risi.user_id() and match?(%Op{type: "devices"}, op) and
+          Ops.risi_can_commit?(g, op, in_group) ->
+        :ok
+
+      true ->
+        {:error, :not_admin}
+    end
   end
 
   # v1.14 §12.4a: a non-admin's commit on another user's leaves must name its pending `devices`
@@ -455,15 +468,19 @@ defmodule RisiMe.Groups.Commit do
             Enum.any?(members, &(&1.user_id == me and &1.state == "active" and &1.kind == "user")) and
             Ops.member_path?(g, op, in_group)
 
+        # v1.46 §12.12.9: Risi re-adds a member's device in Official.
+        risi? = me == RisiMe.Risi.user_id() and Ops.risi_can_commit?(g, op, in_group)
+
         role =
           cond do
             own? -> "own"
             admin? -> "admin"
+            risi? -> "risi"
             true -> "member"
           end
 
         expect(
-          admin? or own? or member?,
+          admin? or own? or member? or risi?,
           MapSet.new(req.added) == MapSet.new(Ops.refs(op, "added")) and
             MapSet.new(req.removed) == MapSet.new(Ops.removed_now(op, in_group)),
           role

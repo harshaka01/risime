@@ -256,19 +256,31 @@ defmodule RisiMeWeb.RisiChatS10Test do
       set: [last_seen_at: DateTime.add(DateTime.utc_now(), 60, :second)]
     )
 
-    {202, %{"candidates" => 1, "exhausted" => false, "group" => g}} =
+    # v1.46 §12.12.9: Risi's device and the owner's other phone.
+    {202, %{"candidates" => 2, "exhausted" => false, "group" => g}} =
       api(:post, "/api/v1/groups/#{conv}/rejoin", a.token, nil, new)
 
     assert {g["chat_kind"], g["tab"], g["chat_id"]} == {"risi", "official", conv}
     # The owner's other phone can still re-add it: the §12.12.3 guard holds.
-    {409, %{"error" => %{"code" => "rejoin_pending", "candidates" => 1}}} =
+    {409, %{"error" => %{"code" => "rejoin_pending", "candidates" => 2}}} =
       reset!(a, new, conv, 1)
 
-    # Both old phones gone: nobody can ever re-add it (Risi never commits).
+    # Both old phones gone. v1.46 §12.12.9: Risi's device is now the candidate (it re-adds the
+    # owner's new phone, the owner still holding an old leaf), so the guard still holds…
     supersede!(ctx.a_dev2)
 
-    {202, %{"candidates" => 0, "exhausted" => false}} =
+    {202, %{"candidates" => 1, "exhausted" => false}} =
       api(:post, "/api/v1/groups/#{conv}/rejoin", a.token, nil, new)
+
+    {409, %{"error" => %{"code" => "rejoin_pending"}}} = reset!(a, new, conv, 1)
+
+    # …until Risi couldn't (out of budget, §12.12.4): then the owner resets at once, as before.
+    op = RisiMe.Groups.Ops.adding_op(conv, {a.user.id, new})
+    now = DateTime.to_iso8601(DateTime.utc_now())
+
+    op
+    |> Ecto.Changeset.change(strikes: %{RisiMe.Risi.device_id() => [3, now]})
+    |> Repo.update!()
 
     {200, %{"generation" => 2}} = reset!(a, new, conv, 1)
 

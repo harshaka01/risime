@@ -7,6 +7,7 @@ defmodule RisiMe.Agents do
 
   @agents [
     RisiMe.Agents.Router,
+    RisiMe.Agents.Health,
     RisiMe.Agents.Planned.Planner,
     RisiMe.Agents.Planned.Ledger,
     RisiMe.Agents.Planned.Voice,

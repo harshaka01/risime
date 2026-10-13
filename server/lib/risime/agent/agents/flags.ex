@@ -41,7 +41,13 @@ defmodule RisiMe.Agents.Flags do
   @ets :risime_agent_flags
 
   # Today's path everywhere; the router only observes (rules, no model call).
-  @defaults %{"RISI_AGENTS" => "on", "RISI_AGENT_ROUTER" => "shadow"}
+  @defaults %{
+    "RISI_AGENTS" => "on",
+    "RISI_AGENT_ROUTER" => "shadow",
+    # Decision 088: repairs only for RISI_DEV_USERS' conversations, shadow (detect, record,
+    # alert) elsewhere; today's path did nothing at all.
+    "RISI_AGENT_HEALTH" => "canary"
+  }
 
   @doc "The valid per-agent modes."
   def modes, do: @modes

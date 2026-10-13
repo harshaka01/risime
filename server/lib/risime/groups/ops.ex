@@ -210,7 +210,7 @@ defmodule RisiMe.Groups.Ops do
   defp name_budgeted(g, op) do
     all = candidates(g, op)
     budget = Strikes.in_budget(op.strikes, all)
-    online = Enum.filter(budget, fn {_u, d} -> Presence.device_online?(d) end)
+    online = Enum.filter(budget, &online?/1)
 
     case Enum.reject(online, fn {_u, d} -> d in op.tried end) do
       [ref | _] ->
@@ -323,6 +323,9 @@ defmodule RisiMe.Groups.Ops do
   members' in-group devices. Each tier most recently seen first.
   """
   def candidates(g, op) do
+    # v1.46 §12.12.9: in Official, Risi's device is the first candidate for a re-add it can commit.
+    risi = if risi_can_commit?(g, op), do: [risi_ref()], else: []
+
     own =
       case op.type do
         "devices" ->
@@ -343,11 +346,55 @@ defmodule RisiMe.Groups.Ops do
 
     # MLS can't commit its own removal: a remove op never names the removed users' devices; a
     # `devices` op never names a device it changes (e.g. the rejoining device itself).
-    (by_recency(own) ++ by_recency(admin_devices(g)) ++ by_recency(member_devices(g, op)))
+    (risi ++ by_recency(own) ++ by_recency(admin_devices(g)) ++ by_recency(member_devices(g, op)))
     |> Enum.uniq()
     |> Enum.reject(fn {u, _d} = ref -> u in leaving or MapSet.member?(changing, ref) end)
     |> drop_dormant(op)
+    |> drop_gone(g, op)
   end
+
+  @doc "Risi's device ref (§24.11)."
+  def risi_ref, do: {RisiMe.Risi.user_id(), RisiMe.Risi.device_id()}
+
+  @doc """
+  v1.46 §12.12.9: Risi's device may commit this op: an Official group (a Risi chat included) whose
+  Official is on, Risi available and its device in the group, a member-committable `devices` op
+  (not a cleanup op) with the §12.4a gate open. Never in a Private group or a DM.
+  """
+  def risi_can_commit?(g, op, in_group \\ nil)
+
+  def risi_can_commit?(%Group{} = g, %Op{type: "devices"} = op, in_group) do
+    if Groups.official?(g) and not cleanup?(op) and RisiMe.Risi.available?() and
+         not RisiMe.Chats.off?(g.chat_id) do
+      in_group = in_group || Groups.in_group(g.id)
+      MapSet.member?(in_group, risi_ref()) and member_path?(g, op, in_group)
+    else
+      false
+    end
+  end
+
+  def risi_can_commit?(_g, _op, _in_group), do: false
+
+  # The agent runs in the server: its device is online whenever it is a candidate.
+  defp online?({_u, d} = ref), do: ref == risi_ref() or Presence.device_online?(d)
+
+  # v1.46 §12.12.9: in Official, a device that can no longer receive (row gone, unseen for 30
+  # days, superseded) can never commit a `devices` op either: no candidate unless online now.
+  defp drop_gone(refs, %Group{} = g, %Op{type: "devices"}) do
+    if Groups.official?(g) do
+      {risi_user, _} = risi = risi_ref()
+      users = for {u, _} <- refs, u != risi_user, uniq: true, do: u
+      live = if users == [], do: MapSet.new(), else: MLS.DmOps.addable(users)
+
+      Enum.filter(refs, fn ref ->
+        ref == risi or MapSet.member?(live, ref) or online?(ref)
+      end)
+    else
+      refs
+    end
+  end
+
+  defp drop_gone(refs, _g, _op), do: refs
 
   # v1.21: a superseded device (§12.1) that isn't online can't be named and is no candidate for
   # a `devices` op (it would count towards `candidates` forever). Once seen again it is current.
@@ -466,8 +513,10 @@ defmodule RisiMe.Groups.Ops do
       )
       |> Map.new()
 
+    # v1.46 §12.12.9: Risi's leaf runs the server's own current core (the NIF), which applies
+    # the §12.4a member rules; it never closes the gate (it advertises only `groups` and `tabs`).
     Enum.all?(leaves, fn ref ->
-      MapSet.member?(superseded, ref) or not Map.has_key?(caps, ref) or
+      ref == risi_ref() or MapSet.member?(superseded, ref) or not Map.has_key?(caps, ref) or
         @member_cap in (caps[ref] || [])
     end)
   end
@@ -521,7 +570,8 @@ defmodule RisiMe.Groups.Ops do
       "devices" ->
         in_group? and not MapSet.member?(changing(op), ref) and
           (admin? or u == affected_user(op) or
-             (u in active_user_ids(g.id) and member_path?(g, op)))
+             (u in active_user_ids(g.id) and member_path?(g, op)) or
+             (ref == risi_ref() and risi_can_commit?(g, op)))
 
       "rebuild" ->
         admin? and epoch == nil and MapSet.member?(Groups.device_refs([u]), ref)
@@ -939,7 +989,8 @@ defmodule RisiMe.Groups.Ops do
   @doc """
   §12.12.3 server guard: `{:error, {:rejoin_pending, op_id, candidates}}` while a pending
   `devices` op adds the calling device, is not exhausted, and has a candidate or was created less
-  than 24 h ago; never for a Risi chat with no candidate (§25.2). Under the group lock.
+  than 24 h ago; never for an Official group (a Risi chat included) with no candidate (§25.2,
+  v1.46 §12.12.9). Under the group lock.
   """
   def rejoin_guard(%Group{} = g, ref) do
     case adding_op(g.id, ref) do
@@ -950,12 +1001,13 @@ defmodule RisiMe.Groups.Ops do
         {n, exhausted?} = rejoin_status(g, op)
         young? = DateTime.diff(DateTime.utc_now(), op.created_at) < 24 * 3600
 
-        # v1.25 §25.2 (P0 2026-10-12): a Risi chat's only human is its owner and Risi never
-        # commits, so with no candidate (no other `risi_tools` device of the owner in it) nobody
-        # can ever re-add this device: no 24 h wait, the owner may reset at once (as a DM).
-        risi_alone? = n == 0 and Groups.risi_chat?(g)
+        # v1.25 §25.2 (P0 2026-10-12): a Risi chat with no candidate: the owner may reset at once.
+        # v1.46 §12.12.9 widens it to every Official group: Risi's device is a candidate whenever
+        # it can commit the re-add, and devices that can never commit aren't counted, so with no
+        # candidate nobody can ever re-add this device: no 24 h wait (incident 2026-10-13).
+        nobody? = n == 0 and Groups.official?(g)
 
-        if not exhausted? and not risi_alone? and (n > 0 or young?),
+        if not exhausted? and not nobody? and (n > 0 or young?),
           do: {:error, {:rejoin_pending, op.op_id, n}},
           else: :ok
     end

@@ -504,11 +504,14 @@ defmodule RisiMe.AgentTreeTest do
 
     {m1, _} = send_human!(ctx, og, gid, line)
 
-    eventually(fn ->
-      match?([%{args: %{"kind" => "extract"}}], all_enqueued(worker: RisiMe.Workers.Risi))
-    end)
+    # The extraction job (the memory ingest of Risi Brain v2 step 2 is enqueued beside it).
+    extract = fn ->
+      Enum.filter(all_enqueued(worker: RisiMe.Workers.Risi), &(&1.args["kind"] == "extract"))
+    end
 
-    [job] = all_enqueued(worker: RisiMe.Workers.Risi)
+    eventually(fn -> match?([_], extract.()) end)
+
+    [job] = extract.()
     assert job.args == %{"kind" => "extract", "conv" => og}
     assert :ok = perform_job(RisiMe.Workers.Risi, job.args)
 
@@ -764,5 +767,55 @@ defmodule RisiMe.AgentTreeTest do
     eventually(fn -> Transcript.list(og) != [] end)
     assert [%{message_id: ^m, plaintext: ^pt}] = Transcript.list(og)
     assert {:ok, 3} = Mls.epoch(gid)
+  end
+
+  test "v1.46 §12.12.9: Risi re-adds a member's new device in Official (no human online)", ctx do
+    {og, gid} = start_official!(ctx)
+    a = ctx.a
+
+    # a reinstalled: a new device with real key packages; nobody else is online. (a's old leaf is
+    # still in the group: the §12.4a member path, which Risi uses like any non-admin member.)
+    {a2_h, a2} = human!(a)
+    {:ok, kps, _} = Nif.generate_key_packages(a2_h, 2)
+
+    :ok =
+      RisiMe.MLS.upload_key_packages(a.user.id, a2, %{
+        "key_packages" => Enum.map(kps, &Base.encode64/1)
+      })
+
+    {:ok, _} = Groups.rejoin(a.user.id, a2, og)
+    op = Groups.Ops.adding_op(og, {a.user.id, a2})
+    assert op == nil or op.committer_device == ctx.risi_dev
+
+    eventually(fn -> MapSet.member?(Groups.in_group(og), {a.user.id, a2}) end, 800)
+    assert Groups.Ops.adding_op(og, {a.user.id, a2}) == nil
+
+    # The commit came from Risi's device; Risi's own epoch follows the server's.
+    assert commit_row(og, 1).from_device == ctx.risi_dev
+    eventually(fn -> Mls.epoch(gid) == {:ok, Groups.epoch(og)} end)
+
+    # a's new phone joins from Risi's Welcome; the old phone applies the commit; the new phone
+    # reads the next message.
+    [w | _] = for e <- events(a.user.id, "mls_welcome"), a2 in e["data"]["to_devices"], do: e
+
+    {:ok, %{group_id: ^gid}, _} =
+      Nif.join_from_welcome(a2_h, Base.decode64!(w["data"]["welcome"]))
+
+    {:ok, _, _} = Nif.process_commits(ctx.a_h, gid, [commit_row(og, 1).commit])
+    {_m, pt} = send_human!(ctx, og, gid, "back on the new phone")
+    {:ok, %{type: :application, plaintext: ^pt}, _} = latest_for(a2_h, gid, a.user.id)
+  end
+
+  defp commit_row(og, epoch) do
+    Repo.one(
+      from c in "mls_commits",
+        where: c.conversation_id == ^og and c.epoch == ^epoch,
+        select: %{commit: c.commit, from_device: type(c.from_device, :binary_id)}
+    )
+  end
+
+  defp latest_for(h, gid, user_id) do
+    ev = events(user_id, "message") |> List.last()
+    Nif.process_detailed(h, gid, Base.decode64!(ev["data"]["ciphertext"]))
   end
 end

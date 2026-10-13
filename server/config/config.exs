@@ -101,7 +101,9 @@ config :risime, Oban,
        # v1.25/v1.26: expired confirm cards, old tool-call rows (and S14+ activity, reminders).
        {"7 * * * *", RisiMe.Workers.Risi, args: %{"kind" => "prune"}},
        # Decision 084: yesterday's deep-agents scoreboard (counts and timings only).
-       {"20 0 * * *", RisiMe.Agents.ScoreboardJob}
+       {"20 0 * * *", RisiMe.Agents.ScoreboardJob},
+       # Decision 088 (v1.46 §12.12.9): the Health agent's sweep of stuck conversations.
+       {"*/5 * * * *", RisiMe.Workers.HealthSweep}
      ]}
   ]
 

@@ -604,6 +604,33 @@ defmodule RisiMe.MLS do
     {Enum.map(claimed, &Map.delete(&1, :device_ref)) ++ others, low}
   end
 
+  @doc """
+  v1.46 §12.12.9: one key package of each given device (`[{user_id, device_id}]`) for Risi's
+  re-add in an Official group, from the server's store for that exact device (current devices
+  with the group's capability only, §24.7). `{:ok, [kp]}` in order, or `{:error, :no_key_package}`.
+  """
+  def claim_for_readd(conv, refs) do
+    users = refs |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+    cap = if RisiMe.Groups.Tabs.risi_chat?(conv), do: "risi_tools", else: "tabs"
+
+    devices =
+      users |> RisiMe.Groups.groups_devices(cap) |> Map.new(&{{&1.user_id, &1.device_id}, &1})
+
+    refs
+    |> Enum.reduce_while({:ok, []}, fn ref, {:ok, acc} ->
+      with %{id: id} <- devices[ref],
+           kp when is_binary(kp) <- take_key_package(id) do
+        {:cont, {:ok, [kp | acc]}}
+      else
+        _ -> {:halt, {:error, :no_key_package}}
+      end
+    end)
+    |> case do
+      {:ok, kps} -> {:ok, Enum.reverse(kps)}
+      e -> e
+    end
+  end
+
   # Consumes one normal key package; falls back to the last-resort one (never consumed).
   defp take_key_package(device_ref) do
     %{rows: rows} =

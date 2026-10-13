@@ -15,6 +15,12 @@ defmodule RisiMe.Agent.Conversation do
   * **§12.8 rejoin fallback:** when the log can't bridge the gap (or the state is unusable) the
     local group is purged and `RisiMe.Groups.rejoin/3` asks the members for a re-add (at most
     once per 10 minutes).
+  * **Device re-adds (v1.46 §12.12.9, decision 088):** a `group_op` naming Risi's device as the
+    committer of a `devices` op of this Official group: Risi claims the added devices' key
+    packages from the server (`RisiMe.MLS.claim_for_readd/2`), stages `change_members` in the NIF
+    and submits it through the ordinary commit path with the op's `op_id`
+    (`RisiMe.Groups.Commit.commit/4`), then accepts or rejects its pending commit. Never anything
+    else: the server names Risi only for member-committable re-adds in Official.
   * **Send:** `send_envelope/3` encrypts in `RisiMe.Agent.Mls` and sends through the normal
     `msg:send` path as Risi's device, so it is delivered like any member message.
 
@@ -101,6 +107,13 @@ defmodule RisiMe.Agent.Conversation do
   end
 
   defp event(%{kind: "mls_commit", data: data}, state), do: commit(data, state)
+
+  defp event(%{kind: "group_op", data: %{"op" => %{"type" => "devices"} = op} = data}, state) do
+    if get_in(op, ["committer", "device_id"]) == Risi.device_id(),
+      do: readd(op["op_id"], data["generation"], state),
+      else: {:ok, state}
+  end
+
   defp event(%{kind: "message", data: data}, state), do: message(data, state)
 
   # §12.8: a reset starts a new generation; the old one's state is useless.
@@ -277,6 +290,93 @@ defmodule RisiMe.Agent.Conversation do
   end
 
   defp ensure_epoch(_gid, _epoch, state), do: state
+
+  ## Device re-adds (v1.46 §12.12.9)
+
+  defp readd(op_id, gen, state) when is_binary(op_id) do
+    conv = state.conv
+
+    with %{generation: ^gen} = g <- Groups.get_group(conv),
+         %{} = op <- named_op(conv, op_id, 50),
+         gid = gid(state, g.generation),
+         state = ensure_epoch(gid, Groups.epoch(conv), state),
+         {:ok, epoch} <- Mls.epoch(gid),
+         true <- epoch == Groups.epoch(conv) || {:error, :epoch},
+         added = Groups.Ops.refs(op, "added"),
+         removed = Groups.Ops.removed_now(op, Groups.in_group(conv)),
+         {:ok, kps} <- claim_kps(conv, added, 20),
+         {:ok, gc} <- Mls.call(&Nif.change_members(&1, gid, kps, removed)) do
+      submit_readd(conv, gid, g, epoch, op_id, gc, added, removed)
+      {:ok, state}
+    else
+      other ->
+        Logger.info("Risi re-add skipped in #{conv}: #{readd_reason(other)}")
+        {:ok, state}
+    end
+  end
+
+  defp readd(_op_id, _gen, state), do: {:ok, state}
+
+  # The `group_op` event may be read before the naming's transaction committed: wait briefly
+  # (at most `tries` × 100 ms) for the op to name Risi's device.
+  defp named_op(conv, op_id, tries) do
+    case Groups.Ops.get(conv, op_id) do
+      %{committer_device: nil} = op ->
+        if tries > 0, do: Process.sleep(100) && named_op(conv, op_id, tries - 1), else: op
+
+      %{} = op ->
+        if op.committer_device == Risi.device_id(), do: op, else: {:error, :named_other}
+
+      nil ->
+        if tries > 0,
+          do: Process.sleep(100) && named_op(conv, op_id, tries - 1),
+          else: {:error, :no_op}
+    end
+  end
+
+  # A new phone's key packages may still be on their way (the op is created at registration,
+  # the upload follows): retry for up to `tries` × 500 ms before giving up (a strike, renamed).
+  defp claim_kps(conv, added, tries) do
+    case MLS.claim_for_readd(conv, added) do
+      {:error, :no_key_package} when tries > 0 ->
+        Process.sleep(500)
+        claim_kps(conv, added, tries - 1)
+
+      other ->
+        other
+    end
+  end
+
+  defp submit_readd(conv, gid, g, epoch, op_id, gc, added, removed) do
+    refs = fn l -> Enum.map(l, fn {u, d} -> %{"user_id" => u, "device_id" => d} end) end
+
+    params = %{
+      "generation" => g.generation,
+      "epoch" => epoch,
+      "commit" => Base.encode64(gc.commit),
+      "welcome" => gc.welcome && Base.encode64(gc.welcome),
+      "added" => refs.(added),
+      "removed" => refs.(removed),
+      "op_id" => op_id
+    }
+
+    case Groups.Commit.commit(Risi.user_id(), Risi.device_id(), conv, params) do
+      {:ok, new_epoch} ->
+        _ = Mls.call(&Nif.commit_accepted(&1, gid))
+        Logger.info("Risi re-added #{length(added)} device(s) in #{conv} (epoch #{new_epoch})")
+
+      {:error, reason} ->
+        _ = Mls.call(&Nif.commit_rejected(&1, gid))
+        Logger.warning("Risi re-add refused in #{conv}: #{readd_reason({:error, reason})}")
+    end
+  end
+
+  defp readd_reason({:error, {kind, _}}) when is_atom(kind), do: kind
+  defp readd_reason({:error, kind}) when is_atom(kind), do: kind
+  defp readd_reason(nil), do: :gone
+  defp readd_reason(false), do: :epoch
+  defp readd_reason(%{}), do: :generation
+  defp readd_reason(_), do: :other
 
   ## Catch-up and rejoin (§12.8)
 
