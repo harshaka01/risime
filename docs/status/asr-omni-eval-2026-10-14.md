@@ -5,14 +5,16 @@ sets and added to the developer compare mode. This page has the results, the run
 (aarch64, sm_121), memory next to risi-l1, and the caveats. Nothing here changes the production
 route.
 
-## Status (2026-10-13 23:10 UTC)
+## Status (2026-10-13 23:35 UTC)
 - **omniASR-LLM-1B: done** on every set (275 clips).
-- **omniASR-LLM-7B: running** (downloaded 22:39 UTC, 31,205,087,103 bytes); numbers below when it
-  finishes. It **cannot be resident next to risi-l1** (15.6 GB in bf16 with 6-13 GB MemAvailable
+- **omniASR-LLM-7B: done** on every set (275 clips; downloaded 22:39 UTC, 31,205,087,103 bytes).
+  It **cannot be resident next to risi-l1** (15.6 GB in bf16 with 6-13 GB MemAvailable
   tonight, minus the 4 GB floor); it runs with the encoder streamed layer by layer (below).
 - **omniASR-CTC-7B: downloading** (started 22:39 UTC, ~2 h at the line's ~3.4 MB/s; the night window
   closes 00:30 UTC, so it finishes on a later night). **LLM-3B / CTC-3B: not downloaded tonight.**
-- Compare mode: omniASR-LLM-1B is a candidate (off by default, see "Compare mode").
+- Compare mode: omniASR-LLM-1B is a candidate (off by default, see "Compare mode"). **LLM-7B is
+  not a compare candidate:** it only runs streamed (an offline eval path); resident it needs 15.6 GB,
+  which the service's memory floor refuses.
 
 ## Licence
 **Apache-2.0** for code and weights: `LICENSE` of facebookresearch/omnilingual-asr ("Licensed under
@@ -52,23 +54,23 @@ results/omni-llm.jsonl.
 
 | Set (clips) | Production model | auto (no hint) | omniASR-CTC-1B | **omniASR-LLM-1B** | omniASR-LLM-7B |
 |---|---|---|---|---|---|
-| si `omni-si` spontaneous (60) | 33.1% / 13.3% | 33.6% / 13.8% | 37.8% / 9.5% | **30.0% / 8.9%** | running |
-| si `slr30-si` read (36) | 38.2% / 8.9% | 38.2% / 10.2% | 44.2% / 7.4% | 52.7% / 16.6% | running |
-| si `yt-si` broadcast (50) | excluded (trained on it) | – | 55.3% / 30.6% | 63.1% / 42.9% | running |
-| si `yt5-si` broadcast (47) | **42.0% / 21.2%** | 43.4% / 23.6% | 56.8% / 30.2% | 67.0% / 42.7% | running |
-| **Singlish real, yt5 part (26)** | **44.9% / 27.5%** (en kept 53%) | 47.1% / 31.0% | 57.8% / 39.5% (5%) | 67.2% / 49.4% (0%) | running |
-| Singlish real, yt part (25) | excluded | – | 59.3% / 40.1% (12%) | 69.1% / 52.5% (0%) | running |
-| si+en **spliced** (6, synthetic) | 74.3% / 71.5% | 56.2% / 57.0% | 53.5% / 22.2% | 163% / 138% | running |
-| ta `fleurs-ta` read (50) | 32.6% / 15.2% | 34.9% / 18.0% | 43.4% / 15.2% | **33.8% / 14.1%** | running |
-| ta+en **spliced** (6, synthetic; no real clips) | 80.1% / 59.3% | 41.7% / 50.9% (en via large-v3) | – | 65.6% / 50.1% | running |
-| en `fleurs-en` read (20) | **3.9% / 2.5%** | 3.9% / 2.5% | 9.9% / 3.4% | 10.3% / 5.9% | running |
+| si `omni-si` spontaneous (60) | 33.1% / 13.3% | 33.6% / 13.8% | 37.8% / 9.5% | **30.0% / 8.9%** | **27.0% / 7.5%** |
+| si `slr30-si` read (36) | 38.2% / 8.9% | 38.2% / 10.2% | 44.2% / 7.4% | 52.7% / 16.6% | 58.7% / 14.9% |
+| si `yt-si` broadcast (50) | excluded (trained on it) | – | 55.3% / 30.6% | 63.1% / 42.9% | 58.0% / 34.3% |
+| si `yt5-si` broadcast (47) | **42.0% / 21.2%** | 43.4% / 23.6% | 56.8% / 30.2% | 67.0% / 42.7% | 63.8% / 36.2% |
+| **Singlish real, yt5 part (26)** | **44.9% / 27.5%** (en kept 53%) | 47.1% / 31.0% | 57.8% / 39.5% (5%) | 67.2% / 49.4% (0%) | 73.1% / 49.0% (0%) |
+| Singlish real, yt part (25) | excluded | – | 59.3% / 40.1% (12%) | 69.1% / 52.5% (0%) | 63.8% / 45.9% (0%) |
+| si+en **spliced** (6, synthetic) | 74.3% / 71.5% | 56.2% / 57.0% | 53.5% / 22.2% | 163% / 138% | 85.4% / 68.4% |
+| ta `fleurs-ta` read (50) | 32.6% / 15.2% | 34.9% / 18.0% | 43.4% / 15.2% | **33.8% / 14.1%** | **33.3% / 13.8%** |
+| ta+en **spliced** (6, synthetic; no real clips) | 80.1% / 59.3% | 41.7% / 50.9% (en via large-v3) | – | 65.6% / 50.1% | 78.8% / 55.1% |
+| en `fleurs-en` read (20) | **3.9% / 2.5%** | 3.9% / 2.5% | 9.9% / 3.4% | 10.3% / 5.9% | 7.2% / 4.6% |
 
 "en kept" (Singlish rows) = English words of the reference that the hypothesis keeps in Latin
 script. LLM-1B keeps none: it writes them in Sinhala script.
 
 **Speed** (RTF; lower is faster): production si 0.20-0.23, ta 0.36, en 0.08; omniASR-CTC-1B 0.05
 (CPU int8); **omniASR-LLM-1B 0.16-0.27 (0.24 over all 275 clips)**, about the same as the
-production Sinhala model; ~1.5 s per 6-s clip on the shared GPU. LLM-7B: running.
+production Sinhala model; ~1.5 s per 6-s clip on the shared GPU. LLM-7B: 0.22 compute over all 275 clips (0.15-0.28 per set), measured with the encoder streamed; the run took 1380 s wall for 5918 s of audio (groups of 64 chunks), so streaming the weights added only ~5%.
 
 **Reading (LLM-1B):**
 - **Best result on spontaneous Sinhala** (omni-si CER 8.9% vs 13.3% production), but omni-si is
@@ -79,6 +81,11 @@ production Sinhala model; ~1.5 s per 6-s clip on the shared GPU. LLM-7B: running
 - **Tamil: on par with or slightly ahead of tamil-asr-qwen3** (14.1% vs 15.2% CER) at ~2/3 of its
   run time; with 4.4 GB resident vs ~6.7 GB.
 - English: behind large-v3 (5.9% vs 2.5% CER).
+**Reading (LLM-7B vs 1B):** better on spontaneous and broadcast Sinhala (omni-si CER 7.5%, yt-si
+34.3%, yt5 36.2%; it no longer drifts into other scripts, script % ~100) and on English (4.6%);
+Tamil about equal (13.8%). Still clearly behind the production Sinhala model on read and broadcast
+speech and on real Singlish (49.0% vs 27.5% CER), and it also writes English in Sinhala script
+(en kept 0%). It does not justify a 15.6 GB resident model next to risi-l1.
 - **Recommendation:** no route change. LLM-1B is worth keeping as a compare candidate (spontaneous
   Sinhala, Tamil) and as a fine-tune base candidate next to Qwen3-ASR-0.6B-Sinhala
   (docs/status/asr-finetune-plan.md); it is not ready for Singlish.
@@ -96,7 +103,10 @@ production Sinhala model; ~1.5 s per 6-s clip on the shared GPU. LLM-7B: running
   raw SentencePiece model). cuDNN is off (no conv1d engine on sm_121, as in decision 071).
 - `infra/omniasr/stream_eval.py`: the encoder streamed **layer by layer** from the memory-mapped
   checkpoint (decoder, frontend and projection resident; all chunks pass layer *i* before layer *i+1*
-  is loaded). **Validated: 12/12 chunks identical** to the resident 1B. `scripts/asr-omni-stream`
+  is loaded). **Validated: 12/12 chunks identical** to the resident 1B. Weights are read one tensor
+  at a time by `infra/omniasr/ckpt_reader.py` (restricted unpickler, pages dropped after each copy;
+  bit-exact vs `torch.load`), because `torch.load(mmap=True)` kept ~6 GB of mapped pages counted
+  against MemAvailable. `scripts/asr-omni-stream`
   runs it with the memory floor (stops under 4096 MB MemAvailable, resumes, waits for release gates).
 
 ## Compare mode (developer only)
@@ -123,7 +133,7 @@ production Sinhala model; ~1.5 s per 6-s clip on the shared GPU. LLM-7B: running
 |---|---|---|---|---|
 | omniASR-LLM-1B (2.28B params) | 4.4 GB | 4.39 GB CUDA, ~1.2 GB process RSS; **-4.4 GB MemAvailable** (measured 18.6 → 14.2 GB) | **1.0-4.9 s** (mmap'd checkpoint, page cache warm/cold) | **yes**, when ≥ ~9 GB is available (floor 4 GB) |
 | LLM-1B, streamed encoder (eval) | – | 2.6-3.0 GB CUDA peak, ~4.6 GB MemAvailable incl. the torch/CUDA runtime | 1-3 s | yes |
-| omniASR-LLM-7B (7.80B) | 15.6 GB | not attempted resident: 15.6 GB + runtime > what is available (6-13 GB minus the floor). int8 would still be ~8 GB + runtime | – | **no** (resident); **yes streamed**: running |
+| omniASR-LLM-7B (7.80B) | 15.6 GB | not attempted resident: 15.6 GB + runtime > what is available (6-13 GB minus the floor). int8 would still be ~8 GB + runtime | – | **no** (resident); **yes streamed**: resident part 2.8 GB CUDA (decoder, frontend, projection), peak 3.3 GB CUDA, -2.8 GB MemAvailable at load (9.3 -> 6.5 GB), load 2.2 s, min MemAvailable 5.8 GB during the run |
 | omniASR-CTC-7B (6.5B) | 13 GB | not downloaded yet | – | resident no; streamed expected like LLM-7B |
 | Production speech service (for scale) | – | idle 2.0 GB GPU; all routed models ~11 GB host | – | – |
 
