@@ -363,6 +363,10 @@ defmodule RisiMe.ContractExamplesTest do
   defp pre120(list) when is_list(list), do: Enum.map(list, &pre120/1)
   defp pre120(other), do: other
 
+  # v1.44 §39.1: `Friend.group_calls` is newer than the v1.6–v1.20 friends examples.
+  defp pre144(%{"friends" => fs} = reply),
+    do: %{reply | "friends" => Enum.map(fs, &Map.delete(&1, "group_calls"))}
+
   # Same keys, and every value has the same "kind" (uuid / timeuuid / timestamp / type).
   defp assert_same_shape(ours, theirs) when is_map(ours) and is_map(theirs) do
     assert keys(ours) == keys(theirs)
@@ -420,7 +424,8 @@ defmodule RisiMe.ContractExamplesTest do
         RisiMe.Contract.ExamplesV141Test.files() ++
         RisiMe.Contract.ExamplesV142Test.files() ++
         RisiMe.Contract.ExamplesV143Test.files() ++
-        RisiMe.Contract.ExamplesV144Test.files()
+        RisiMe.Contract.ExamplesV144Test.files() ++
+        RisiMe.Contract.ExamplesV145Test.files()
 
     assert @files -- covered == [], "add checks for: #{inspect(@files -- covered)}"
   end
@@ -844,7 +849,12 @@ defmodule RisiMe.ContractExamplesTest do
       ours = pre120(ours)
       assert keys(ours) == keys(ex)
       # v1.9 added `group_ready` (absent = false in v1.6 examples): checked in friends_reply_v19.
-      ours = update_in(ours["friends"], fn fs -> Enum.map(fs, &Map.delete(&1, "group_ready")) end)
+      # v1.45 added `group_calls`: checked in friends_reply_v145 (ExamplesV145Test).
+      ours =
+        update_in(ours["friends"], fn fs ->
+          Enum.map(fs, &Map.drop(&1, ["group_ready", "group_calls"]))
+        end)
+
       for k <- ~w(friends incoming blocked), do: assert_same_shape(hd(ours[k]), hd(ex[k]))
       assert Enum.all?(ours["outgoing"], &(&1["user_id"] == nil and &1["display_name"] == nil))
       assert_same_shape(hd(ours["outgoing"]), hd(ex["outgoing"]))
@@ -1241,7 +1251,7 @@ defmodule RisiMe.ContractExamplesTest do
 
       # friends_reply_v19.json
       {200, friends} = g_api(:get, "/api/v1/friends", a.token)
-      friends = pre120(friends)
+      friends = friends |> pre120() |> pre144()
       ex = example("friends_reply_v19.json")
       assert keys(friends) == keys(ex)
       for f <- friends["friends"], do: assert_same_shape(f, hd(ex["friends"]))
@@ -3250,6 +3260,7 @@ defmodule RisiMe.ContractExamplesTest do
       assert wire(signal)["data"]["user"]["user_id"] == n["id"]
 
       {200, ours} = req_json(:get, "/api/v1/friends", a.token)
+      ours = pre144(ours)
       ex = example("friends_reply_v120.json")
       assert keys(ours) == keys(ex)
       for f <- ours["friends"], do: assert_same_shape(f, hd(ex["friends"]))

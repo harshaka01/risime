@@ -144,10 +144,11 @@ defmodule RisiMe.Devices do
   # v1.31 §31.1: `google_calendar`, kept only with `risi_events`.
   # v1.34 §33.1: `files`; `pdf_export`, kept only with `risi_tools` (silently dropped otherwise).
   # v1.41 §37.1: `voice` (voice notes; also "understands the `played` status").
+  # v1.44 §39.1: `add_to_call`, kept only with `group_calls` and `call_switch`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
                          risi_ledger risi_events risi_notes google_calendar files pdf_export
-                         risi_items call_transcribe voice)
+                         risi_items call_transcribe voice add_to_call)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
@@ -164,6 +165,11 @@ defmodule RisiMe.Devices do
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["pdf_export"]
       # v1.35 §34: `risi_items` (Phase 2), kept only with `risi_tools`.
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["risi_items"]
+
+      caps =
+        if "group_calls" in caps and "call_switch" in caps,
+          do: caps,
+          else: caps -- ["add_to_call"]
 
       {:ok, caps}
     else

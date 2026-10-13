@@ -482,17 +482,22 @@ defmodule RisiMeWeb.GroupCallsV119Test do
       assert {:ok, _} = gsig(chan_a, g2, %{"ring" => false})
     end
 
-    test "limits: ring 1 per group per 30 s and 10 per hour; ring: false 30 per group per 10 s",
+    test "limits (v1.44 §39.4): ring 1 per group per 10 s and 20 per hour; ring: false 30 per group per 10 s",
          ctx do
       %{a: a, a_dev: a_dev, id: id} = ctx
       {chan_a, _} = join_dev(a, a_dev)
+      Application.put_env(:risime, :group_ring_window_ms, 300)
+      on_exit(fn -> Application.delete_env(:risime, :group_ring_window_ms) end)
 
       assert {:ok, _} = gsig(chan_a, id)
       assert {:error, %{reason: "rate_limited"}} = gsig(chan_a, id)
+      # A re-ring of the same group once the (sliding) window has passed (a late add).
+      Process.sleep(650)
+      assert {:ok, _} = gsig(chan_a, id)
 
-      # Ten groups' worth of rings in the hour.
+      # Twenty rings in the hour (two of them above).
       groups =
-        for _ <- 1..9 do
+        for _ <- 1..18 do
           f = logged_in_user()
           befriend!(a, f)
           _ = device!(f, @gc)
