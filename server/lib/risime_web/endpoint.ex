@@ -4,12 +4,26 @@ defmodule RisiMeWeb.Endpoint do
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
+  # Decision 089: the session cookie is only used by the admin console (the app authenticates
+  # with Bearer tokens): signed and encrypted, Secure, HttpOnly, SameSite=Lax, 12 h.
   @session_options [
     store: :cookie,
     key: "_risime_key",
     signing_salt: "LRwbQIMm",
-    same_site: "Lax"
+    encryption_salt: "adm-7Qe2vK",
+    same_site: "Lax",
+    secure: true,
+    http_only: true,
+    max_age: 12 * 3600
   ]
+
+  @doc false
+  def session_options, do: @session_options
+
+  # Decision 089: the admin console's LiveView socket (same origin check as the endpoint).
+  socket "/admin/live", Phoenix.LiveView.Socket,
+    websocket: [connect_info: [session: @session_options]],
+    longpoll: false
 
   socket "/socket", RisiMeWeb.UserSocket,
     websocket: [connect_info: [:peer_data, :x_headers]],

@@ -46,6 +46,24 @@ if pool = System.get_env("CASSANDRA_POOL_SIZE") do
   config :risime, :cassandra, pool_size: String.to_integer(pool)
 end
 
+# Decision 089, the admin console (/admin):
+# * RISIME_ADMIN_SEED_EMAIL: one-time seed. While no admin exists, the RisiMe account with this
+#   email becomes the first admin (audit-logged); once any admin exists it does nothing.
+# * RISI_ADMIN_TEST_CLIPS_DIR: the dev test-clip directory of the Speech models "Test" button
+#   (never customer voice notes), e.g. the repo's infra/whisper/testdata.
+# * ADMIN_OIDC_CLIENT_SECRET: only if the Keycloak client is confidential (the `risime` client is
+#   public: PKCE alone).
+if config_env() != :test do
+  if v = System.get_env("RISIME_ADMIN_SEED_EMAIL"),
+    do: config(:risime, :admin_seed_email, String.trim(v))
+
+  if v = System.get_env("RISI_ADMIN_TEST_CLIPS_DIR"),
+    do: config(:risime, :admin_test_clips_dir, String.trim(v))
+
+  if v = System.get_env("ADMIN_OIDC_CLIENT_SECRET"),
+    do: config(:risime, :admin_oidc_client_secret, v)
+end
+
 # Authentication (decision 018). OIDC_ENABLED=true once the `risime` Keycloak client exists.
 if config_env() != :test do
   oidc =

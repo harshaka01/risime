@@ -26,6 +26,7 @@ defmodule RisiMeWeb do
       # Import common connection and controller functions to use in pipelines
       import Plug.Conn
       import Phoenix.Controller
+      import Phoenix.LiveView.Router
     end
   end
 
@@ -40,6 +41,34 @@ defmodule RisiMeWeb do
       use Phoenix.Controller, formats: [:html, :json]
 
       import Plug.Conn
+
+      unquote(verified_routes())
+    end
+  end
+
+  # Decision 089: the admin console (/admin) is the only LiveView and HTML in the app.
+  def live_view do
+    quote do
+      use Phoenix.LiveView
+
+      unquote(html_helpers())
+    end
+  end
+
+  def html do
+    quote do
+      use Phoenix.Component
+
+      import Phoenix.Controller, only: [get_csrf_token: 0]
+
+      unquote(html_helpers())
+    end
+  end
+
+  defp html_helpers do
+    quote do
+      import Phoenix.HTML
+      alias Phoenix.LiveView.JS
 
       unquote(verified_routes())
     end

@@ -62,6 +62,20 @@ defmodule RisiMe.Agent.Speech.Http do
 
   @impl true
   def transcribe(audio, opts \\ []) when is_binary(audio) do
+    # Decision 089: an admin's manual model for the chunk's language (Auto: no I/O, unchanged).
+    case RisiMe.Agent.SpeechRoutes.pick(audio, opts) do
+      {:manual, model, lang} ->
+        case post_transcription(audio, model, Keyword.put(opts, :language, lang)) do
+          {:error, e} when e in [:not_served, :failed] -> transcribe_auto(audio, opts)
+          other -> other
+        end
+
+      :auto ->
+        transcribe_auto(audio, opts)
+    end
+  end
+
+  defp transcribe_auto(audio, opts) do
     model = if no_auto?(), do: Speech.route("en"), else: "auto"
 
     case post_transcription(audio, model, opts) do
@@ -96,6 +110,9 @@ defmodule RisiMe.Agent.Speech.Http do
       ]
 
       fields = with_hint(fields, opts)
+
+      fields =
+        if is_binary(opts[:language]), do: fields ++ [language: opts[:language]], else: fields
 
       case Req.post(req(base <> "/v1/audio/transcriptions", timeout), form_multipart: fields) do
         {:ok, %{status: 200, body: %{} = b}} ->

@@ -154,3 +154,11 @@ config :risime, :risi_now, System.get_env("RISI_TEST_NOW", "2026-10-05T08:00:00Z
 # v1.36 §35.4 moved the quiet-period default to 1800 s; the §27/§30 suites keep their 600-s
 # timeline (LedgerQuietEnvTest checks the real default).
 config :risime, :risi_quiet_s, 600
+
+# Decision 089: the boot-time admin seed never runs in tests (they call RisiMe.Admin.seed/1).
+config :risime, :admin_seed_on_boot, false
+
+# Decision 089: admin settings ignore the OS environment in tests (the test VM loads .env), and
+# the admin console's Keycloak token endpoint is only ever a Req.Test stub.
+config :risime, :admin_settings_env, false
+config :risime, :admin_oidc, req_options: [plug: {Req.Test, RisiMe.Admin.OIDC}]

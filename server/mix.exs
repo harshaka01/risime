@@ -62,6 +62,9 @@ defmodule RisiMe.MixProject do
       # Decision 075: metrics and LiveDashboard on a separate loopback-only listener.
       {:prom_ex, "~> 1.12"},
       {:phoenix_live_dashboard, "~> 0.9"},
+      # Decision 089: the admin console (/admin). Already in the release via LiveDashboard.
+      {:phoenix_live_view, "~> 1.2"},
+      {:phoenix_html, "~> 4.1"},
       {:jose, "~> 1.11"},
       # Load-test WebSocket client (mix risime.loadtest); never in prod builds.
       {:mint_web_socket, "~> 1.0", only: [:dev, :test]}

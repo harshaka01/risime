@@ -18,6 +18,43 @@ defmodule RisiMeWeb.Router do
     plug RisiMeWeb.Plugs.RequireToken, phone_gate: false
   end
 
+  # Decision 089: the admin console. Browser session (encrypted cookie), CSRF, strict CSP.
+  pipeline :admin_browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {RisiMeWeb.Admin.Layouts, :root}
+    plug :protect_from_forgery
+    plug RisiMeWeb.Admin.Headers
+  end
+
+  pipeline :admin_required do
+    plug RisiMeWeb.Admin.RequireAdmin
+  end
+
+  scope "/admin", RisiMeWeb.Admin do
+    get "/assets/app.js", AssetsController, :app_js
+  end
+
+  scope "/admin", RisiMeWeb.Admin do
+    pipe_through :admin_browser
+
+    get "/sign-in", AuthController, :sign_in
+    get "/auth/login", AuthController, :login
+    get "/auth/callback", AuthController, :callback
+    post "/sign-out", AuthController, :sign_out
+  end
+
+  scope "/admin", RisiMeWeb.Admin do
+    pipe_through [:admin_browser, :admin_required]
+
+    live_session :admin, on_mount: RisiMeWeb.Admin.LiveAuth do
+      live "/", SpeechLive, :index
+      live "/speech", SpeechLive, :index
+      live "/:page", ComingSoonLive, :show
+    end
+  end
+
   # Ops, not wire protocol: no auth, outside /api/v1.
   scope "/", RisiMeWeb do
     pipe_through :api

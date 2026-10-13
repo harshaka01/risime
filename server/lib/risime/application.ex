@@ -44,6 +44,9 @@ defmodule RisiMe.Application do
     children = [
       RisiMeWeb.Telemetry,
       RisiMe.Repo,
+      # Decision 089: admin-console settings (5-s cache) and the one-time admin seed.
+      RisiMe.Admin.Settings,
+      RisiMe.Admin.Seed,
       {Oban, Application.fetch_env!(:risime, Oban)},
       RisiMe.PromEx,
       RisiMe.Messaging.Store.Cassandra,
