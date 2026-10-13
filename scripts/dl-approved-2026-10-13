@@ -13,7 +13,7 @@ L="$HOME/risime-eval-data/dl/downloads-2026-10-13.log"; B="$HOME/risime-eval-mod
 mkdir -p "$(dirname "$L")"
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$L"; }
 in_window() { local h; h=$((10#$(date -u +%H%M))); [ "$DAY" = 1 ] || [ "$h" -ge 1630 ] || [ "$h" -lt 30 ]; }
-busy() { pgrep -f '^bash .*scripts/nightly-release' >/dev/null || [ -e "$PAUSE_FILE" ]; }
+busy() { pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null || [ -e "$PAUSE_FILE" ]; }
 get() { # repo file dest
   mkdir -p "$(dirname "$3")"
   log "start $1/$2 (rate $RATE)"
