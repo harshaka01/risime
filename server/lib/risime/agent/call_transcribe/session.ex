@@ -34,7 +34,7 @@ defmodule RisiMe.Agent.CallTranscribe.Session do
   end
 
   @final ~w(declined expired stopped ended)
-  # v1.44 §39.9: `paused` (a joiner hasn't allowed yet) is live, not final.
+  # v1.45 §40.9: `paused` (a joiner hasn't allowed yet) is live, not final.
   @live ~w(requested on paused)
 
   @chunk %{"min_ms" => 5000, "max_ms" => 20_000, "max_bytes" => 262_144}
@@ -45,7 +45,7 @@ defmodule RisiMe.Agent.CallTranscribe.Session do
   @doc "True for `declined`, `expired`, `stopped`, `ended`."
   def final?(%__MODULE__{state: s}), do: s in @final
 
-  @doc "True for `requested`, `on` and (v1.44) `paused`."
+  @doc "True for `requested`, `on` and (v1.45) `paused`."
   def live?(%__MODULE__{state: s}), do: s in @live
 
   @doc "The §36.4 chunk limits."

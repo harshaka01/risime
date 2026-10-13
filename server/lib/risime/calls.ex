@@ -31,7 +31,7 @@ defmodule RisiMe.Calls do
   @ring_pair_window :timer.hours(1)
   @signal_pair_limit 30
   @signal_pair_window :timer.seconds(10)
-  # v1.19 §20.3 (server S5), per user inside the total; v1.44 §39.4: 1 per group per 10 s (was
+  # v1.19 §20.3 (server S5), per user inside the total; v1.45 §40.4: 1 per group per 10 s (was
   # 30 s) and 20 per hour (was 10), so a running call can re-ring people it adds.
   @group_ring_window_ms 10_000
   @group_ring_hour_limit 20
@@ -293,7 +293,7 @@ defmodule RisiMe.Calls do
       State.put_reply(sender_id, req.client_msg_id, reply)
 
       if req.ring do
-        # v1.44 §39.9: the group call's record (conversation, starter, start media), 4 h.
+        # v1.45 §40.9: the group call's record (conversation, starter, start media), 4 h.
         RisiMe.Agent.CallTranscribe.note_group_ring(req.call_id, sender_id, req.conv, req.media)
         group_ring(req, members -- [sender_id])
       end
@@ -329,7 +329,7 @@ defmodule RisiMe.Calls do
       else: :ok
   end
 
-  # Server S5 (v1.44 §39.4): ring 1 per group per 10 s and 20 per hour; ring: false 30 per group
+  # Server S5 (v1.45 §40.4): ring 1 per group per 10 s and 20 per hour; ring: false 30 per group
   # per 10 s. The 10-s window is shortened in tests (`:group_ring_window_ms`).
   # A refused ring doesn't count against the ring buckets.
   defp check_group_limits(sender_id, %{ring: true, conv: conv}) do

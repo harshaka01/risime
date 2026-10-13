@@ -16,7 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 
-/** v1.44 §39.3: a connected 1:1 call moves into a group call (both sides), and every way it can give up. */
+/** v1.45 §40.3: a connected 1:1 call moves into a group call (both sides), and every way it can give up. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CallMoverTest {
     private val userA = "aaaaaaaa-0000-4000-8000-000000000001"

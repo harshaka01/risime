@@ -16,7 +16,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
-/** v1.44 §39.3 the call conversation the move goes into. */
+/** v1.45 §40.3 the call conversation the move goes into. */
 data class MoveGroup(
     val conversationId: String,
     /** The call was Official but its Official conversation wasn't active in time: "Continuing as a Private call". */
@@ -26,12 +26,12 @@ data class MoveGroup(
 /** What moving a call needs from the app (the container implements it; a fake in tests). */
 interface MovePort {
     /**
-     * §39.3 step 1: a new group chat of me and [members] (the peer first), named from first names;
+     * §40.3 step 1: a new group chat of me and [members] (the peer first), named from first names;
      * for an [official] call also its Official conversation (≤ 15 s). Null = it couldn't be created.
      */
     suspend fun createCallGroup(members: List<String>, official: Boolean): MoveGroup?
 
-    /** §39.3 peer step 2: [conv]'s MLS state is on this device with [identities] among its leaves (catching up, ≤ [timeoutMs]). */
+    /** §40.3 peer step 2: [conv]'s MLS state is on this device with [identities] among its leaves (catching up, ≤ [timeoutMs]). */
     suspend fun awaitGroup(conv: String, identities: List<String>, timeoutMs: Long): Boolean
 
     /** The users of [conv] (from its MLS-backed member list), for "Kamal is adding Sunil…". */
@@ -43,11 +43,11 @@ interface MovePort {
     fun linkPlatformCall(fromCallId: String, toCallId: String, on: Boolean) = Unit
 }
 
-/** v1.44 §39.3 the move as the call screen shows it ("Adding Sunil…", "Couldn't add people…"). */
+/** v1.45 §40.3 the move as the call screen shows it ("Adding Sunil…", "Couldn't add people…"). */
 data class MoveUi(val callId: String, val line: String, val failed: Boolean = false)
 
 /**
- * v1.44 §39.3 moves a connected 1:1 call into a group call without dropping the two people already
+ * v1.45 §40.3 moves a connected 1:1 call into a group call without dropping the two people already
  * talking: the room comes up in hold on both phones while the peer-to-peer call carries the audio;
  * each side switches when it sees the other in the room (an MLS member), then the P2P media closes.
  * Pure Kotlin over the two machines and [MovePort]; timers on [scope] (virtual time in tests).
@@ -67,10 +67,10 @@ class CallMover(
     private val noticeMs: Long = NOTICE_MS,
 ) {
     companion object {
-        /** §39.3 peer step 2: the group's Welcome must be here within this. */
+        /** §40.3 peer step 2: the group's Welcome must be here within this. */
         const val GROUP_WAIT_MS = 20_000L
 
-        /** §39.3 step 1: creating the group chat (and its Official) may take this long. */
+        /** §40.3 step 1: creating the group chat (and its Official) may take this long. */
         const val CREATE_MS = 30_000L
         const val NOTICE_MS = 4_000L
 
@@ -102,7 +102,7 @@ class CallMover(
     /** A move is under way for [callId] (or any, when null). */
     fun moving(callId: String? = null): Boolean = active?.let { callId == null || it.callId == callId } == true
 
-    // ---------------------------------------------------------------- the adder (§39.3 steps 1–6)
+    // ---------------------------------------------------------------- the adder (§40.3 steps 1–6)
 
     /** "Add" in the picker: move the current 1:1 call into a group call with [users]. False = it can't start. */
     suspend fun add(users: List<String>): Boolean {
@@ -162,7 +162,7 @@ class CallMover(
         }
     }
 
-    // ---------------------------------------------------------------- the peer (§39.3 peer steps 1–4)
+    // ---------------------------------------------------------------- the peer (§40.3 peer steps 1–4)
 
     /** A valid `call_escalate` from the selected peer device (the 1:1 machine checked who and where). */
     suspend fun onEscalate(env: CallEnvelope.Escalate, fromDevice: String) {
@@ -225,7 +225,7 @@ class CallMover(
     }
 
     /**
-     * §39.3: the adder's `call_end` `moved` came while this side still waits (the adder has switched):
+     * §40.3: the adder's `call_end` `moved` came while this side still waits (the adder has switched):
      * switch now (called under the 1:1 machine's lock, before that call ends).
      */
     fun onMovedByPeer(callId: String) {

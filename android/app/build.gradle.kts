@@ -155,7 +155,7 @@ android {
         // v1.19 §20.10 rollout: `group_calls` and the group call buttons. -Prisime.groupCalls=false builds
         // the receive-only step (group call lines render, nothing is advertised).
         buildConfigField("boolean", "GROUP_CALLS_ENABLED", (providers.gradleProperty("risime.groupCalls").orNull != "false").toString())
-        // v1.44 §39.8 adding people to a call (`add_to_call`, `features: ["add"]`, the Add participant button):
+        // v1.45 §40.8 adding people to a call (`add_to_call`, `features: ["add"]`, the Add participant button):
         // off by default until scripts/group-call-test is green; -Prisime.addToCall=true turns it on.
         buildConfigField("boolean", "ADD_TO_CALL_ENABLED", (providers.gradleProperty("risime.addToCall").orNull == "true").toString())
         buildConfigField("boolean", "HISTORY_SHARE_ENABLED", (providers.gradleProperty("risime.historyShare").orNull != "false").toString())

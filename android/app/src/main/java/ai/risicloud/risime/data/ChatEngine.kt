@@ -739,7 +739,7 @@ class ChatEngine(
     }
 
     /**
-     * v1.44 §39.6: this device rang for the group call and nobody answered here: the line reads
+     * v1.45 §40.6: this device rang for the group call and nobody answered here: the line reads
      * "Missed voice call" once the call is over (a local flag, never sent, kept across `ended`).
      */
     suspend fun markGroupCallMissed(conv: String, callId: String) = withContext(io) {

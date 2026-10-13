@@ -90,18 +90,18 @@ interface CallAppPort {
     /** v1.33 §24.5: the `dm:` of a 1:1 whose Official `grp:` is [conv] (its calls go peer to peer there); null otherwise. */
     fun dmChatForCall(conv: String): String? = null
 
-    // ---- v1.44 §39 adding people to a call (defaults = an app that can't) ----
+    // ---- v1.45 §40 adding people to a call (defaults = an app that can't) ----
 
-    /** §39.3 step 1: the new group chat (and, for an Official call, its Official conversation). */
+    /** §40.3 step 1: the new group chat (and, for an Official call, its Official conversation). */
     suspend fun createCallGroup(members: List<String>, official: Boolean): MoveGroup? = null
 
-    /** §39.3 peer step 2: [conv]'s MLS state is here with [identities] among its leaves (≤ [timeoutMs]). */
+    /** §40.3 peer step 2: [conv]'s MLS state is here with [identities] among its leaves (≤ [timeoutMs]). */
     suspend fun awaitGroup(conv: String, identities: List<String>, timeoutMs: Long): Boolean = false
 
     /** The users of [conv] (its MLS leaves), for "Kamal is adding Sunil…". */
     suspend fun groupMembers(conv: String): List<String> = emptyList()
 
-    /** v1.44 §39.6: this device rang for a group call and nobody answered here: the line reads "Missed …". */
+    /** v1.45 §40.6: this device rang for a group call and nobody answered here: the line reads "Missed …". */
     suspend fun groupCallMissed(conv: String, callId: String, from: String, video: Boolean) = Unit
 }
 
@@ -267,12 +267,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         context.getSystemService(android.media.projection.MediaProjectionManager::class.java) != null
 
     /**
-     * v1.44 §39.1 `add_to_call`: with `group_calls` and `call_switch`, behind the build flag
+     * v1.45 §40.1 `add_to_call`: with `group_calls` and `call_switch`, behind the build flag
      * `ADD_TO_CALL_ENABLED` (off until scripts/group-call-test is green).
      */
     fun canAdvertiseAddToCall(): Boolean = BuildConfig.ADD_TO_CALL_ENABLED && canAdvertiseGroupCalls() && canAdvertiseSwitch()
 
-    /** §23.1 this device's per-call `features` (v1.44: `add`). */
+    /** §23.1 this device's per-call `features` (v1.45: `add`). */
     private fun callFeatures(): List<String> = listOfNotNull(
         CallEnvelope.FEATURE_SWITCH.takeIf { canAdvertiseSwitch() },
         CallEnvelope.FEATURE_SCREEN.takeIf { canAdvertiseScreenShare() },
@@ -487,13 +487,13 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         onMovedByPeer = { id, _ -> mover.onMovedByPeer(id) },
     )
 
-    // ---------------------------------------------------------------- v1.44 §39 adding people to a call
+    // ---------------------------------------------------------------- v1.45 §40 adding people to a call
 
     @Volatile private var meNow: String? = null
     @Volatile private var deviceNow: String = ""
 
     /**
-     * §39.7 one platform call: the 1:1 call's Telecom call carries on as the group call's
+     * §40.7 one platform call: the 1:1 call's Telecom call carries on as the group call's
      * (group call id → 1:1 call id), set when the move starts and dropped when it gives up.
      */
     private val platformLinks = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -512,23 +512,23 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         }
     }
 
-    /** §39.3 the move of a 1:1 call into a group call (both sides). */
+    /** §40.3 the move of a 1:1 call into a group call (both sides). */
     val mover: CallMover by lazy {
         CallMover(scope, { meNow }, { deviceNow }, { _machine.value }, { _group.value }, movePort, log)
     }
 
-    /** §39.3 what the call screen shows about a move ("Adding Sunil…", "Couldn't add people…"). */
+    /** §40.3 what the call screen shows about a move ("Adding Sunil…", "Couldn't add people…"). */
     val move: StateFlow<MoveUi?> get() = mover.ui
 
-    /** §39.2 [Add] in the picker of a connected 1:1 call: move it into a group call with [users]. */
+    /** §40.2 [Add] in the picker of a connected 1:1 call: move it into a group call with [users]. */
     fun addPeople(users: List<String>) {
         scope.launch { if (!mover.add(users)) log("add people: the call can't move now") }
     }
 
-    /** §39.4 "Add participant" in a group call: ring [users] (members not in the call) again. */
+    /** §40.4 "Add participant" in a group call: ring [users] (members not in the call) again. */
     suspend fun ringAgain(users: List<String>): SignalOutcome = _group.value?.ringAgain(users) ?: SignalOutcome.Unavailable
 
-    /** §39.4 the users present in the current group call's room. */
+    /** §40.4 the users present in the current group call's room. */
     fun groupCallUsers(): Set<String> = _group.value?.presentUsers().orEmpty()
 
     /** §16.10 (f) debug-only negative test switch. */
@@ -846,7 +846,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     private var lastRingingId: String? = null
 
     private suspend fun onState(s: CallSnapshot?) {
-        // §39.7 one platform call: a moved call's Telecom call (route, focus) carries on under the group call's id.
+        // §40.7 one platform call: a moved call's Telecom call (route, focus) carries on under the group call's id.
         if (s != null && s.phase != CallPhase.ENDED && !telecomCalls.containsKey(s.callId)) {
             platformLinks[s.callId]?.let { from ->
                 telecomCalls.remove(from)?.let { h ->
@@ -1006,7 +1006,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                     attrs,
                     // A Telecom answer (a watch, the car) never turns the camera on (android A3).
                     onAnswer = { _ -> if (_group.value?.currentCallId() == callId) _group.value?.answer(callId, camera = false) else _machine.value?.answer(callId, camera = false) },
-                    // §39.7: a moved call's callbacks act on the group call it became.
+                    // §40.7: a moved call's callbacks act on the group call it became.
                     onDisconnect = { _ -> _machine.value?.onSystemDisconnect(callId); _group.value?.hangUp(liveCallId(callId)) },
                     onSetActive = {},
                     // A cellular call took over (android R9): no hold in v1.13, so the call ends.

@@ -124,13 +124,13 @@ data class CallScreenUi(
     val prompt: String? = null,
     /** A short line after a switch attempt. */
     val notice: String? = null,
-    /** v1.44 §39.1/§39.4 Add participant: enabled, or disabled with why. */
+    /** v1.45 §40.1/§40.4 Add participant: enabled, or disabled with why. */
     val addControl: ControlUi = ControlUi(enabled = false, description = "Add participant", hint = ADD_UNAVAILABLE),
-    /** v1.44 §39.3 the move ("Adding Sunil…", "Couldn't add people…"). */
+    /** v1.45 §40.3 the move ("Adding Sunil…", "Couldn't add people…"). */
     val moveLine: String? = null,
 )
 
-/** v1.44: the build without the feature (or a call that can't add anyone). */
+/** v1.45: the build without the feature (or a call that can't add anyone). */
 const val ADD_UNAVAILABLE = "Adding people to a call isn't available yet"
 
 /** What the call screen's controls do. */
@@ -152,7 +152,7 @@ data class CallScreenActions(
     /** The switch prompt: (accept, my camera on). */
     val onPrompt: (Boolean, Boolean) -> Unit = { _, _ -> },
     val onStopShare: () -> Unit = {},
-    /** v1.44 §39.2 Add participant (the picker). */
+    /** v1.45 §40.2 Add participant (the picker). */
     val onAdd: () -> Unit = {},
 )
 
@@ -318,7 +318,7 @@ private fun TopBar(ui: CallScreenUi, a: CallScreenActions, scrim: Boolean) {
             }
             if (ui.stage != CallStage.INCOMING && ui.stage != CallStage.ENDED) {
                 Box {
-                    // v1.44 §39.1: enabled when the call can take more people; otherwise shown, disabled, with why on a tap.
+                    // v1.45 §40.1: enabled when the call can take more people; otherwise shown, disabled, with why on a tap.
                     val add = ui.addControl
                     IconButton(
                         onClick = { if (add.enabled) a.onAdd() else hint = true },
@@ -644,7 +644,7 @@ fun shareControl(s: CallSnapshot, name: String, nowMs: Long): ControlUi = when {
 }
 
 /**
- * v1.44 §39.1/§39.4 Add participant: a 1:1 call when both devices listed `add` and it is connected;
+ * v1.45 §40.1/§40.4 Add participant: a 1:1 call when both devices listed `add` and it is connected;
  * a group call when this phone can add ([groupAdd]) and it is connected.
  */
 fun addControl(s: CallSnapshot, name: String, groupAdd: Boolean): ControlUi {

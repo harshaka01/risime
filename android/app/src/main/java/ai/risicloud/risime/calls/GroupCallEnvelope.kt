@@ -99,7 +99,7 @@ object GroupCallLines {
     /** A local-only flag in the stored line JSON: `status` said the room is gone (never sent). */
     const val LOCAL_OVER = "x_over"
 
-    /** v1.44 §39.6 a local-only flag: this device rang for the call and nobody answered here (never sent). */
+    /** v1.45 §40.6 a local-only flag: this device rang for the call and nobody answered here (never sent). */
     const val LOCAL_MISSED = "x_missed"
 
     /** The local-only flags of a stored line (kept across `ended`, stripped from backups). */
@@ -123,7 +123,7 @@ object GroupCallLines {
         val call = if (env.video) CallLines.VIDEO_CALL else CallLines.VOICE_CALL
         return when {
             env.state == GroupCallEnvelope.STARTED && running -> startedText(if (starterIsMe) "You" else starterName, env.video)
-            // v1.44 §39.6: rang here and never answered: "Missed …" once the call is over (whatever others did).
+            // v1.45 §40.6: rang here and never answered: "Missed …" once the call is over (whatever others did).
             missed && !starterIsMe -> if (env.video) CallLines.MISSED_VIDEO else CallLines.MISSED
             env.state == GroupCallEnvelope.STARTED -> "$call ended"
             env.reason == GroupCallEnvelope.R_TIMEOUT -> if (starterIsMe) "$call · No answer" else if (env.video) CallLines.MISSED_VIDEO else CallLines.MISSED

@@ -77,7 +77,7 @@ class DeviceRegistrar(
     private val callTranscribeSupported: () -> Boolean = { false },
     /** v1.41 §37.1: this build sends, receives, plays and renders voice notes (with `voice_transcript`) and understands `played`. */
     private val voiceSupported: () -> Boolean = { false },
-    /** v1.44 §39.1: this phone moves 1:1 calls into group calls (the build flag on, with `group_calls` and `call_switch`). */
+    /** v1.45 §40.1: this phone moves 1:1 calls into group calls (the build flag on, with `group_calls` and `call_switch`). */
     private val addToCallSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
@@ -104,7 +104,7 @@ class DeviceRegistrar(
             },
             DeviceMls.CAP_CALL_SWITCH.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && callSwitchSupported() },
             DeviceMls.CAP_SCREEN_SHARE.takeIf { mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && callSwitchSupported() && screenShareSupported() },
-            // v1.44 §39.1: only with `group_calls` and `call_switch`.
+            // v1.45 §40.1: only with `group_calls` and `call_switch`.
             DeviceMls.CAP_ADD_TO_CALL.takeIf {
                 mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && mls.callKeysSupported && groupCallsSupported() && callSwitchSupported() && addToCallSupported()
             },

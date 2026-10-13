@@ -424,7 +424,7 @@ defmodule RisiMe.Social do
         # v1.9 §12.1: pickers grey out friends who need to update.
         ids = Enum.map(rows, fn {u, _} -> u.id end)
         ready = RisiMe.Groups.ready_set(ids)
-        # v1.44 §39.1: the friend has a `group_calls` device that can still receive (§12.1).
+        # v1.45 §40.1: the friend has a `group_calls` device that can still receive (§12.1).
         calls = RisiMe.MLS.Images.ready_users(ids, "group_calls", skip_superseded: true)
 
         Enum.map(rows, fn {u, since} ->

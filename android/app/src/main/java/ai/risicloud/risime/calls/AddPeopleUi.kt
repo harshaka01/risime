@@ -30,14 +30,14 @@ import androidx.compose.ui.unit.dp
 import ai.risicloud.risime.ui.common.InitialsAvatar
 import ai.risicloud.risime.ui.theme.Spacing
 
-/** v1.44 §39.2/§39.4 one person the picker offers. */
+/** v1.45 §40.2/§40.4 one person the picker offers. */
 data class AddCandidate(
     val userId: String,
     val name: String,
     val enabled: Boolean,
     /** Why it is greyed out, or what tapping does ("In the group · Ring"). */
     val note: String? = null,
-    /** §39.4 (a): a member of the group call's chat who isn't in the room: a re-ring, no add. */
+    /** §40.4 (a): a member of the group call's chat who isn't in the room: a re-ring, no add. */
     val ring: Boolean = false,
 )
 
@@ -50,10 +50,10 @@ object AddPeople {
     const val ONLY_ADMINS = "Only admins can add people to this group"
     const val IN_GROUP_RING = "In this group · ring"
 
-    /** §39.2: the most people in a call, those already in it included (§20.9). */
+    /** §40.2: the most people in a call, those already in it included (§20.9). */
     fun cap(video: Boolean) = if (video) 8 else 32
 
-    /** §39.2 a 1:1 call: my friends except [exclude] (me, the peer), greyed out when they can't join. */
+    /** §40.2 a 1:1 call: my friends except [exclude] (me, the peer), greyed out when they can't join. */
     fun forOneToOne(friends: List<FriendLite>, exclude: Set<String>): List<AddCandidate> =
         friends.filter { it.userId.lowercase() !in exclude }.map { f ->
             AddCandidate(
@@ -67,7 +67,7 @@ object AddPeople {
         }.sortedWith(compareBy({ !it.enabled }, { it.name.lowercase() }))
 
     /**
-     * §39.4 a group call: (a) the chat's [members] who aren't [present] → ring; (b) for an [admin],
+     * §40.4 a group call: (a) the chat's [members] who aren't [present] → ring; (b) for an [admin],
      * friends who aren't members → add to the group and ring (others see why not).
      */
     fun forGroup(members: Set<String>, present: Set<String>, me: String, admin: Boolean, friends: List<FriendLite>, memberName: (String) -> String): List<AddCandidate> {
@@ -88,7 +88,7 @@ object AddPeople {
         return ring + add
     }
 
-    /** §39.2 the confirmation line. */
+    /** §40.2 the confirmation line. */
     fun confirmText(names: List<String>, peerName: String?, groupName: String?): String {
         val who = CallMover.joinNames(names)
         return if (peerName != null) {
@@ -101,7 +101,7 @@ object AddPeople {
 }
 
 /**
- * v1.44 §39.2/§39.4 the picker over the call screen: search, multi-select up to [room] more people,
+ * v1.45 §40.2/§40.4 the picker over the call screen: search, multi-select up to [room] more people,
  * then a confirmation (nothing is created before it). [peerName] non-null = a 1:1 call.
  */
 @Composable

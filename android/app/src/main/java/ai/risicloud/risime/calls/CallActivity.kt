@@ -69,7 +69,7 @@ class CallActivity : ComponentActivity() {
     /** "Call info" and the pre-share dialog ("Your whole screen, including notifications, will be visible"). */
     private var info by mutableStateOf(false)
 
-    /** v1.44 §39.2 the Add participant picker (null = closed). */
+    /** v1.45 §40.2 the Add participant picker (null = closed). */
     private var adding by mutableStateOf<ai.risicloud.risime.AppContainer.AddPicker?>(null)
     private var addingFor: CallSnapshot? = null
 
@@ -149,7 +149,7 @@ class CallActivity : ComponentActivity() {
                 val s by calls.state.collectAsStateWithLifecycle()
                 val blind by calls.blindRing.collectAsStateWithLifecycle()
                 val routes by calls.routes.collectAsStateWithLifecycle()
-                // v1.44 §39.3: "Adding Sunil…", "Couldn't add people…".
+                // v1.45 §40.3: "Adding Sunil…", "Couldn't add people…".
                 val mv by calls.move.collectAsStateWithLifecycle()
                 // v1.39 §36: the Official-call transcription (button, prompt, red bar); nothing on a Private call.
                 val tx by transcribe.view.collectAsStateWithLifecycle()

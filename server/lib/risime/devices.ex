@@ -144,7 +144,7 @@ defmodule RisiMe.Devices do
   # v1.31 §31.1: `google_calendar`, kept only with `risi_events`.
   # v1.34 §33.1: `files`; `pdf_export`, kept only with `risi_tools` (silently dropped otherwise).
   # v1.41 §37.1: `voice` (voice notes; also "understands the `played` status").
-  # v1.44 §39.1: `add_to_call`, kept only with `group_calls` and `call_switch`.
+  # v1.45 §40.1: `add_to_call`, kept only with `group_calls` and `call_switch`.
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
                          risi_ledger risi_events risi_notes google_calendar files pdf_export

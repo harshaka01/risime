@@ -482,7 +482,7 @@ defmodule RisiMeWeb.GroupCallsV119Test do
       assert {:ok, _} = gsig(chan_a, g2, %{"ring" => false})
     end
 
-    test "limits (v1.44 §39.4): ring 1 per group per 10 s and 20 per hour; ring: false 30 per group per 10 s",
+    test "limits (v1.45 §40.4): ring 1 per group per 10 s and 20 per hour; ring: false 30 per group per 10 s",
          ctx do
       %{a: a, a_dev: a_dev, id: id} = ctx
       {chan_a, _} = join_dev(a, a_dev)

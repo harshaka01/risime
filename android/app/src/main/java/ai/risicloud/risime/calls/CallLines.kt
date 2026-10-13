@@ -12,7 +12,7 @@ object CallLines {
     const val MISSED_VIDEO = "Missed video call"
     const val VIDEO_CALL = "Video call"
 
-    /** v1.44 §39.6 the end of a 1:1 call that continued as a group call. */
+    /** v1.45 §40.6 the end of a 1:1 call that continued as a group call. */
     const val MOVED_SUFFIX = " · continued as a group call"
 
     data class Line(val text: String, val missed: Boolean)
@@ -33,7 +33,7 @@ object CallLines {
                 if (senderIsMe) Line("$call · No answer", false) else Line(missed, true)
             CallEnvelope.R_DECLINED -> if (senderIsMe) Line("Declined $kind call", false) else Line("$call · Declined", false)
             CallEnvelope.R_FAILED -> if (rangUnanswered) Line(missed, true) else Line("$call · Couldn't connect", false)
-            // v1.44 §39.6: the call went on as a group call (the line opens its chat).
+            // v1.45 §40.6: the call went on as a group call (the line opens its chat).
             CallEnvelope.R_MOVED -> Line((durationS?.let { "$call · ${duration(it)}" } ?: call) + MOVED_SUFFIX, false)
             else -> Line(call, false)
         }

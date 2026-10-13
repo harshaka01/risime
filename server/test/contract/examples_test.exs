@@ -363,7 +363,7 @@ defmodule RisiMe.ContractExamplesTest do
   defp pre120(list) when is_list(list), do: Enum.map(list, &pre120/1)
   defp pre120(other), do: other
 
-  # v1.44 §39.1: `Friend.group_calls` is newer than the v1.6–v1.20 friends examples.
+  # v1.45 §40.1: `Friend.group_calls` is newer than the v1.6–v1.20 friends examples.
   defp pre144(%{"friends" => fs} = reply),
     do: %{reply | "friends" => Enum.map(fs, &Map.delete(&1, "group_calls"))}
 

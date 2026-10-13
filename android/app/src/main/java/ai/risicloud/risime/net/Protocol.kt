@@ -9,7 +9,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 /** Wire models for contract/v1/PROTOCOL.md. Field names match the contract exactly. */
 
 /** The PROTOCOL.md version this client implements (shown in Settings → About; checked by a test). */
-const val PROTOCOL_VERSION = "1.44"
+const val PROTOCOL_VERSION = "1.45"
 
 val ProtocolJson: Json = Json {
     ignoreUnknownKeys = true // §0: clients must ignore unknown fields
@@ -603,7 +603,7 @@ data class Friend(
     @SerialName("group_ready") val groupReady: Boolean = false,
     /** §21.4 (v1.20): absent = true. */
     @SerialName("phone_confirmed") val phoneConfirmed: Boolean = true,
-    /** v1.44 §39.1: a `group_calls` device that can still receive; absent (null) = unknown, treated as true. */
+    /** v1.45 §40.1: a `group_calls` device that can still receive; absent (null) = unknown, treated as true. */
     @SerialName("group_calls") val groupCalls: Boolean? = null,
 )
 
@@ -707,7 +707,7 @@ data class DeviceMls(
         /** v1.23 §23.1: screen sharing (with `call_switch`, once MediaProjection and the screencast source load). */
         const val CAP_SCREEN_SHARE = "screen_share"
 
-        /** v1.44 §39.1: adding people to a call (with `group_calls` and `call_switch`). */
+        /** v1.45 §40.1: adding people to a call (with `group_calls` and `call_switch`). */
         const val CAP_ADD_TO_CALL = "add_to_call"
 
         /** v1.24 §24.7: two tabs, only while `/auth/config` says `tabs: on` and the core enforces §24.1. */

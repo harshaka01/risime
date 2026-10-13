@@ -596,10 +596,10 @@ class ContractExamplesTest {
     }
 
     /**
-     * v1.44 §39 adding people to a call: the envelopes through the strict validators (and re-encoded
+     * v1.45 §40 adding people to a call: the envelopes through the strict validators (and re-encoded
      * exactly where this app sends them), `Friend.group_calls`, the capability, the paused Session.
      */
-    private val addToCallV144: Map<String, (String) -> Any> by lazy {
+    private val addToCallV145: Map<String, (String) -> Any> by lazy {
         fun same(s: String, env: ai.risicloud.risime.calls.CallEnvelope.Env) = require(ai.risicloud.risime.calls.CallEnvelope.toJson(env) == ProtocolJson.parseToJsonElement(s)) { "re-encodes exactly" }
         mapOf(
             "device_put_add_to_call.json" to { s ->
@@ -640,7 +640,7 @@ class ContractExamplesTest {
                     same(s, it)
                 }
             },
-            "friends_reply_v144.json" to { s ->
+            "friends_reply_v145.json" to { s ->
                 ProtocolJson.decodeFromString<FriendsReply>(s).also { r ->
                     require(r.friends.map { it.groupCalls } == listOf(true, false))
                 }
@@ -654,7 +654,7 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV144 + mapOf(
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

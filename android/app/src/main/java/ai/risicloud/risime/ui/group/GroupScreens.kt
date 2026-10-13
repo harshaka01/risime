@@ -549,7 +549,7 @@ internal fun GroupMessageList(
                     SystemLineText(item.m.body)
                 } else {
                     val running = !ai.risicloud.risime.calls.GroupCallLines.over(item.m.systemJson)
-                    // v1.44 §39.6: this device rang and nobody answered here.
+                    // v1.45 §40.6: this device rang and nobody answered here.
                     val missedHere = ai.risicloud.risime.calls.GroupCallLines.missed(item.m.systemJson)
                     val text = ai.risicloud.risime.calls.GroupCallLines.text(env, nameOf(item.m.from), item.m.from.equals(meId, true), running, missedHere)
                     ai.risicloud.risime.calls.GroupCallLineRow(

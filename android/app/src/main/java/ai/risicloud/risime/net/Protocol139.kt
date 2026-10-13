@@ -82,7 +82,7 @@ object CallTranscribeStates {
     const val STOPPED = "stopped"
     const val ENDED = "ended"
 
-    /** v1.44 §39.9 a group call's joiner hasn't allowed yet: not final, uploads are refused. */
+    /** v1.45 §40.9 a group call's joiner hasn't allowed yet: not final, uploads are refused. */
     const val PAUSED = "paused"
     val FINAL = setOf(DECLINED, EXPIRED, STOPPED, ENDED)
 

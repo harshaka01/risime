@@ -131,7 +131,7 @@ defmodule RisiMe.Agent.CallTranscribe do
   end
 
   @doc """
-  v1.44 §39.9: a `ring: true` **group** `call_signal` was accepted: remembers the call's
+  v1.45 §40.9: a `ring: true` **group** `call_signal` was accepted: remembers the call's
   conversation (the room's `grp:`), its starter and start media (4 h; the first ring wins, so a
   re-ring of a running call changes nothing).
   """
@@ -140,7 +140,7 @@ defmodule RisiMe.Agent.CallTranscribe do
   end
 
   @doc """
-  v1.44 §39.9: the human users in the call's LiveKit room (the room named by §20.2 from the
+  v1.45 §40.9: the human users in the call's LiveKit room (the room named by §20.2 from the
   record's conversation, call id and start media; agents excluded), in join order, and whether
   the §27.7 listener is on for the room (metadata `r: 1`). `{:ok, %{users, listen}}`,
   `{:ok, :gone}` when the room doesn't exist, `{:ok, nil}` for a 1:1 record, or
@@ -243,7 +243,7 @@ defmodule RisiMe.Agent.CallTranscribe do
     end
   end
 
-  # v1.44 §39.9: in a group call, a user in the room, or one who already is a participant of
+  # v1.45 §40.9: in a group call, a user in the room, or one who already is a participant of
   # the call's newest session (left the room since: may still stop).
   defp participant(%{group: true}, user, room, call_id) do
     in_room? = is_map(room) and user in room.users
@@ -280,7 +280,7 @@ defmodule RisiMe.Agent.CallTranscribe do
 
   defp call_rec(rec, conv), do: Map.put(rec, :official, conv)
 
-  # v1.44 §39.9: a group call's own conversation, an Official `grp:` with Official on.
+  # v1.45 §40.9: a group call's own conversation, an Official `grp:` with Official on.
   defp official(%{group: true} = rec, conv) do
     case RisiMe.Groups.get_group(conv) do
       %{tab: "official"} when conv == rec.conv ->
@@ -302,7 +302,7 @@ defmodule RisiMe.Agent.CallTranscribe do
     end
   end
 
-  # v1.44 §39.9: the requester in the room; every other human in it with a live
+  # v1.45 §40.9: the requester in the room; every other human in it with a live
   # `call_transcribe` device (and at least one); never while the §27.7 listener runs.
   defp request_checks("request", user, device_id, %{group: true}, room) do
     others = if is_map(room), do: room.users -- [user], else: []
@@ -431,7 +431,7 @@ defmodule RisiMe.Agent.CallTranscribe do
 
   defp upload_state(%Session{state: "on"}), do: :ok
   defp upload_state(%Session{state: "requested"}), do: {:error, 409, :not_consented}
-  # v1.44 §39.9: paused until a joiner allows.
+  # v1.45 §40.9: paused until a joiner allows.
   defp upload_state(%Session{state: "paused"}), do: {:error, 409, :not_consented}
   defp upload_state(_), do: {:error, 409, :stopped}
 
@@ -467,7 +467,7 @@ defmodule RisiMe.Agent.CallTranscribe do
         Map.merge(rec, %{official: s.conversation_id, chat: s.chat_id})
 
       _ ->
-        # A group session has more than two participants (v1.44 §39.9); the 1:1 shape is kept.
+        # A group session has more than two participants (v1.45 §40.9); the 1:1 shape is kept.
         [a | rest] = Session.user_ids(s)
         b = List.first(rest) || a
         %{from: a, to: b, conv: s.chat_id, official: s.conversation_id, media: "audio"}

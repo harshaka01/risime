@@ -21,7 +21,7 @@ data class FriendsState(
     val blocked: List<BlockedUser> = emptyList(),
     /** §21.4 (v1.20): lowercased user ids of friends whose phone isn't confirmed ("Phone not verified"). */
     val unconfirmed: Set<String> = emptySet(),
-    /** v1.44 §39.1: lowercased user ids of friends with `group_calls: false` ("can't join calls yet"; absent = can). */
+    /** v1.45 §40.1: lowercased user ids of friends with `group_calls: false` ("can't join calls yet"; absent = can). */
     val noGroupCalls: Set<String> = emptySet(),
 )
 

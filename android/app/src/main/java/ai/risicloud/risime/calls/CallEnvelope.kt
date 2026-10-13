@@ -39,7 +39,7 @@ object CallEnvelope {
     /** §23.2 a 1:1 voice↔video switch (ephemeral, `ring: false`). */
     const val SWITCH = "call_switch"
 
-    /** v1.44 §39.5 a 1:1 call moves into a group call (`move`), or the peer couldn't follow (`failed`). Ephemeral, `ring: false`. */
+    /** v1.45 §40.5 a 1:1 call moves into a group call (`move`), or the peer couldn't follow (`failed`). Ephemeral, `ring: false`. */
     const val ESCALATE = "call_escalate"
 
     /** Every call envelope type (the `call_` namespace). */
@@ -49,7 +49,7 @@ object CallEnvelope {
     const val FEATURE_SWITCH = "switch"
     const val FEATURE_SCREEN = "screen"
 
-    /** v1.44 §39.1: this device can move the call into a group call (it advertises `add_to_call`). */
+    /** v1.45 §40.1: this device can move the call into a group call (it advertises `add_to_call`). */
     const val FEATURE_ADD = "add"
     const val MAX_FEATURES = 8
     const val MAX_FEATURE_BYTES = 32
@@ -103,11 +103,11 @@ object CallEnvelope {
     const val R_BUSY = "busy"
     const val R_FAILED = "failed"
 
-    /** v1.44 §39.5: the call continued as a group call (`moved_to`); older apps render it as "Voice call". */
+    /** v1.45 §40.5: the call continued as a group call (`moved_to`); older apps render it as "Voice call". */
     const val R_MOVED = "moved"
     val END_REASONS = setOf(R_HANGUP, R_CANCELLED, R_TIMEOUT, R_DECLINED, R_BUSY, R_FAILED, R_MOVED)
 
-    /** v1.44 §39.5 `call_escalate` states and the peer's `failed` reasons. */
+    /** v1.45 §40.5 `call_escalate` states and the peer's `failed` reasons. */
     const val ESC_MOVE = "move"
     const val ESC_FAILED = "failed"
     const val ESC_NO_GROUP = "no_group"
@@ -117,7 +117,7 @@ object CallEnvelope {
     const val ESC_CANCELLED = "cancelled"
     val ESC_FAIL_REASONS = setOf(ESC_NO_GROUP, ESC_ROOM, ESC_KEYS, ESC_BUSY, ESC_CANCELLED)
 
-    /** v1.44 §39.4: at most 31 users in `ring_users`. */
+    /** v1.45 §40.4: at most 31 users in `ring_users`. */
     const val MAX_RING_USERS = 31
 
     data class Candidate(val candidate: String, val sdpMid: String?, val sdpMLineIndex: Int)
@@ -153,14 +153,14 @@ object CallEnvelope {
         val sentAt: String,
         /** v1.27 §27.7: `"listen"` when the starter chose Risi listening; null = absent ("off"). */
         val risi: String? = null,
-        /** v1.44 §39.4: only these users' devices ring (null = every other member, v1.19). */
+        /** v1.45 §40.4: only these users' devices ring (null = every other member, v1.19). */
         val ringUsers: List<String>? = null,
     ) : Env {
         override val type get() = OFFER
     }
 
     /**
-     * v1.44 §39.5 `call_escalate` on the 1:1 path: [state] `move` (adder → peer) with the group
+     * v1.45 §40.5 `call_escalate` on the 1:1 path: [state] `move` (adder → peer) with the group
      * [conversationId], its [roomCallId] and [media]; `failed` (peer → adder) with [reason].
      */
     data class Escalate(
@@ -175,7 +175,7 @@ object CallEnvelope {
         override val type get() = ESCALATE
     }
 
-    /** v1.44 §39.5 `call_end.moved_to`: where the call continued. */
+    /** v1.45 §40.5 `call_end.moved_to`: where the call continued. */
     data class MovedTo(val conversationId: String, val callId: String)
 
     /** §20.3 `call_member`: the sender's device joined or declined (it names only its sender). */
@@ -231,7 +231,7 @@ object CallEnvelope {
         val media: String = MEDIA_AUDIO,
         /** Local only, never encoded: did THIS device place the call (null = not known here). Stored in the history line as [CallRecords.DIR]. */
         val outgoing: Boolean? = null,
-        /** v1.44 §39.5: with `reason: "moved"`, the group call it continued as. */
+        /** v1.45 §40.5: with `reason: "moved"`, the group call it continued as. */
         val movedTo: MovedTo? = null,
     ) : Env {
         override val type get() = END
@@ -385,7 +385,7 @@ object CallEnvelope {
                         if (str("mode") != MODE_SFU) return drop("mode ${(m as? JsonPrimitive)?.contentOrNull}")
                         if (obj["sdp"] != null) return drop("sdp in an sfu offer")
                         if (obj["restart"].let { it != null && it != JsonNull && bool("restart") != false }) return drop("restart in an sfu offer")
-                        // v1.44 §39.4: `ring_users` absent = everyone; present = 1–31 lowercase user UUIDs.
+                        // v1.45 §40.4: `ring_users` absent = everyone; present = 1–31 lowercase user UUIDs.
                         val ringUsers = when (val ru = obj["ring_users"]) {
                             null, JsonNull -> null
                             is JsonArray -> {
@@ -520,7 +520,7 @@ object CallEnvelope {
                     null, JsonNull -> MEDIA_AUDIO
                     else -> str("media")?.takeIf { it in MEDIAS } ?: return drop("media")
                 }
-                // v1.44 §39.5: `moved_to` is display only: a malformed one is ignored, not fatal.
+                // v1.45 §40.5: `moved_to` is display only: a malformed one is ignored, not fatal.
                 val movedTo = (obj["moved_to"] as? JsonObject)?.let { mt ->
                     val c = (mt["conversation_id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
                     val id = (mt["call_id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull

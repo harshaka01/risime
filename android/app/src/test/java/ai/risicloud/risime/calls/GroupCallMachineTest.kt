@@ -408,7 +408,7 @@ class GroupCallMachineTest {
         assertEquals(CallNotice.LOST_CONNECTION, r.m.state.value!!.notice)
     }
 
-    // ---- v1.44 §39.4 ring_users and re-rings ----
+    // ---- v1.45 §40.4 ring_users and re-rings ----
 
     private fun TestScope.ringOffer(r: Rig, ringUsers: List<String>?, at: Long = testScheduler.currentTime + 1_791_451_200_000L) {
         backgroundScope.launchNow { r.m.onSignal(InboundCall(conv, "u-b", "b1", at, CallEnvelope.SfuOffer(callId, "audio", CallStateMachine.iso(at), ringUsers = ringUsers), media = "audio")) }

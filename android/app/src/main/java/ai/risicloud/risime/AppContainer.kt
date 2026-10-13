@@ -1878,7 +1878,7 @@ class AppContainer(
         }
         override fun dmChatForCall(conv: String): String? = chatTabs.dmChatForCall(conv)
 
-        // ---- v1.44 §39 adding people to a call ----
+        // ---- v1.45 §40 adding people to a call ----
         override suspend fun createCallGroup(members: List<String>, official: Boolean): ai.risicloud.risime.calls.MoveGroup? {
             val myName = sessionStore.current()?.user?.displayName?.trim()?.substringBefore(' ')?.takeIf { it.isNotBlank() } ?: "me"
             val firsts = members.map { displayName(it).trim().substringBefore(' ').ifBlank { "…" } }.sortedBy { it.lowercase() }
@@ -1897,7 +1897,7 @@ class AppContainer(
                 startOfficialForNewGroup(conv)
                 return ai.risicloud.risime.calls.MoveGroup(conv)
             }
-            // §39.0: an Official call moves into the Official conversation, if it is active within 15 s.
+            // §40.0: an Official call moves into the Official conversation, if it is active within 15 s.
             val off = (startOfficial(conv) as? ApiResult.Ok)?.value?.id
             if (off != null) chatTabs.setLastTab(conv, ai.risicloud.risime.data.tabs.Tab.OFFICIAL)
             val active = off != null && kotlinx.coroutines.withTimeoutOrNull(15_000) {
@@ -1938,7 +1938,7 @@ class AppContainer(
         }
     }
 
-    /** v1.44 §39.2/§39.4 what the Add participant picker shows for the call [s]. */
+    /** v1.45 §40.2/§40.4 what the Add participant picker shows for the call [s]. */
     data class AddPicker(val candidates: List<ai.risicloud.risime.calls.AddCandidate>, val room: Int, val peerName: String?, val groupName: String?, val official: Boolean)
 
     suspend fun callAddPicker(s: ai.risicloud.risime.calls.CallSnapshot): AddPicker = withContext(Dispatchers.IO) {
@@ -1962,7 +1962,7 @@ class AppContainer(
         }
     }
 
-    /** v1.44 §39.2/§39.4 the picker's Add: move a 1:1 call, or ring members / add friends to the group and ring them. */
+    /** v1.45 §40.2/§40.4 the picker's Add: move a 1:1 call, or ring members / add friends to the group and ring them. */
     fun onCallAddPicked(s: ai.risicloud.risime.calls.CallSnapshot, ring: List<String>, add: List<String>) {
         if (!s.group) return calls.addPeople(add)
         scope.launch {
@@ -1971,7 +1971,7 @@ class AppContainer(
                 android.util.Log.i("RisiMe", "calls: ring again ${ring.size}: $r")
             }
             if (add.isEmpty()) return@launch
-            // §39.4 (b): the group add (both tabs, §24.3), then the ring once the add commit is merged here.
+            // §40.4 (b): the group add (both tabs, §24.3), then the ring once the add commit is merged here.
             val conv = s.conversationId
             val payload = ai.risicloud.risime.net.ProtocolJson.encodeToString(ai.risicloud.risime.data.groups.UsersPayload.serializer(), ai.risicloud.risime.data.groups.UsersPayload(add))
             val id = groupStore.queueLocal(conv, ai.risicloud.risime.data.groups.GroupOpType.ADD, payload)
@@ -1993,7 +1993,7 @@ class AppContainer(
                 android.util.Log.w("RisiMe", "calls: the added people are not in the group MLS state yet")
                 return@launch
             }
-            // §20.3: 1 ring per group per 10 s (v1.44): a ring a moment ago waits its turn.
+            // §20.3: 1 ring per group per 10 s (v1.45): a ring a moment ago waits its turn.
             repeat(3) {
                 val r = calls.ringAgain(add)
                 if (r is ai.risicloud.risime.calls.SignalOutcome.Ok) return@launch

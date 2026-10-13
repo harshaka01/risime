@@ -1,6 +1,6 @@
 defmodule RisiMe.Agent.CallTranscribeGroupTest do
   @moduledoc """
-  Contract v1.44 §39.9 (activates §36.9): transcription of Official **group** calls. The call
+  Contract v1.45 §40.9 (activates §36.9): transcription of Official **group** calls. The call
   record comes from the group ring; the participants are the human users in the LiveKit room
   (the fake LiveKit); a joiner is `pending` (a `requested` session waits for them, an `on` one is
   `paused` until they allow; decline stops for everyone; 30 s → `stopped`/`expired`); `left` only

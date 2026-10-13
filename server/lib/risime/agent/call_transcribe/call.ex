@@ -64,7 +64,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   end
 
   @doc """
-  One push. `room` (v1.44 §39.9, group calls): the room's human users as read for this push
+  One push. `room` (v1.45 §40.9, group calls): the room's human users as read for this push
   (`%{users, listen}`, or `:gone`); nil for a 1:1 call. Joiners are synced before the action.
   """
   def push(pid, user, device, action, p, room \\ nil),
@@ -140,7 +140,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   def handle_info({:expire, sid}, %{session: %Session{session_id: sid, state: "requested"}} = st),
     do: {:noreply, finalize(st, "expired", "expired", nil, false)}
 
-  # v1.44 §39.9: a joiner didn't answer within 30 s of the pause.
+  # v1.45 §40.9: a joiner didn't answer within 30 s of the pause.
   def handle_info({:expire, sid}, %{session: %Session{session_id: sid, state: "paused"}} = st),
     do: {:noreply, finalize(st, "stopped", "expired", nil, false)}
 
@@ -174,7 +174,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
   def handle_info({:tick, _sid}, st), do: {:noreply, st}
 
-  # v1.44 §39.9: a group session reads the room on every tick while it is live (joiners, the
+  # v1.45 §40.9: a group session reads the room on every tick while it is live (joiners, the
   # room gone). A LiveKit error skips this tick.
   def handle_info({:room, sid}, %{session: %Session{session_id: sid} = s} = st) do
     if Session.live?(s) do
@@ -230,8 +230,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     end)
   end
 
-  # §36.2 `left`: a 1:1 ends when one participant sent nothing for 90 s; a group call (v1.44
-  # §39.9) only when no participant has uploaded for 90 s (people leave and the rest go on).
+  # §36.2 `left`: a 1:1 ends when one participant sent nothing for 90 s; a group call (v1.45
+  # §40.9) only when no participant has uploaded for 90 s (people leave and the rest go on).
   defp left?(%{rec: %{group: true}} = st, now, left_ms),
     do: Enum.all?(st.rt.parts, fn {_u, p} -> now - p.last_chunk_at >= left_ms end)
 
@@ -240,7 +240,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
   defp group?(st), do: Map.get(st.rec, :group) == true
 
-  ## The room (v1.44 §39.9, group calls)
+  ## The room (v1.45 §40.9, group calls)
 
   # The room's human users as read now: joiners become `pending` (a `requested` session waits
   # for them too; an `on` one is `paused` until they allow, 30 s); the room gone ends it.
@@ -421,7 +421,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     t = CallTranscribe.timing()
     at = Clock.ts(now)
 
-    # v1.44 §39.9: a group call asks every other human in the room; a 1:1 call the peer.
+    # v1.45 §40.9: a group call asks every other human in the room; a 1:1 call the peer.
     others =
       cond do
         group?(st) and is_map(room) -> room.users -- [user]
@@ -510,7 +510,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     put_timer(st, :tick, {:tick, s.session_id}, t.tick_ms)
   end
 
-  # v1.44 §39.9: every joiner allowed: the paused session is `on` again (same runtime).
+  # v1.45 §40.9: every joiner allowed: the paused session is `on` again (same runtime).
   defp resume_on(st, s) do
     s = %{s | state: "on", expires_at: nil}
     st |> cancel_timer(:expire) |> save(s)

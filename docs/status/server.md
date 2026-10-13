@@ -2203,14 +2203,14 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
 - `daily_summaries_test` failed on local Sundays (week rollup row and second model call); `examples_v130_test` failed once its fixed date left the buffer window: `list_agent_messages` now also covers the Risi clock date (no change when the clock is the wall clock).
 
 
-## v1.44 §39 adding people to a call (decision 086) — READY v1.44 (server; not deployed)
+## v1.45 §40 adding people to a call (decision 086) — READY v1.45 (server; not deployed)
 - **Capability** `add_to_call`, kept only with `group_calls` and `call_switch` (`devices.ex`).
 - **`Friend.group_calls`** in `GET /friends`: a `group_calls` device that can still receive (§12.1 census rules,
   superseded devices skipped; `MLS.Images.ready_users/3`).
-- **Group ring limits** (§39.4): `ring: true` 1 per user per group per 10 s (sliding window, test-shortenable via
+- **Group ring limits** (§40.4): `ring: true` 1 per user per group per 10 s (sliding window, test-shortenable via
   `:group_ring_window_ms`) and 20 per user per hour (were 30 s / 10). `call_escalate` needs nothing new: it is an
   ordinary 1:1 `ring: false` signal.
-- **§39.9 Official group-call transcription** (`agent/call_transcribe*.ex`): a group `ring: true` signal records
+- **§40.9 Official group-call transcription** (`agent/call_transcribe*.ex`): a group `ring: true` signal records
   `{conv, starter, media, group: true}` (`note_group_ring/4`, 4 h); participants are the human users in the LiveKit
   room (`room_users/2`: `ListRooms` + `ListParticipants` of the §20.2 room name, agents excluded), read on every push
   and on a per-session room tick; joiner → `pending` (requested waits; on → **`paused`**, uploads `409
@@ -2219,6 +2219,6 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
   `call_transcribe` device, or nobody else); `busy` while the room metadata says `r: 1` (the §27.7 listener — not
   implemented on the server yet, so this never fires today); `not_participant` for a user neither in the room nor in
   the session. The 1:1 path is unchanged (all v1.39 tests green).
-- **Tests:** `test/contract/examples_v144_test.exs` (every v1.44 example), `test/risime/agent/call_transcribe_group_test.exs`
+- **Tests:** `test/contract/examples_v145_test.exs` (every v1.45 example), `test/risime/agent/call_transcribe_group_test.exs`
   (11), the updated ring-limit test in `group_calls_v119_test.exs`. Gate: `mix format --check-formatted && mix compile
   --warnings-as-errors && MIX_TEST_PARTITION=gc mix test` → **1429 tests, 0 failures** (11 skipped, 10 excluded).
