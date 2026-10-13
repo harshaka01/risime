@@ -61,6 +61,31 @@ release on 127.0.0.1:4000 behind Caddy) and the existing Keycloak, and must neve
   text and seconds, marking the model Auto would use (the service's own compare set, including any
   candidates added there later, e.g. omniASR).
 
+- **Model families (Part 12):** the page also lists Qwen-Sinhala, omniASR 1B/3B/7B, Whisper, the Tamil
+  models and Phone (on-device). A family counts as installed only when the speech service serves an alias
+  that matches it. Phone is the phone's own recogniser (developer flag `phone_stt`) and is never a server model.
+
+### Page 2: Voices (text-to-speech), `/admin/voices` (amendment 2026-10-14, Part 12 item 2)
+- `RisiMe.Agent.TTS` is a **behaviour** (`engine/0`, `voices/0`, `synthesize/3` returning audio plus
+  `first_audio_ms`) with a **registry**, `config :risime, :risi_tts_engines, [modules]` (default `[]`). No
+  engine is built here: the Kokoro service for Call Risi plugs in by implementing the behaviour. The catalogue
+  shows Kokoro, Orpheus, Chatterbox, MMS, Indic Parler and Phone TTS, and any engine that isn't registered
+  shows "not installed".
+- Per language (si, mixed/Singlish, ta, en): Auto or an installed voice, stored in the same runtime-settings
+  table and 5-s cache (key `tts_voice_<lang>`, env `RISI_TTS_VOICE_<LANG>`).
+- **The hook:** `TTS.voice_for(lang)` returns `:auto` (the caller keeps today's route, its own default voice)
+  or `{:manual, voice_id}`. With nothing set it is always `:auto` (parity test).
+- **Test:** the admin types a sentence (up to 300 characters). Every installed voice speaks it in turn, and the
+  page shows the time to first audio and a player (the audio sits in the page as a `data:` URI; CSP
+  `media-src 'self' data:`). The sentence is not stored: the audit log records only its length.
+
+### Auto on both pages (Part 12 item 3)
+`RisiMe.Agent.VoiceAuto.status/1`. Auto is the default; a manual choice beats it until it is set back. Today
+no per-model Index exists, so **Auto = today's route exactly**. The Voice agent will write daily per-model
+rows to `risi_agent_scores` (`agent = "voice"`, `source = "index_stt"` / `"index_tts"`). The page reports
+whether such rows exist, but Auto still never switches by itself until the switcher ships (the promotion
+rule plus the note in Harsha's Risi chat, described below).
+
 ## Agent design
 - **Owning agent: Voice** (decision 084/085: calls and voice notes). The console is a tool for the human
   admin; the routing choice belongs to the Voice agent.

@@ -44,6 +44,28 @@ nightly release, the Caddy change, the Keycloak redirect URI and the `.env` line
 - **Test:** pick a dev clip from `RISI_ADMIN_TEST_CLIPS_DIR` and every candidate (the service's compare set)
   runs side by side, showing its text and seconds. The page never reads customer voice notes.
 
+- **Models table:** Qwen-Sinhala, omniASR 1B/3B/7B, Whisper, Tamil models and Phone (on-device). Each shows
+  the aliases the speech service serves, or "not installed". Phone is on the phone only.
+
+## Page 2: Voices (text-to-speech), `/admin/voices`
+- For each language (Sinhala, Mixed / Singlish, Tamil, English), choose Auto or an installed voice. Saving
+  applies within 5 s, with no deploy, through the same settings table and cache.
+- Engines: Kokoro, Orpheus, Chatterbox, MMS, Indic Parler and Phone TTS. The page lists only engines
+  registered in `config :risime, :risi_tts_engines` as installed. Today none are registered, so all show
+  "not installed".
+- **For the Kokoro service builder:** implement the `RisiMe.Agent.TTS` behaviour (`engine/0`, `voices/0`,
+  `synthesize/3` returning `%{audio, content_type, first_audio_ms, total_ms}`) and add the module to
+  `:risi_tts_engines`. Before speaking, call `RisiMe.Agent.TTS.voice_for(lang)`: `:auto` means use your own
+  default voice, and `{:manual, id}` means use that voice.
+- **Test:** type a sentence. Every installed voice speaks it, with the time to first audio and a player. The
+  sentence is not stored.
+
+## Auto (both pages)
+Auto is the default. With no per-model Intelligence Index yet, it is today's route exactly (parity tests). The
+plan is in decision 089: the Voice agent writes `risi_agent_scores` rows (`voice` / `index_stt`,
+`index_tts`), switches only through the promotion rule, and posts in Harsha's Risi chat when it switches.
+Each page shows Auto's current basis.
+
 ## Operating notes
 - Add or remove admins over rpc until the Users and admins page exists (both are audit-logged; the last admin
   can never be removed):
