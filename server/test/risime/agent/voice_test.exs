@@ -233,11 +233,15 @@ defmodule RisiMe.Agent.VoiceTest do
       # No plaintext audio anywhere: the blob store holds the ciphertext only, nothing new was
       # written there or in the temp dir, and the buffered working copy has no key or blob id.
       assert blob_files() == before_blobs
-      # (The temp dir is shared with other processes: whatever appeared there holds no audio.)
+
+      # (The temp dir is shared with other processes: whatever appeared there holds no audio. Files
+      # this process can't read belong to other users/processes, e.g. Docker's runc-process*, and
+      # can't have been written by the server under test.)
       for f <- MapSet.difference(File.ls!(System.tmp_dir!()) |> MapSet.new(), before_tmp),
           path = Path.join(System.tmp_dir!(), f),
           File.regular?(path),
-          do: refute(File.read!(path) =~ audio)
+          {:ok, content} <- [File.read(path)],
+          do: refute(content =~ audio)
 
       for f <- blob_files() do
         content = File.read!(f)
