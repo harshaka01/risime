@@ -211,7 +211,8 @@ reqs="$(grep -c '^OGREQ' "$WORK/og.log" || true)"
 DEV=A; dm_private "ZZ Call B" || fail "polish: A back to the 1:1 (switch off)"
 send_text "mp-off-1 https://example.org/off" || fail "polish: A can't send with the switch off"
 wait_node 'mp-off-1.*(Sent|Delivered|Read)' 40 || fail "polish: the switch-off message never went out"
-DEV=B; wait_node 'mp-off-1' 60 || fail "polish: B never got the switch-off message"
+DEV=B; dm_private "ZZ Call A" || fail "polish: B back to the 1:1 Private tab"
+wait_node 'mp-off-1' 60 || fail "polish: B never got the switch-off message"
 sleep 3
 for DEV in A B; do
   dump; [ "$(count_nodes 'Link preview: [^,]*, [^,]*, mp-off-1|Link preview.*mp-off-1')" = 0 ] || fail "polish: $DEV shows a card with the switch off"
