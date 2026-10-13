@@ -66,7 +66,9 @@ byte-exact re-encode). **Device gate** `scripts/messaging-polish-test` (+ `scrip
 redroids -mp1/-mp2 on 5752/5753, temp server 127.0.0.1:4417, fake-llm 8199, OG page 127.0.0.1:8781): swipe-reply quote
 in 1:1 Private, a group and 1:1 Official; the example.org card on both phones (fetched once, by the sender); switch off →
 no fetch, no card; no URL or preview text in the server log, Postgres or Cassandra. Prints "MPTEST OK" / "MPTEST FAIL
-<reason>"; screenshots `docs/status/screens/69-*.png`.
+<reason>"; screenshots `docs/status/screens/69-*.png`. **Result 13 Oct: MPTEST OK** (Postgres 306 rows, Cassandra 310 rows
+searched, no hit; the first run found and fixed a real bug: the MLS-state read ran on the main thread and silently
+skipped the preview).
 
 ## READY v1.43 §38.9 ask, never guess (13 Oct; next APK)
 `PROTOCOL_VERSION` 1.43. `ActionItem.claim`, `RisiActionCard.remindersSkill`, `RisiActions143.ITEM_CLAIM`. Official card:
