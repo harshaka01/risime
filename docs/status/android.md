@@ -3065,3 +3065,15 @@ typing rules, LIKE search instead of FTS, exported schemas + migration guard, re
     from the group, and new messages don't reach it.
 47. E2EE on, 32-bit phone (armeabi-v7a): it registers with MLS (the server shows `mls` for its
     device), and a chat with it becomes encrypted.
+
+## v1.46 §12.12.9 P0 hotfix (incident 2026-10-13, decision 088), 2026-10-13
+- **"Starting Official…" watchdog** (`ChatTabsController.startingView`, `AppContainer.rekickOfficial`):
+  - re-kicks every 20 s;
+  - after 60 s shows the reason (`official_starting_reason`) and Try again (`official_try_again`).
+- **Epoch 0** is built only as `created_by` (`officialEpoch0Mine`).
+- **1:1 Official waiting strip** says "Waiting for <name> to open RisiMe". Every waiting strip has Try again
+  (`e2ee_try_again`).
+- **`RejoinRules.group(official = true)`:** resets at `candidates: 0` at once.
+- **`PROTOCOL_VERSION`** is 1.46.
+- **Gate:** `./gradlew assembleDebug testDebugUnitTest` green, including `OfficialStartWatchdogTest` (7 tests,
+  with parity for Private, group and DM).

@@ -2222,3 +2222,25 @@ Call pushes also still log `call push: result=<r>`. Tests: `server/test/risime/p
 - **Tests:** `test/contract/examples_v145_test.exs` (every v1.45 example), `test/risime/agent/call_transcribe_group_test.exs`
   (11), the updated ring-limit test in `group_calls_v119_test.exs`. Gate: `mix format --check-formatted && mix compile
   --warnings-as-errors && MIX_TEST_PARTITION=gc mix test` → **1429 tests, 0 failures** (11 skipped, 10 excluded).
+
+## v1.46 §12.12.9 P0 hotfix (incident 2026-10-13, decision 088), 2026-10-13
+- **Risi re-adds devices in Official only:**
+  - Risi is the first candidate for member-committable `devices` ops (`Ops.risi_can_commit?/3`).
+  - The flow is `group_op` → `Agent.Conversation` → `MLS.claim_for_readd/2` → NIF `change_members/4` →
+    `Groups.Commit.commit/4` with `op_id`.
+  - Risi's leaf no longer closes the §12.4a gate.
+- **Official candidates:** they drop devices that can never commit. `rejoin_guard` allows an Official admin
+  reset at `candidates: 0` at once.
+- **`POST …/official` hand-over:** a `creating` group older than 60 s goes to the caller (`Chats.take_over/2`).
+- **Health agent:** `RisiMe.Agents.Health`, cron every 5 min, `RISI_AGENT_HEALTH` default `canary`, table
+  `risi_health_stuck`, scoreboard row `health`.
+- **Tests:**
+  - `official_never_waits_v146_test.exs` (9);
+  - `health_agent_test.exs` (5);
+  - the NIF end-to-end re-add in `agent_tree_test.exs`;
+  - `risi_chat_s10` updated (Risi is now a candidate in the Risi chat).
+- **Gate (p0 partition):** 1456 tests. 3 failures fixed after the run:
+  - the flags default and the Risi-chat candidates tests (behaviour change);
+  - S6/S7, failing before this hotfix because the step-2 `memory_ingest` job is enqueued beside `extract`.
+
+  Every touched file was re-run green.

@@ -396,3 +396,12 @@ can ship through the fast lane (483b14d); the client part needs the next APK. Ga
   (`--no-voice` skips 4b; `RC_SPEECH_URL`, `RC_CLIP_PORT` default 8169).
 - **Backlog:** spoken replies from Risi (BACKLOG.md).
 - `--live` (risi-l1 through the same proxy) is implemented but not run in this session.
+
+## Decision 088 (2026-10-13, P0 hotfix)
+- **Risi's device commits** the re-add of a member's new phone, in Official only.
+- **The Health agent** (`RisiMe.Agents.Health`, flag `RISI_AGENT_HEALTH`, default `canary`):
+  - sweeps every 5 min;
+  - makes safe Official repairs;
+  - posts `ops_alert` `conversation_stuck` to the `RISI_DEV_USERS` Risi chats;
+  - writes the daily scoreboard row `health` (accuracy = reliability).
+- **Device gate:** `scripts/official-start-test`.
