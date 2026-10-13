@@ -1,0 +1,41 @@
+# risime-tts: Kokoro-82M text-to-speech for "Call Risi" (decision 090). Binds 127.0.0.1:8230 only
+# (rule 6); no Caddy route. Clients: the risi-voice media worker (streaming PCM) and the admin console's
+# Voices page through RisiMe.Agent.TTS.Kokoro. Offline: the model and voices are mounted read-only from
+# ~/risime-eval-models/kokoro-82m (Apache-2.0); no hub, no telemetry; no text or audio is logged or stored.
+#   docker compose --env-file .env -f infra/docker-compose.tts.yml up -d --build
+# Optional in .env: TTS_API_KEY (Bearer token; then set the same for the server).
+name: risime-tts
+services:
+  tts:
+    build:
+      context: voice
+      dockerfile: Dockerfile.tts
+    image: risime/tts:kokoro-0.9.4-1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8230:8230"
+    gpus: all
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # Kokoro-82M: ~0.5 GB of weights (unified memory, outside this cgroup) + torch/Python on the host side.
+    mem_limit: 4g
+    environment:
+      TTS_API_KEY: ${TTS_API_KEY:-}
+      TTS_THREADS: ${TTS_THREADS:-4}
+      TTS_DEFAULT_VOICE: ${TTS_DEFAULT_VOICE:-af_heart}
+    volumes:
+      - ${HOME}/risime-eval-models/kokoro-82m:/models/kokoro-82m:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8230/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

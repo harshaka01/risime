@@ -1,0 +1,18 @@
+# risime-tts: Kokoro-82M (Apache-2.0) text-to-speech on the GB10 GPU for "Call Risi" (decision 090).
+# Base: NVIDIA's vLLM container (NGC, arm64, CUDA torch), already on spark2 for risi-l1 and the base of
+# risime-whisper, so no layer is downloaded again. Only small pip packages are added (kokoro, misaki,
+# spacy's en_core_web_sm). The model and voices are mounted read-only from ~/risime-eval-models/kokoro-82m.
+# CPU torch measured 660 ms p50 to the first audio (RTF 0.36): too slow for the 1.5-s budget.
+ARG BASE=nvcr.io/nvidia/vllm:26.09-py3
+FROM ${BASE}
+# The NGC image pins torch through PIP_CONSTRAINT, so kokoro's unpinned torch requirement keeps NVIDIA's build.
+RUN pip install --no-cache-dir "kokoro==0.9.4" "misaki[en]==0.9.4" \
+      "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" \
+ && python3 -c "import kokoro, misaki, torch; print('kokoro', kokoro.__version__, 'torch', torch.__version__)"
+COPY tts_server.py /app/
+WORKDIR /app
+USER 1000:1000
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 DO_NOT_TRACK=1 \
+    HOME=/tmp KOKORO_DIR=/models/kokoro-82m TTS_HOST=0.0.0.0
+EXPOSE 8230
+ENTRYPOINT ["python3", "-I", "/app/tts_server.py"]
