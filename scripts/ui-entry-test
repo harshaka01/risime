@@ -248,14 +248,14 @@ rules = [
      "actions": [{"tool": "final", "answer": "UIBATCH actions ready.", "sources": [],
                   "next_steps": ["Connect your calendar in Settings", "Check if I'm free on Monday"]}]},
     {"name": "uibatch_monday", "task": "risi_next_action", "match": "(?i)free on monday",
-     "actions": [{"tool": "final", "answer": "UIBATCH monday answer.", "sources": [], "next_steps": []}]},
+     "actions": [{"tool": "final", "answer": "UIBATCH monday answer.", "sources": [], "next_steps": []}]},  # replaced by the server's agenda (§34.1)
     {"name": "uibatch_md", "task": "risi_next_action", "match": "(?i)uibatch markdown",
      "actions": [{"tool": "final", "answer": "Plan: **bold text** and __more bold__ here.\n\n- item one\n- item two", "sources": [], "next_steps": []}]},
     {"name": "uibatch_chip_tap", "task": "risi_next_action", "match": "(?i)uib chip tell me more",
      "actions": [{"tool": "final", "answer": "UIBATCH chip answered.", "sources": [], "next_steps": []}]},
     {"name": "uibatch_week", "task": "risi_next_action", "match": "(?i)what.?s on my calendar this week",
      "actions": [{"tool": "calendar_check", "args": {"from": os.environ.get("UIB_FROM", "2099-01-01") + "T00:00", "to": os.environ.get("UIB_TO", "2099-01-08") + "T00:00"}},
-                 {"tool": "final", "answer": "UIBATCH week answer.", "sources": ["c1"], "next_steps": []}]},
+                 {"tool": "final", "answer": "UIBATCH week answer.", "sources": ["c1"], "next_steps": []}]},  # replaced by the server's agenda (§34.1)
     # Step 12 (P0): Harsha's request → one calendar_add proposal (the action card), and the chips the
     # model offered on the phone (a confirm phrase and a question are hidden; the third only fills).
     {"name": "calendar_shenika", "task": "risi_next_action", "match": "(?i)interview with shenika",
@@ -2950,7 +2950,10 @@ ui_batch_calendar() {
   tap "Ask Risi…" || true; sleep 0.5
   A shell input text "what%ss%son%smy%scalendar%sthis%sweek"; sleep 0.5
   tap "Send" || fail "ui-batch calendar: send the week question"
-  wait_for "UIBATCH week answer." 120 || fail "ui-batch calendar: no answer to 'what's on my calendar this week'"
+  # v1.35 §34.1 (nightly.48-srv1 on): a schedule question's answer is built by the SERVER from the forced read
+  # ("<range>: your phone shows its events below." + the "Checked:" line), never the model's text, so the fake
+  # model's "UIBATCH week answer." never shows. Wait for the Checked line naming the calendar seeded in this step.
+  wait_for "Phone calendar (RisiMe Seed)" 120 || fail "ui-batch calendar: no answer to 'what's on my calendar this week'"
   sleep 3; dump
   has "I couldn" && fail "ui-batch calendar: Risi says it couldn't read the calendar"
   has "0 events" && fail "ui-batch calendar: Risi's answer says '0 events'"
@@ -3139,9 +3142,14 @@ PY
   m0="$(grep -c "free on Monday" "$WORK/llm-requests.jsonl" 2>/dev/null || true)"
   wait_text "Check if I'm free on Monday" 30 || fail "ui-batch chips: the second chip is gone"
   tap "Check if I'm free on Monday" || fail "ui-batch chips: tap the second chip"
-  wait_for "UIBATCH monday answer." 90 || fail "ui-batch chips: the second chip started no Risi turn"
-  m1="$(grep -c "free on Monday" "$WORK/llm-requests.jsonl" 2>/dev/null || true)"
-  [ "${m1:-0}" -gt "${m0:-0}" ] || fail "ui-batch chips: the fake-llm got no request with the chip's text"
+  # "free on Monday" is a schedule question: its answer is the server's agenda (§34.1), never the fake model's
+  # "UIBATCH monday answer.", so the turn is proven by the fake-llm request (made after the forced read).
+  for _ in $(seq 1 90); do
+    m1="$(grep -c "free on Monday" "$WORK/llm-requests.jsonl" 2>/dev/null || true)"
+    [ "${m1:-0}" -gt "${m0:-0}" ] && break; sleep 1
+  done
+  [ "${m1:-0}" -gt "${m0:-0}" ] || fail "ui-batch chips: the second chip started no Risi turn (the fake-llm got no request with the chip's text)"
+  sleep 3
   has 'text="Ask Risi…"' || fail "ui-batch chips: the composer isn't empty after the chip"
   pass "ui-batch chips: 'Check if I'm free on Monday' sends a Risi request (fake-llm saw it); no chip text pre-filled the composer"
   A shell am broadcast -a "$SEED" -p "$P" --es op clear >/dev/null 2>&1 || true
