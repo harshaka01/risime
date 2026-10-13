@@ -16,8 +16,8 @@
 //!
 //! **Official only** (§24.0): `join_from_welcome` into a group whose `group_meta` is not
 //! `tab: official` (a `dm:` group, a Private group) is refused with `:private_tab` and changes
-//! nothing; `encrypt`, `process_detailed`, `process_commits` and `self_update` refuse such a group
-//! too.
+//! nothing; `encrypt`, `process_detailed`, `process_commits`, `self_update` and `change_members`
+//! refuse such a group too.
 //!
 //! Every NIF runs on a dirty CPU scheduler, and a handle serialises its calls with a mutex.
 
@@ -402,6 +402,32 @@ fn self_update<'a>(env: Env<'a>, h: ResourceArc<Handle>, group_id: Binary) -> Te
         env,
         &h,
         |c| c.self_update(group_id.as_slice()),
+        group_commit,
+    )
+}
+
+/// v1.46 §12.12.9: `change_members(h, group_id, key_packages, remove)`, `remove` =
+/// `[{user_id, device_id}]`. Official groups only.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn change_members<'a>(
+    env: Env<'a>,
+    h: ResourceArc<Handle>,
+    group_id: Binary,
+    key_packages: Vec<Binary>,
+    remove: Vec<(String, String)>,
+) -> Term<'a> {
+    let mut ds = Vec::with_capacity(remove.len());
+    for (u, d) in remove {
+        match DeviceId::new(u, d) {
+            Ok(d) => ds.push(d),
+            Err(_) => return bad_arg(env, "bad device"),
+        }
+    }
+    let kps: Vec<Vec<u8>> = key_packages.iter().map(|b| b.as_slice().to_vec()).collect();
+    with(
+        env,
+        &h,
+        |c| c.change_members(group_id.as_slice(), &kps, &ds),
         group_commit,
     )
 }

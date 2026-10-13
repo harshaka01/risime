@@ -201,6 +201,23 @@ impl RisiClient {
         })
     }
 
+    /// Contract v1.46 §12.12.9: one commit that adds the owners of `key_packages` and removes
+    /// `remove` in an **Official** group (Risi re-adds an existing member's new device). The
+    /// core's §12.4a/§24.1 policy applies as for any non-admin member: only devices of a user who
+    /// still has a leaf, never an agent, a removal only with its re-add. Follow with
+    /// `commit_accepted` / `commit_rejected`.
+    pub fn change_members(
+        &mut self,
+        group_id: &[u8],
+        key_packages: &[Vec<u8>],
+        remove: &[DeviceId],
+    ) -> Result<WithJournal<GroupCommit>> {
+        self.run(|c| {
+            Self::require_official(c, group_id)?;
+            Ok(c.change_members(group_id, key_packages, remove)?)
+        })
+    }
+
     pub fn commit_accepted(&mut self, group_id: &[u8]) -> Result<WithJournal<u64>> {
         self.run(|c| Ok(c.commit_accepted(group_id)?))
     }
@@ -540,6 +557,79 @@ mod tests {
             alice
                 .create_group_with_meta(PRIVATE, &kps, &private)
                 .is_err()
+        );
+    }
+
+    fn human_dev(user: &str, dev: &str) -> Client {
+        let a = attestor();
+        let mut c = Client::open(
+            Arc::new(MemoryKvStore::new()),
+            DeviceId::new(user, dev).unwrap(),
+            a.anchors(),
+        )
+        .unwrap();
+        let jws = a.attest(c.device(), &c.signature_public_key(), 1_760_000_000);
+        c.set_attestation(&jws).unwrap();
+        c
+    }
+
+    /// v1.46 §12.12.9: Risi commits the re-add of an existing member's new device in Official.
+    #[test]
+    fn risi_re_adds_a_members_new_device_in_official() {
+        let mut rows = Rows::new();
+        let mut risi = open(&mut rows, RISI_DEV, true);
+        let alice = invite(&mut rows, &mut risi, OFFICIAL, &official_meta(&[RISI]));
+
+        // Alice reinstalled: a new device with a new key package; her old leaf stays.
+        let alice2 = human_dev("alice", "d2");
+        let kp = alice2.generate_key_packages(1).unwrap();
+        let (gc, j) = risi.change_members(OFFICIAL, &kp, &[]).unwrap();
+        apply(&mut rows, j);
+        let (e, j) = risi.commit_accepted(OFFICIAL).unwrap();
+        apply(&mut rows, j);
+        alice.process(OFFICIAL, &gc.commit).unwrap();
+        assert_eq!(alice.epoch(OFFICIAL).unwrap(), e);
+        alice2
+            .join_from_welcome(gc.welcome.as_ref().unwrap())
+            .unwrap();
+        let (out, j) = risi.encrypt(OFFICIAL, b"welcome back", b"").unwrap();
+        apply(&mut rows, j);
+        assert_eq!(alice2.decrypt(OFFICIAL, &out).unwrap(), b"welcome back");
+        let ct = alice2.encrypt(OFFICIAL, b"hi from the new phone").unwrap();
+        let (p, j) = risi.process_detailed(OFFICIAL, &ct).unwrap();
+        apply(&mut rows, j);
+        assert!(matches!(p.incoming, Incoming::Application { .. }));
+
+        // A user with no leaf can't be added by Risi (a non-admin): the core refuses.
+        let mallory = human_dev("mallory", "d1");
+        let kp = mallory.generate_key_packages(1).unwrap();
+        assert!(risi.change_members(OFFICIAL, &kp, &[]).is_err());
+        // A standalone removal of another user's leaf is refused too.
+        let old = DeviceId::new("alice", "d1").unwrap();
+        assert!(risi.change_members(OFFICIAL, &[], &[old]).is_err());
+        assert_eq!(risi.epoch(OFFICIAL).unwrap().0, e);
+    }
+
+    #[test]
+    fn change_members_is_refused_outside_official() {
+        let mut rows = Rows::new();
+        let mut c = open(&mut rows, RISI_DEV, false);
+        let alice = human("alice");
+        let (kps, j) = c.generate_key_packages(1).unwrap();
+        apply(&mut rows, j);
+        let private = GroupMeta::new("Site team", vec!["alice".into()]);
+        let gc = alice
+            .create_group_with_meta(PRIVATE, &kps, &private)
+            .unwrap();
+        alice.commit_accepted(PRIVATE).unwrap();
+        c.client
+            .join_from_welcome(gc.welcome.as_ref().unwrap())
+            .unwrap();
+        let alice2 = human_dev("alice", "d2");
+        let kp = alice2.generate_key_packages(1).unwrap();
+        assert_eq!(
+            c.change_members(PRIVATE, &kp, &[]).unwrap_err(),
+            Error::PrivateTab
         );
     }
 
