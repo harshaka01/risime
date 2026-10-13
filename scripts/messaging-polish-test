@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# PART 11 device gate (android-added; v1.44 §39 link previews + swipe-to-reply on §33.9 `reply_to`): two redroid
+# phones with the real app. Standalone (own redroid pair -mp1/-mp2 on 5752/5753, temp server on 127.0.0.1:4417 with
+# its own DB/keyspace risime_calltest_mp, fake-llm on 8199, a local Open Graph page on 127.0.0.1:8781):
+# scripts/call-device-test's setup (temp server with TABS=on RISI=on, sign-in through the real UI, friends, e2ee DM),
+# then scripts/messaging-polish-scenario.sh:
+#   - swipe right on a message → the quote bar → the reply shows the quote on the other phone (1:1 Private, a group,
+#     1:1 Official);
+#   - a message with https://example.org/… shows a preview card on both phones (the sender's debug-only test route sends
+#     example.org to the local OG page through adb reverse; the receiver fetches nothing);
+#   - with Settings → Chats → "Link previews" off: no fetch, no card;
+#   - the server's log and its database (Postgres and Cassandra) contain no URL text; logcat clean.
+#
+#   scripts/messaging-polish-test [--apk app-debug.apk] [--keep]
+#
+# Prints "MPTEST PASS|FAIL …" lines and "MPTEST OK" at the end (or "MPTEST FAIL <reason>").
+# Screenshots: docs/status/screens/69-*.png.
+set -uo pipefail
+args=(); while [ $# -gt 0 ]; do
+  if [ "$1" = --apk ] && [ $# -gt 1 ]; then args+=(--apk "$(realpath "$2")"); shift 2; else args+=("$1"); shift; fi
+done
+set -- "${args[@]+"${args[@]}"}"
+cd "$(dirname "$0")/.."
+export CALLTEST_BACK_ONLY=1
+export CALLTEST_EXTRA="$PWD/scripts/messaging-polish-scenario.sh"
+export CALLTEST_INSTANCE="${CALLTEST_INSTANCE:-_mp}"
+export CALLTEST_PORT="${CALLTEST_PORT:-4417}"
+export CALLTEST_LLM_PORT="${CALLTEST_LLM_PORT:-8199}"
+export CALLTEST_REDROID_A="${CALLTEST_REDROID_A:--mp1}" CALLTEST_REDROID_A_PORT="${CALLTEST_REDROID_A_PORT:-5752}"
+export CALLTEST_REDROID_B="${CALLTEST_REDROID_B:--mp2}" CALLTEST_REDROID_B_PORT="${CALLTEST_REDROID_B_PORT:-5753}"
+export MP_OG_PORT="${MP_OG_PORT:-8781}"
+ss -ltnH "sport = :$MP_OG_PORT" | grep -q . && { echo "MPTEST FAIL the OG page port $MP_OG_PORT is busy (set MP_OG_PORT)"; exit 1; }
+out="$(mktemp)"
+trap 'rm -f "$out"' EXIT
+scripts/call-device-test "$@" 2>&1 | tee "$out" | sed -u -E 's/^CALLTEST (PASS|FAIL|WARN) /MPTEST \1 /'
+rc="${PIPESTATUS[0]}"
+if [ "$rc" = 0 ] && grep -q '^CALLTEST OK' "$out" && ! grep -q '^CALLTEST FAIL' "$out"; then
+  echo "MPTEST OK"
+  exit 0
+fi
+reason="$(grep -m1 '^CALLTEST FAIL' "$out" | sed 's/^CALLTEST FAIL //')"
+echo "MPTEST FAIL ${reason:-setup failed (exit $rc), see the output above}"
+exit 1
