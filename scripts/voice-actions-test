@@ -217,7 +217,7 @@ read -r FRI WED < <(python3 -I -c 'import datetime as d; t=d.date.today(); n=lam
 python3 -I - "$WORK/va-script.json" "$FRI" "$WED" <<'PY'
 import json, sys
 path, fri, wed = sys.argv[1], sys.argv[2], sys.argv[3]
-def items(p_owner, m_owner, sinhala=False):
+def items(p_owner, m_owner, sinhala=False, unowned=False):
     promise = "වාර්තාව සිකුරාදා වන විට අශේන්ට යවන්නම්" if sinhala else "Send the report to Ashen"
     lang = "si" if sinhala else "en"
     return [
@@ -227,7 +227,11 @@ def items(p_owner, m_owner, sinhala=False):
          "due_text": "Wednesday 10 am", "source": ["m1"], "lang": lang, "confidence": 0.9},
         {"kind": "question", "text": "Which venue for the launch?", "owner": None, "counterparts": [], "due_local": None,
          "due_text": None, "source": ["m1"], "lang": lang, "confidence": 0.9},
-    ]
+    ] + ([
+        # v1.43 §38.9: an unowned, undated task → "It's mine" for any member, then Risi asks when.
+        {"kind": "task", "text": "Book the van", "owner": None, "counterparts": [], "due_local": None,
+         "due_text": None, "source": ["m1"], "lang": lang, "confidence": 0.9},
+    ] if unowned else [])
 rules = []
 us = [f"u{n}" for n in range(1, 6)]
 # A call: two speakers (the first speaker's line before the second's) → promise to the first, meeting to the second.
@@ -241,7 +245,7 @@ for x in us:
     rules.append({"name": f"note_si_{x}", "task": "action_items", "match": f'(?s)"from":"{x}".*[඀-෿]',
                   "actions": [{"summary": None, "items": items(x, x, sinhala=True)}]})
 for x in us:
-    rules.append({"name": f"note_{x}", "task": "action_items", "match": f'"from":"{x}"', "actions": [{"summary": None, "items": items(x, x)}]})
+    rules.append({"name": f"note_{x}", "task": "action_items", "match": f'"from":"{x}"', "actions": [{"summary": None, "items": items(x, x, unowned=True)}]})
 json.dump({"v": 1, "rules": rules}, open(path, "w"), ensure_ascii=False)
 PY
 tmux kill-session -t "risime-calltest-llm$SUF" 2>/dev/null || true
@@ -350,10 +354,31 @@ played=""; for _ in $(seq 1 10); do [ "$(A logcat -d 2>/dev/null | grep -c 'Risi
 vashot source-jump
 pass "actions: a tap on an item jumps to the voice note (transcript expanded, playback seeked)"
 
+# ---------------------------------------------------------------- 4c. v1.43 §38.9: an unowned item → It's mine; undated → Risi asks when
+DEV=B; dm_tab "ZZ Call A" official >/dev/null || true
+scroll_to '^Action item: Book the van' 4 down || true
+wait_node '^Action item: Book the van · Unassigned' 20 || fail "actions: the unowned task isn't shown as Unassigned"
+tap_below '^Action item: Book the van' "^It.s mine$" || fail "actions: no It's mine under the unowned task"
+wait_node '^Action item: Book the van · You' 60 || fail "actions: B's Official card didn't follow the claim (owner)"
+vashot claim-official-b
+open_risi_chat || fail "actions: B has no Risi chat (claim)"
+ok=""; for _ in $(seq 1 30); do dump; [ "$(count_nodes '^Action item: Book the van · You')" -gt 0 ] && { ok=1; break; }; A shell input swipe 540 1500 540 700 300; sleep 2; done
+[ -n "$ok" ] || fail "actions: the claimer got no action_confirm for the claimed task"
+tap_below '^Action item: Book the van' '^Add to My promises$' || fail "actions: no Add to My promises on the claimed task"
+ok=""; for _ in $(seq 1 30); do dump; [ "$(count_nodes 'When is .Book the van. due')" -gt 0 ] && { ok=1; break; }; A shell input swipe 540 1500 540 700 300; sleep 2; done
+[ -n "$ok" ] || fail "actions: confirming the undated task didn't ask for the date (item_clarify)"
+vashot claim-ask-date
+DEV=A; dm_tab "ZZ Call B" official >/dev/null || true
+ok=""; for _ in $(seq 1 30); do dump; [ "$(count_nodes '^Action item: Book the van · ZZ Call B')" -gt 0 ] && { ok=1; break; }; A shell input swipe 540 1500 540 700 300; sleep 2; done
+[ -n "$ok" ] || fail "actions: the other member's Official card didn't learn the claimer"
+pass "actions: unowned task → It's mine (first claim, owner on both cards), confirm → Risi asks for the date"
+
 # ---------------------------------------------------------------- 5. A's Risi chat: confirm, calendar asks first
 DEV=A; open_risi_chat || fail "actions: A has no Risi chat"
 wait_node '^Action item: Send the report to Ashen · You' 90 || fail "actions: no action_confirm card in A's Risi chat"
 vashot confirm-card
+# v1.43 §38.9: the all-day promise offers Add to calendar too; Remind me with the Reminders skill off explains itself.
+dump; [ "$(count_nodes 'Reminders come here in your Risi chat')" -gt 0 ] || fail "actions: no Reminders note on the confirm card (skill off)"
 tap_below '^Action item: Send the report to Ashen' '^Add to My promises$' || fail "actions: no Add to My promises on the promise"
 ok=""; for _ in $(seq 1 30); do dump; [ "$(count_nodes 'Send the report to Ashen · .*confirmed')" -gt 0 ] && { ok=1; break; }; sleep 2; done
 [ -n "$ok" ] || fail "actions: the promise never turned confirmed after Add to My promises"
