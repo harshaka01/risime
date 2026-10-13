@@ -41,7 +41,9 @@ BANNED = [
 CASE_SENSITIVE = [(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b", "env/setting name")]
 
 
-def main(path):
+def main(path, min_b=MIN_B):
+    for k in ("New", "Fixed"):
+        SECTIONS[k] = (min_b, MAX_B)
     try:
         text = open(path, encoding="utf-8").read()
     except OSError as e:
@@ -78,7 +80,7 @@ def main(path):
                 errs.append(f"line {n}: {why}: '{hit.group(0)}'")
     for name, (lo, hi) in SECTIONS.items():
         got = len(sections.get(name, []))
-        if name != "Coming soon" and name not in sections:
+        if name != "Coming soon" and name not in sections and lo > 0:
             errs.append(f"missing section '## {name}'")
         elif not lo <= got <= hi:
             errs.append(f"'## {name}' has {got} bullets (needs {lo}–{hi})")
@@ -92,7 +94,11 @@ def main(path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    mn = MIN_B
+    if len(args) == 3 and args[0] == "--min":  # only for the old app's one-off "moved" notice
+        mn, args = int(args[1]), args[2:]
+    if len(args) != 1:
         print(__doc__)
         sys.exit(2)
-    sys.exit(main(sys.argv[1]))
+    sys.exit(main(args[0], mn))
