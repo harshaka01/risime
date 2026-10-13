@@ -50,7 +50,13 @@ stuck `devices` ops, then runs `Groups.Commit.reset/4` (§12.8) with H's current
   device from its key packages, and Risi);
 - nothing is deleted on any phone (rule 9), and old Official messages stay local.
 
-Repair time: _to be filled when run_.
+Repair time: the manual script was not needed in the end.
+- **B (H ↔ V):** recovered on its own at **09:32 UTC**. V's phone opened and committed the re-add of H's new phone,
+  at epoch 6.
+- **A (H ↔ R):** repaired by the hotfix at **13:45 UTC**, one minute after v0.3.0-nightly.6 went live at 13:43. Risi
+  committed the re-add of R's current phone at 13:45:01 (epoch 2) and of H's current phone at 13:45:06 (epoch 3),
+  under §12.12.9 (decision 088). Neither person opened the app for it. One leftover `devices` op is for a device
+  that no longer exists; the Health agent closes it.
 
 ## Permanent fixes (hotfix nightly)
 See the "Permanent fixes" section below, written by the hotfix work. In short:
