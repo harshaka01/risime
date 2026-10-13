@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Call Risi end-to-end latency harness (decision 090):
+#   scripts/call-risi-harness [--echo -6] [--rounds N] [--pilot-like]
+# 1. Starts a THROWAWAY LiveKit (the pilot's image, loopback only: signalling 127.0.0.1:$LK_PORT, media
+#    UDP 41900-41999 on 127.0.0.1, throwaway keys; the live LiveKit is never touched).
+# 2. Makes synthetic caller clips with risime-tts (voice am_michael; labelled synthetic, not real speech).
+# 3. Runs scripts/call_risi_harness.exs: the real session, media worker, whisper, risi-l1 (streamed) and
+#    Kokoro; a headless caller plays the clips and measures first audio after it stops talking, a barge-in,
+#    and optionally an echo test (Risi's audio fed back into the caller's mic at --echo dB).
+# Needs: risime-tts up (infra/docker-compose.tts.yml), whisper, risi-l1, ~/risime-voice/venv.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+root="$PWD"
+img=livekit/livekit-server:v1.13.9
+name=risime-livekit-callrisi
+export LK_PORT="${LK_PORT:-17896}"
+echo_db=""
+rounds=1
+pilot_like=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --echo) echo_db="$2"; shift 2 ;;
+    --rounds) rounds="$2"; shift 2 ;;
+    --pilot-like) pilot_like=1; shift ;;
+    *) echo "usage: $0 [--echo DB] [--rounds N] [--pilot-like]" >&2; exit 2 ;;
+  esac
+done
+py="${VOICE_PYTHON:-$HOME/risime-voice/venv/bin/python}"
+tmp=$(mktemp -d)
+cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"; }
+trap cleanup EXIT
+fail() { echo "HARNESS FAIL $*" >&2; exit 1; }
+avail=$(awk '/MemAvailable/ {print int($2/1048576)}' /proc/meminfo)
+[ "$avail" -ge 3 ] || fail "MemAvailable ${avail} GB < 3 GB"
+curl -sf --max-time 3 http://127.0.0.1:8230/health >/dev/null || fail "risime-tts is not up"
+ss -ltnH "sport = :$LK_PORT" | grep -q . && fail "port $LK_PORT busy"
+
+if [ "$pilot_like" = 1 ]; then
+  # The pilot's node_ip (the public address, NAT 1:1) with loopback media and the loopback candidate:
+  # does the 1:1 rewrite leave a candidate a process on spark2 (the worker) can reach? Media still
+  # binds 127.0.0.1 only (rule 6).
+  sed -e "s/^port: 7880/port: $LK_PORT/" \
+      -e 's/^  port_range_start: .*/  port_range_start: 41900/' \
+      -e 's/^  port_range_end: .*/  port_range_end: 41999/' \
+      -e 's#^      - 10\.20\.20\.15/32#      - 127.0.0.1/32#' \
+      -e 's/^  enable_loopback_candidate: .*/  enable_loopback_candidate: true/' \
+      infra/livekit/livekit.yaml > "$tmp/livekit.yaml"
+else
+  sed -e "s/^port: 7880/port: $LK_PORT/" \
+      -e 's/^  port_range_start: .*/  port_range_start: 41900/' \
+      -e 's/^  port_range_end: .*/  port_range_end: 41999/' \
+      -e 's/^  node_ip: .*/  node_ip: 127.0.0.1/' \
+      -e 's#^      - 10\.20\.20\.15/32#      - 127.0.0.1/32#' \
+      -e 's/^  enable_loopback_candidate: .*/  enable_loopback_candidate: true/' \
+      -e 's/^    - host: 203\.189\.69\.76/    - host: 127.0.0.1/' \
+      infra/livekit/livekit.yaml > "$tmp/livekit.yaml"
+  ! grep -q '10\.20\.20\.15\|203\.189\.69\.76\|203\.115\.26\.139' <(grep -v '^ *#' "$tmp/livekit.yaml") || fail "public address left in the throwaway config"
+fi
+chmod 644 "$tmp/livekit.yaml"
+export LIVEKIT_API_KEY="APIcr$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+export LIVEKIT_API_SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+TURN_SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '/+=')"; export TURN_SECRET
+docker run -d --name "$name" --network host --user 65534:65534 \
+  -e LIVEKIT_API_KEY -e LIVEKIT_API_SECRET -e TURN_SECRET \
+  -v "$tmp/livekit.yaml:/etc/livekit/livekit.yaml:ro" -v "$PWD/infra/livekit/entrypoint.sh:/risime-entrypoint.sh:ro" \
+  --read-only --tmpfs /tmp:size=4m,mode=1777 --cap-drop ALL --security-opt no-new-privileges:true \
+  --entrypoint /risime-entrypoint.sh "$img" >/dev/null
+for _ in $(seq 1 30); do [ "$(curl -s --max-time 1 "http://127.0.0.1:$LK_PORT/" || true)" = OK ] && break; sleep 1; done
+[ "$(curl -s --max-time 2 "http://127.0.0.1:$LK_PORT/" || true)" = OK ] || fail "LiveKit didn't start"
+
+# Synthetic caller clips (a male Kokoro voice; Risi speaks af_heart).
+say() { curl -sf --max-time 30 -o "$tmp/$1.wav" -H 'Content-Type: application/json' \
+  -d "{\"text\": \"$2\", \"voice\": \"kokoro:am_michael\"}" "http://127.0.0.1:8230/v1/tts?format=wav" || fail "tts $1"; }
+say q1 "Hi Risi, how are you doing today?"
+say q2 "Can you give me a quick tip for staying focused at work?"
+say q3 "What's on my calendar tomorrow?"
+say q4 "Tell me one interesting fact about elephants."
+say q5 "Thanks, that's all for now."
+say barge "Wait, stop. Just tell me the time zone of Sri Lanka."
+clips="$tmp/q1.wav,$tmp/q2.wav,$tmp/q3.wav,$tmp/q4.wav,$tmp/q5.wav"
+
+lk_key="$LIVEKIT_API_KEY"; lk_secret="$LIVEKIT_API_SECRET"
+set -a; . "$root/.env"; set +a
+export LIVEKIT_API_KEY="$lk_key" LIVEKIT_API_SECRET="$lk_secret"   # the throwaway keys, not .env's
+export VOICE_PYTHON="$py" VOICE_WORKER="$root/infra/voice/risi_voice_worker.py" CALLER="$root/infra/voice/harness_caller.py"
+export CALLER_WAVS="$clips" BARGE_WAV="$tmp/barge.wav" ROUNDS="$rounds"
+[ -n "$echo_db" ] && export ECHO_DB="$echo_db"
+cd server
+MIX_ENV=test ~/.local/bin/mise exec -- mix run --no-start ../scripts/call_risi_harness.exs

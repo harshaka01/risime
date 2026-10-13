@@ -40,7 +40,9 @@ defmodule RisiMe.Agents.Scoreboard do
     "action_feedback" => "voice",
     "transcribe" => "voice",
     "transcribe_compare" => "voice",
-    "route" => "router"
+    "route" => "router",
+    # Decision 090: Call Risi's streamed answers; its per-turn timings are `voice_call` runs.
+    "voice_call_answer" => "voice_call"
   }
 
   @doc "The agent a learning-log task belongs to."

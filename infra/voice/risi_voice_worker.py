@@ -1,0 +1,403 @@
+"""risi-voice: Risi's media worker for "Call Risi" (decision 090).
+
+A thin media bridge (infrastructure, no decisions): it joins one LiveKit room as Risi, cleans the
+caller's audio (WebRTC APM echo cancellation against Risi's own outgoing audio + high-pass, then
+RNNoise), finds the caller's turns (Silero VAD + end-of-turn silence), hands each finished utterance
+to the Elixir Voice agent, and speaks what the agent tells it to (Kokoro via risime-tts on loopback),
+stopping at once on barge-in. Everything is in memory; nothing is written to disk or logged.
+
+It runs as an Erlang Port of `RisiMe.Agent.CallRisi.Session` ({:packet, 4}: a 4-byte big-endian
+length, then one JSON object) and dies with it (stdin EOF -> leave and exit).
+
+Commands (Elixir -> worker):
+  {"cmd": "join", "url", "token", "caller", "tts_url", "tts_key"?, "eot_ms"?, "barge_ms"?, "min_speech_ms"?}
+  {"cmd": "say", "seq", "utt", "text", "voice", "speed"?}     queue a sentence for utterance `utt`
+  {"cmd": "stop_speaking"}                                    drop everything queued and playing
+  {"cmd": "leave"}
+Events (worker -> Elixir):
+  {"ev": "joined"} / {"ev": "caller_joined"} / {"ev": "caller_left"} / {"ev": "left", "reason"}
+  {"ev": "speech_start", "speaking": bool}
+  {"ev": "barge_in", "utt_playing": int|null}
+  {"ev": "utterance", "utt": int, "pcm16k": base64 s16le mono, "speech_ms", "eot_wait_ms"}
+  {"ev": "first_audio", "utt", "seq", "after_end_ms", "tts_first_ms"}   first Risi frame of a turn
+  {"ev": "said", "seq", "utt", "ms", "interrupted": bool}
+  {"ev": "idle"}                                              nothing queued or playing any more
+  {"ev": "error", "code"}
+"""
+
+import asyncio
+import collections
+import base64
+import json
+import os
+import struct
+import sys
+import threading
+import time
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("DO_NOT_TRACK", "1")
+
+import aiohttp  # noqa: E402
+import numpy as np  # noqa: E402
+import soxr  # noqa: E402
+import torch  # noqa: E402
+from livekit import rtc  # noqa: E402
+from pyrnnoise import rnnoise as _rnn  # noqa: E402
+from silero_vad import load_silero_vad  # noqa: E402
+
+torch.set_num_threads(1)
+
+SR = 48000
+FRAME = 480  # 10 ms at 48 kHz (RNNoise's and APM's frame)
+VAD_SR = 16000
+VAD_WIN = 512  # 32 ms at 16 kHz (Silero's window)
+WIN_MS = 32
+MAX_UTT_S = 30
+PREROLL_WINS = 10  # 320 ms kept before the speech start
+TAIL_MS = 700
+ECHO_RATIO = 0.35
+BARGE_KEEP_WINS = 94  # 3 s kept while Risi speaks (a barge-in run may start that far back)
+
+
+def now_ms():
+    return time.monotonic() * 1000.0
+
+
+class Port:
+    """{:packet, 4} JSON over stdin/stdout."""
+
+    def __init__(self, loop):
+        self.loop = loop
+        self.inbox = asyncio.Queue()
+        self.lock = threading.Lock()
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self):
+        stdin = sys.stdin.buffer
+        while True:
+            hdr = stdin.read(4)
+            if len(hdr) < 4:
+                break
+            (n,) = struct.unpack(">I", hdr)
+            body = stdin.read(n)
+            if len(body) < n:
+                break
+            try:
+                msg = json.loads(body)
+            except ValueError:
+                continue
+            self.loop.call_soon_threadsafe(self.inbox.put_nowait, msg)
+        self.loop.call_soon_threadsafe(self.inbox.put_nowait, {"cmd": "leave", "reason": "port_closed"})
+
+    def send(self, ev):
+        data = json.dumps(ev, separators=(",", ":")).encode()
+        with self.lock:
+            try:
+                sys.stdout.buffer.write(struct.pack(">I", len(data)) + data)
+                sys.stdout.buffer.flush()
+            except (BrokenPipeError, ValueError):
+                # The session (the Port's owner) is gone: so is this call.
+                os._exit(0)
+
+
+class Denoiser:
+    """RNNoise on 10-ms frames at 48 kHz (BSD-3; pyrnnoise's bundled librnnoise)."""
+
+    def __init__(self):
+        self.state = _rnn.lib.rnnoise_create(None)
+        self.inp = (_rnn.ctypes.c_float * FRAME)()
+        self.out = (_rnn.ctypes.c_float * FRAME)()
+
+    def frame(self, pcm_i16):
+        np.copyto(np.frombuffer(self.inp, dtype=np.float32), pcm_i16.astype(np.float32))
+        _rnn.lib.rnnoise_process_frame(self.state, self.out, self.inp)
+        return np.frombuffer(self.out, dtype=np.float32).copy()
+
+    def close(self):
+        if self.state:
+            _rnn.lib.rnnoise_destroy(self.state)
+            self.state = None
+
+
+class Worker:
+    def __init__(self, port):
+        self.port = port
+        self.room = None
+        self.source = None
+        self.apm = rtc.AudioProcessingModule(echo_cancellation=True, high_pass_filter=True)
+        self.vad = load_silero_vad()
+        self.cfg = {}
+        self.caller = None
+        self.say_q = asyncio.Queue()
+        self.play_task = None
+        self.http = None
+        self.speaking = False
+        self.utt_n = 0
+        self.ends = {}  # utt -> monotonic ms of its last voiced window
+        self.first_done = set()
+        self.playing_utt = None
+        self.gen = 0  # bumped on every stop: queued sentences of an older generation are dropped
+        self.listen_task = None
+        # Echo guard (harness 2026-10-14: with Risi's audio fed back at -6 dB and no phone AEC, the
+        # tail of its own sentences was heard as the caller): Risi counts as speaking until
+        # TAIL_MS after its last frame, and while it speaks a barge-in needs the caller's level to
+        # beat ECHO_RATIO x Risi's own recent output level.
+        self.speak_until = 0.0
+        self.out_levels = collections.deque()  # (t_ms, rms) of Risi's frames, last ~1.5 s
+
+    # ---- control
+
+    async def run(self):
+        while True:
+            msg = await self.port.inbox.get()
+            cmd = msg.get("cmd")
+            try:
+                if cmd == "join":
+                    await self.join(msg)
+                elif cmd == "say":
+                    self.say_q.put_nowait((self.gen, msg))
+                elif cmd == "stop_speaking":
+                    self.stop_speaking()
+                elif cmd == "leave":
+                    await self.leave(msg.get("reason", "leave"))
+                    return
+            except Exception as e:  # never crash on one bad command; tell the agent
+                self.port.send({"ev": "error", "code": type(e).__name__})
+
+    async def join(self, msg):
+        self.cfg = {
+            "eot_ms": int(msg.get("eot_ms") or 350),
+            "barge_ms": int(msg.get("barge_ms") or 300),
+            "min_speech_ms": int(msg.get("min_speech_ms") or 250),
+            "tts_url": msg["tts_url"],
+            "tts_key": msg.get("tts_key") or "",
+        }
+        self.caller = msg.get("caller")  # identity prefix "<user_id>/" of the only human allowed
+        self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60, sock_read=15))
+        self.room = rtc.Room()
+        self.room.on("track_subscribed", self.on_track)
+        self.room.on("participant_disconnected", self.on_left)
+        self.room.on("disconnected", lambda *_: self.port.send({"ev": "left", "reason": "disconnected"}))
+        await self.room.connect(msg["url"], msg["token"], rtc.RoomOptions(auto_subscribe=True))
+        self.source = rtc.AudioSource(SR, 1, queue_size_ms=200)
+        track = rtc.LocalAudioTrack.create_audio_track("risi", self.source)
+        opts = rtc.TrackPublishOptions()
+        opts.source = rtc.TrackSource.SOURCE_MICROPHONE
+        await self.room.local_participant.publish_track(track, opts)
+        self.play_task = asyncio.create_task(self.player())
+        self.port.send({"ev": "joined"})
+        for p in self.room.remote_participants.values():
+            for pub in p.track_publications.values():
+                if pub.track is not None:
+                    self.on_track(pub.track, pub, p)
+
+    def allowed(self, participant):
+        return self.caller is None or participant.identity.startswith(self.caller)
+
+    def on_track(self, track, _pub, participant):
+        if track.kind != rtc.TrackKind.KIND_AUDIO or not self.allowed(participant):
+            return
+        if self.listen_task is None:
+            self.port.send({"ev": "caller_joined"})
+            self.listen_task = asyncio.create_task(self.listen(track))
+
+    def on_left(self, participant):
+        if self.allowed(participant):
+            self.port.send({"ev": "caller_left"})
+
+    async def leave(self, reason):
+        self.stop_speaking()
+        if self.room is not None:
+            try:
+                await self.room.disconnect()
+            except Exception:
+                pass
+        if self.http is not None:
+            await self.http.close()
+        self.port.send({"ev": "left", "reason": reason})
+
+    # ---- listening
+
+    async def listen(self, track):
+        stream = rtc.AudioStream(track, sample_rate=SR, num_channels=1, frame_size_ms=10)
+        den = Denoiser()
+        rs = soxr.ResampleStream(SR, VAD_SR, 1, dtype="float32")
+        buf16 = np.zeros(0, dtype=np.float32)
+        lvl = []
+        pre = []
+        utt = None  # list of 16-kHz float windows while in speech
+        voiced = 0
+        run = 0
+        silence = 0
+        speech_ms = 0
+        last_voice = 0.0
+        barged = False
+        try:
+            async for ev in stream:
+                f = ev.frame
+                if f.samples_per_channel != FRAME:
+                    continue
+                self.apm.process_stream(f)  # AEC (reverse = Risi's own audio) + high-pass, in place
+                pcm = np.frombuffer(f.data, dtype=np.int16)
+                lvl.append(float(np.sqrt(np.mean(pcm.astype(np.float32) ** 2))))
+                clean = den.frame(pcm)
+                buf16 = np.concatenate([buf16, rs.resample_chunk(clean / 32768.0)])
+                while len(buf16) >= VAD_WIN:
+                    win, buf16 = buf16[:VAD_WIN], buf16[VAD_WIN:]
+                    p = float(self.vad(torch.from_numpy(win.copy()), VAD_SR).item())
+                    t_now = now_ms()
+                    speaking = self.speaking or t_now < self.speak_until
+                    in_rms = max(lvl[-4:]) if lvl else 0.0
+                    lvl = lvl[-4:]
+                    is_voice = p >= (0.7 if speaking else 0.5)
+                    if speaking and is_voice and in_rms < ECHO_RATIO * self.out_level(t_now):
+                        is_voice = False  # as loud as Risi's own echo would be: not the caller
+                    t = now_ms()
+                    if utt is None:
+                        pre.append(win)
+                        pre = pre[-BARGE_KEEP_WINS:]
+                        # Strictly consecutive voiced windows. (A leaky count that forgave gaps during
+                        # double-talk caught barge-ins sooner but let Risi's own echo through at -6 dB:
+                        # harness 2026-10-14, 3 self-barge-ins. Never hearing itself wins.)
+                        if is_voice:
+                            voiced += 1
+                            run += 1
+                        else:
+                            voiced, run = 0, 0
+                        need = self.cfg["barge_ms"] if speaking else 64
+                        if voiced * WIN_MS >= need:
+                            if speaking and not barged:
+                                barged = True
+                                self.port.send({"ev": "barge_in", "utt_playing": self.playing_utt})
+                                self.stop_speaking()
+                            utt = list(pre[-(run + PREROLL_WINS):])
+                            run = 0
+                            speech_ms = voiced * WIN_MS
+                            silence = 0
+                            last_voice = t
+                            self.port.send({"ev": "speech_start", "speaking": speaking})
+                        continue
+                    utt.append(win)
+                    if is_voice:
+                        speech_ms += WIN_MS
+                        silence = 0
+                        last_voice = t
+                    else:
+                        silence += WIN_MS
+                    too_long = len(utt) * WIN_MS >= MAX_UTT_S * 1000
+                    if silence >= self.cfg["eot_ms"] or too_long:
+                        if speech_ms >= self.cfg["min_speech_ms"] or too_long:
+                            keep = len(utt) - max(0, silence // WIN_MS - 3)  # ~100 ms tail kept
+                            self.emit_utterance(utt[:keep], speech_ms, last_voice)
+                        utt, voiced, run, pre, barged = None, 0, 0, [], False
+        finally:
+            den.close()
+
+    def emit_utterance(self, wins, speech_ms, last_voice):
+        self.utt_n += 1
+        n = self.utt_n
+        self.ends[n] = last_voice
+        pcm = (np.clip(np.concatenate(wins), -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+        self.port.send({
+            "ev": "utterance", "utt": n, "pcm16k": base64.b64encode(pcm).decode(),
+            "speech_ms": speech_ms, "eot_wait_ms": int(now_ms() - last_voice),
+        })
+        # The audio leaves memory with this message (the agent drops it after STT).
+        del pcm
+
+    # ---- speaking
+
+    def out_level(self, t):
+        # Risi's loudest output in the last 800 ms (the echo path is a few hundred ms long).
+        return max((r for (ts, r) in self.out_levels if ts >= t - 800), default=0.0)
+
+    def stop_speaking(self):
+        self.gen += 1
+        while not self.say_q.empty():
+            self.say_q.get_nowait()
+        if self.source is not None:
+            self.source.clear_queue()
+        self.speaking = False
+
+    async def player(self):
+        rs = None
+        while True:
+            gen, msg = await self.say_q.get()
+            if gen != self.gen:
+                continue
+            self.speaking = True
+            self.playing_utt = msg.get("utt")
+            t_say = now_ms()
+            sent = 0
+            first = True
+            interrupted = False
+            rs = soxr.ResampleStream(24000, SR, 1, dtype="int16")
+            rest = np.zeros(0, dtype=np.int16)
+            try:
+                headers = {"Authorization": "Bearer " + self.cfg["tts_key"]} if self.cfg["tts_key"] else {}
+                body = {"text": msg["text"], "voice": msg.get("voice") or "", "speed": msg.get("speed") or 1.0}
+                async with self.http.post(self.cfg["tts_url"] + "/v1/tts", json=body, headers=headers) as r:
+                    if r.status != 200:
+                        self.port.send({"ev": "error", "code": "tts_%d" % r.status})
+                        continue
+                    async for chunk in r.content.iter_chunked(4800):
+                        if gen != self.gen:
+                            interrupted = True
+                            break
+                        pcm = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16)
+                        up = np.concatenate([rest, rs.resample_chunk(pcm)])
+                        n = len(up) // FRAME * FRAME
+                        up, rest = up[:n], up[n:]
+                        for i in range(0, n, FRAME):
+                            if gen != self.gen:
+                                interrupted = True
+                                break
+                            frame = rtc.AudioFrame(up[i:i + FRAME].tobytes(), SR, 1, FRAME)
+                            self.apm.process_reverse_stream(frame)
+                            if first:
+                                first = False
+                                self.first_audio(msg, t_say)
+                            await self.source.capture_frame(frame)
+                            t_out = now_ms()
+                            self.speak_until = t_out + TAIL_MS
+                            seg = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
+                            self.out_levels.append((t_out, float(np.sqrt(np.mean(seg ** 2)))))
+                            while self.out_levels and self.out_levels[0][0] < t_out - 1500:
+                                self.out_levels.popleft()
+                            sent += FRAME
+                        if interrupted:
+                            break
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                self.port.send({"ev": "error", "code": "tts_unreachable"})
+            self.port.send({"ev": "said", "seq": msg.get("seq"), "utt": msg.get("utt"),
+                            "ms": int(sent * 1000 / SR), "interrupted": interrupted or gen != self.gen})
+            if self.say_q.empty() and gen == self.gen:
+                try:
+                    await asyncio.wait_for(self.source.wait_for_playout(), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+                if self.say_q.empty() and gen == self.gen:
+                    self.speaking = False
+                    self.playing_utt = None
+                    self.port.send({"ev": "idle"})
+
+    def first_audio(self, msg, t_say):
+        utt = msg.get("utt")
+        if utt in self.first_done:
+            return
+        self.first_done.add(utt)
+        end = self.ends.get(utt)
+        self.port.send({"ev": "first_audio", "utt": utt, "seq": msg.get("seq"),
+                        "after_end_ms": int(now_ms() - end) if end else None,
+                        "tts_first_ms": int(now_ms() - t_say)})
+
+
+async def main():
+    loop = asyncio.get_running_loop()
+    port = Port(loop)
+    await Worker(port).run()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

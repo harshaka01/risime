@@ -1,0 +1,12 @@
+# The risi-voice media worker's venv (decision 090), ~/risime-voice/venv on spark2 (aarch64).
+# Install: scripts/voice-setup (torch from the CPU index first, then these). All permissive licences:
+# livekit (Apache-2.0), pyrnnoise (Apache-2.0; RNNoise BSD-3), silero-vad (MIT), soxr (LGPL-2.1, dynamic),
+# numpy/aiohttp (BSD/Apache). The Kokoro TTS runs in its own container (Dockerfile.tts), not here.
+livekit==1.1.20
+numpy==2.5.4
+soxr==1.1.0
+aiohttp==3.14.5
+pyrnnoise==0.4.5
+silero-vad==6.2.3
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.8.0+cpu

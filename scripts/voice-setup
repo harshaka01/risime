@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Sets up Call Risi's media worker on spark2 (decision 090): the venv ~/risime-voice/venv (packages in
+# infra/voice/requirements-worker.txt, < 1 GB, no model download: Silero's VAD ships inside its wheel),
+# and installs the worker where the server runs it (RISI_VOICE_WORKER, default ~/risime-voice/risi_voice_worker.py).
+#   scripts/voice-setup            # venv (if missing) + copy the worker
+#   scripts/voice-setup --worker   # only copy the worker (after a change)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+dest="$HOME/risime-voice"
+mkdir -p "$dest"
+if [ "${1:-}" != "--worker" ] && [ ! -x "$dest/venv/bin/python" ]; then
+  python3 -m venv "$dest/venv"
+  "$dest/venv/bin/pip" install -q --upgrade pip
+  "$dest/venv/bin/pip" install -q -r infra/voice/requirements-worker.txt
+fi
+install -m 0644 infra/voice/risi_voice_worker.py "$dest/risi_voice_worker.py"
+"$dest/venv/bin/python" -I -c "import livekit.rtc, pyrnnoise, silero_vad, soxr, aiohttp; print('risi-voice venv ok')"
+echo "worker: $dest/risi_voice_worker.py"

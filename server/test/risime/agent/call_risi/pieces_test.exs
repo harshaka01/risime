@@ -138,6 +138,10 @@ defmodule RisiMe.Agent.CallRisi.PiecesTest do
     end
   end
 
+  test "the scoreboard counts Call Risi's model calls for the voice_call agent" do
+    assert RisiMe.Agents.Scoreboard.agent_of_task("voice_call_answer") == "voice_call"
+  end
+
   test "Kokoro WAV header: 24 kHz mono s16" do
     wav = RisiMe.Agent.TTS.Kokoro.wav(<<0, 0, 1, 0>>)
 
