@@ -1,5 +1,39 @@
 # Android status — 0.2 nightlies
 
+## READY PART 11 (d) swipe-to-reply + (a) v1.44 §39 link previews (13 Oct; next APK)
+**Agent design (decision 085): no agent: infrastructure.** Both are deterministic messaging UI (a gesture on the
+existing §33.9 `reply_to`; a sender-side fetch under fixed rules). Nothing to learn, no model call, no learning-log row.
+**(d) Swipe right to reply** (`ui/chat/LinkPreviewUi.kt` `SwipeToReply`, both `ChatBubble` and `GroupBubble`): the bubble
+follows the finger (right only, capped at 96 dp, resistance past the 64 dp threshold), a reply arrow fades in, one haptic
+tick when the threshold is crossed, release past it opens the quote bar, then it snaps back. Same rule as the Reply
+action (`SelectionRules.replyable` + `canSend`, not in select mode), so it works on text, photos, files and voice notes,
+1:1 and groups, Private and Official. **No wire change** (§33.9 `reply_to`). The long-press menu and the selection bar
+already had Reply (§33.2), unchanged.
+**(a) Link previews** (`PROTOCOL_VERSION` 1.44): `net/Protocol144.kt` (`LinkPreview` strict validator, `LinkUrls`),
+`data/linkpreview/` (`LinkPreviewFetcher`: https only on every hop, manual redirects ≤ 3, `PublicOnlyDns` + IP-literal
+check refuse loopback/link-local/private/CGNAT/ULA/multicast/reserved, no cookies/cache/Referer, 3 s connect, 5 s total,
+HTML ≤ 512 KiB and `text/html` only, image ≤ 2 MiB re-encoded to a §14.4 thumb by `ImagePipeline.previewThumb`;
+`OpenGraph` regex parser; `LinkPreviews` = the Settings switch, default on). **Inline thumb, not a blob** (§39.2: the
+receiver fetches nothing, no quota/TTL, survives backups, forwards need no blob). Sender: `ChatEngine.sendText` shows the
+row pending at once and, only for an E2EE chat with an https link and the switch on, holds that conversation's outbox
+≤ 5 s for the fetch (`previewing`), stores it (`MessageDao.setLinkPreview`, pending rows only) and sends it inside the
+`text` envelope (22 KiB bound: thumb dropped first, then the preview); a plaintext fallback sends the body alone.
+Receiver: `link_preview` validated against the body (bad → ignored, message kept), stored, card drawn from the row only
+(`LinkPreviewCard`; TalkBack "Link preview: <title>, <site>"); links in every bubble are tappable (`linkified`, plus an
+"Open link" TalkBack action). Room **v19** `messages.link_preview TEXT NULL` (`Migration18To19`; tombstones clear it);
+kept in backups and history shares, dropped on forward. Settings → Chats → "Link previews" (a toggleable row).
+Debug-only seam: `LinkPreviewTestReceiver` (`LINK_PREVIEW_TEST`, DUMP-protected) routes one test host to a
+`http://127.0.0.1:<port>` origin (`LinkPreviewTestRoute`, ignored unless `BuildConfig.DEBUG`; no release class).
+**Tests:** `LinkPreviewTest` (validation, thumb rules, envelope bound, grapheme cut, link finding, address filter,
+mixed-DNS refusal, Open Graph, MockWebServer fetch through the route with no Cookie/Referer, refusals, the switch,
+swipe maths), `LinkPreviewEngineTest` (E2EE send waits and carries it; failed fetch sends without; plaintext never
+fetches), `Migration18To19Test` (rule 9: rows and counts unchanged), ContractExamplesTest (the three v1.44 examples,
+byte-exact re-encode). **Device gate** `scripts/messaging-polish-test` (+ `scripts/messaging-polish-scenario.sh`; two
+redroids -mp1/-mp2 on 5752/5753, temp server 127.0.0.1:4417, fake-llm 8199, OG page 127.0.0.1:8781): swipe-reply quote
+in 1:1 Private, a group and 1:1 Official; the example.org card on both phones (fetched once, by the sender); switch off →
+no fetch, no card; no URL or preview text in the server log, Postgres or Cassandra. Prints "MPTEST OK" / "MPTEST FAIL
+<reason>"; screenshots `docs/status/screens/69-*.png`.
+
 ## READY v1.43 §38.9 ask, never guess (13 Oct; next APK)
 `PROTOCOL_VERSION` 1.43. `ActionItem.claim`, `RisiActionCard.remindersSkill`, `RisiActions143.ITEM_CLAIM`. Official card:
 the live owner (`RisiActionItems.live`, from any `item_update` `owner`) and **[It's mine]** under an unowned

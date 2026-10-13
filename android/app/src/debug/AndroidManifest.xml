@@ -38,5 +38,14 @@
                 <action android:name="ai.risicloud.risime.debug.VOICE_INJECT" />
             </intent-filter>
         </receiver>
+        <!-- v1.44 §39.3: the link-preview test route (one test host → a 127.0.0.1 Open Graph page). Same protection. -->
+        <receiver
+            android:name="ai.risicloud.risime.debug.LinkPreviewTestReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="ai.risicloud.risime.debug.LINK_PREVIEW_TEST" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

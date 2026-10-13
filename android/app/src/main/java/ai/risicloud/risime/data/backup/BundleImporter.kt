@@ -234,10 +234,12 @@ class BundleImporter(
         var file: ai.risicloud.risime.data.media.FileEnvelope? = null
         var voice: ai.risicloud.risime.data.media.VoiceEnvelope? = null
         var extras = ai.risicloud.risime.net.EnvelopeExtras.NONE
+        var linkPreview: String? = null
         when (payload) {
             is MlsPayload.Decoded.Text -> {
                 body = payload.body
                 extras = payload.extras
+                linkPreview = payload.linkPreview?.encode()
                 // §24.10: a Risi message in an Official conversation keeps its `risi` object (plain text anywhere else).
                 if (payload.risi != null && conv.lowercase() in officialConvs) systemJson = ai.risicloud.risime.data.tabs.RisiMessages.encode(payload.risi)
             }
@@ -295,7 +297,7 @@ class BundleImporter(
             ackedStatus = if (outgoing) null else if (voice != null && playedAt != null) MessageEntity.ACKED_PLAYED else MessageStatus.READ.name,
             kind = kind, systemJson = systemJson, blobId = image?.blob?.blobId ?: file?.blob?.blobId ?: voice?.blob?.blobId, callId = callId,
             origin = e.origin ?: ORIGIN_BACKUP, sharedBy = e.sharedBy?.lowercase(), fromDevice = e.fromDevice?.lowercase(),
-            forwardHops = extras.forwardHops, replyToMessageId = extras.replyTo?.messageId, replyToFrom = extras.replyTo?.from,
+            forwardHops = extras.forwardHops, replyToMessageId = extras.replyTo?.messageId, replyToFrom = extras.replyTo?.from, linkPreview = linkPreview,
             viewOnce = if (extras.viewOnce) true else null,
             playedAt = if (voice != null) playedAt else null,
         )

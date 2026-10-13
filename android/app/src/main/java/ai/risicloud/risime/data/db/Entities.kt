@@ -80,6 +80,11 @@ data class MessageEntity(
     @ColumnInfo(name = "played_at") val playedAt: Long? = null,
     /** v18 (§37.4): a group voice note's `played` count from `group_receipt` (null: none yet). */
     @ColumnInfo(name = "receipt_played") val receiptPlayed: Int? = null,
+    /**
+     * v19 (v1.44 §39 link previews): a text message's validated `link_preview` as JSON ([ai.risicloud.risime.net.LinkPreview]).
+     * Mine: what the sender's phone fetched (sent inside the E2EE envelope); theirs: from the envelope only (never fetched).
+     */
+    @ColumnInfo(name = "link_preview") val linkPreview: String? = null,
 ) {
     val system: Boolean get() = kind == KIND_SYSTEM
 

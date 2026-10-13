@@ -97,6 +97,22 @@ class ImagePipeline<B>(private val ops: BitmapOps<B>) {
         return out
     }
 
+    /**
+     * v1.44 §39.3 a link preview's image: decoded (sampled near 128 px), re-encoded to a §14.4 thumbnail (no
+     * metadata). Null when it can't be decoded or doesn't fit.
+     */
+    fun previewThumb(source: ByteArray): ImageThumb? {
+        if (source.isEmpty() || source.size > MAX_SOURCE_BYTES) return null
+        val decoded = ops.decode(source, THUMB_SIDES.first()) ?: return null
+        val img = ops.transform(decoded.bitmap, 1, MAX_SIDE)
+        ops.recycle(decoded.bitmap)
+        try {
+            return thumbnail(img)
+        } finally {
+            ops.recycle(img)
+        }
+    }
+
     /** The thumbnail is a downscale of the re-encoded bitmap (never an embedded or MediaStore thumbnail). */
     internal fun thumbnail(img: B): ImageThumb? {
         val flat = if (ops.hasTransparency(img)) ops.flattenOnWhite(img) else null

@@ -26,7 +26,13 @@ object MlsPayload {
 
     sealed interface Decoded {
         /** [risi]: the §24.11 `risi` object, if any (honoured only from an agent leaf in Official). */
-        data class Text(val body: String, val risi: JsonObject? = null, val extras: ai.risicloud.risime.net.EnvelopeExtras = ai.risicloud.risime.net.EnvelopeExtras.NONE) : Decoded
+        data class Text(
+            val body: String,
+            val risi: JsonObject? = null,
+            val extras: ai.risicloud.risime.net.EnvelopeExtras = ai.risicloud.risime.net.EnvelopeExtras.NONE,
+            /** v1.44 §39: the validated `link_preview` (null: absent or ignored as malformed). */
+            val linkPreview: ai.risicloud.risime.net.LinkPreview? = null,
+        ) : Decoded
 
         /** v1.34 §33.13: a strictly validated `file` envelope (a `parts` file is a placeholder). */
         data class File(val envelope: ai.risicloud.risime.data.media.FileEnvelope) : Decoded
@@ -65,16 +71,31 @@ object MlsPayload {
         data class Ignored(val type: String) : Decoded
     }
 
-    /** Sending: UTF-8 JSON `{"v":1,"type":"text","body":"…"}` (+ §33 `forwarded` / `reply_to`). */
-    fun text(body: String, extras: ai.risicloud.risime.net.EnvelopeExtras = ai.risicloud.risime.net.EnvelopeExtras.NONE): ByteArray = ProtocolJson.encodeToString(
-        JsonObject.serializer(),
-        buildJsonObject {
-            put("v", VERSION)
-            put("type", TYPE_TEXT)
-            put("body", body)
-            extras.putInto(this)
-        },
-    ).toByteArray(Charsets.UTF_8)
+    /**
+     * Sending: UTF-8 JSON `{"v":1,"type":"text","body":"…"}` (+ §33 `forwarded` / `reply_to`, + v1.44 §39
+     * `link_preview`). Over the 22 KiB bound (§39.1) the preview's thumb goes first, then the preview.
+     */
+    fun text(
+        body: String,
+        extras: ai.risicloud.risime.net.EnvelopeExtras = ai.risicloud.risime.net.EnvelopeExtras.NONE,
+        linkPreview: ai.risicloud.risime.net.LinkPreview? = null,
+    ): ByteArray {
+        fun enc(lp: JsonObject?) = ProtocolJson.encodeToString(
+            JsonObject.serializer(),
+            buildJsonObject {
+                put("v", VERSION)
+                put("type", TYPE_TEXT)
+                put("body", body)
+                extras.putInto(this)
+                lp?.let { put(ai.risicloud.risime.net.LinkPreview.FIELD, it) }
+            },
+        ).toByteArray(Charsets.UTF_8)
+        val lp = linkPreview ?: return enc(null)
+        val full = enc(lp.toJson())
+        if (full.size <= ai.risicloud.risime.data.media.ImageEnvelope.MAX_ENVELOPE_BYTES) return full
+        val noThumb = enc(lp.toJson(withThumb = false))
+        return if (noThumb.size <= ai.risicloud.risime.data.media.ImageEnvelope.MAX_ENVELOPE_BYTES) noThumb else enc(null)
+    }
 
     /** §11.2 envelope `{"v":1,"type":"reaction","target","emoji","op"}`. */
     fun reaction(target: String, emoji: String, op: String): ByteArray = ProtocolJson.encodeToString(
@@ -165,6 +186,9 @@ object MlsPayload {
         }
         if (type != TYPE_TEXT) return Decoded.Ignored(type)
         val body = (obj["body"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: return Decoded.Ignored("text without body")
-        return Decoded.Text(body, obj["risi"] as? JsonObject, ai.risicloud.risime.net.EnvelopeExtras.of(obj))
+        return Decoded.Text(
+            body, obj["risi"] as? JsonObject, ai.risicloud.risime.net.EnvelopeExtras.of(obj),
+            ai.risicloud.risime.net.LinkPreview.validate(obj[ai.risicloud.risime.net.LinkPreview.FIELD], body),
+        )
     }
 }

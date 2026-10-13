@@ -89,6 +89,12 @@ class FakeMessageDao : MessageDao {
         return 1
     }
 
+    override suspend fun setLinkPreview(clientMsgId: String, json: String?): Int {
+        val r = rows[clientMsgId]?.takeIf { it.outgoing && it.status == "PENDING" && it.kind == MessageEntity.KIND_TEXT } ?: return 0
+        rows[clientMsgId] = r.copy(linkPreview = json)
+        return 1
+    }
+
     override suspend fun setGroupPlayed(messageId: String, played: Int): Int {
         val r = rows.values.firstOrNull { it.messageId == messageId && it.outgoing } ?: return 0
         rows[r.clientMsgId] = r.copy(receiptPlayed = played)

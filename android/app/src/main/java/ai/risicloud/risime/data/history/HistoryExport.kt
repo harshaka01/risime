@@ -179,7 +179,7 @@ object HistoryExport {
                     obj
                 }
                 // v1.34: `forwarded` and `reply_to` travel as part of the payload.
-                else -> json(MlsPayload.text(m.body, ai.risicloud.risime.data.mls.sendExtras(m)))
+                else -> json(MlsPayload.text(m.body, ai.risicloud.risime.data.mls.sendExtras(m), ai.risicloud.risime.net.LinkPreview.decode(m.linkPreview, m.body)))
             }
             val lines = mutableListOf(line(HistoryBundleEntry(id, m.clientMsgId, m.from.lowercase(), m.fromDevice, m.serverTs!!, payload)))
             for (r in reactions[id].orEmpty().sortedBy { ms(it.confirmedTs) ?: 0 }) {

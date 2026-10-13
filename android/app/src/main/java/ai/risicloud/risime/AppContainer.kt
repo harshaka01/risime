@@ -1077,6 +1077,19 @@ class AppContainer(
     val imageDownloader = ai.risicloud.risime.data.media.ImageDownloader(api, db.media(), mediaFiles, mediaSealer, { mediaCrypto })
     val imageLoader by lazy { ai.risicloud.risime.ui.chat.ImageLoader(images) }
 
+    // ---- v1.44 §39 link previews (the sender's fetch; receivers never fetch) ----
+
+    val linkPreviews by lazy {
+        ai.risicloud.risime.data.linkpreview.LinkPreviews(
+            appContext.getSharedPreferences("risime_link_previews", Context.MODE_PRIVATE),
+            ai.risicloud.risime.data.linkpreview.LinkPreviewFetcher(
+                makeThumb = { bytes -> runCatching { ai.risicloud.risime.data.media.ImagePipeline(ai.risicloud.risime.data.media.AndroidBitmapOps).previewThumb(bytes) }.getOrNull() },
+                // A fresh client: no cookies, no cache, no auth interceptors of the API client.
+                base = OkHttpClient(),
+            ),
+        )
+    }
+
     // ---- v1.41 §37 voice notes ----
 
     private val voicePrefs by lazy { appContext.getSharedPreferences("risime_voice", Context.MODE_PRIVATE) }
@@ -2074,6 +2087,8 @@ class AppContainer(
     private val foreground = MutableStateFlow(false)
 
     init {
+        // v1.44 §39.3: the sender's link-preview fetch (the switch is checked at send time).
+        engine.linkPreviews = { url -> linkPreviews.fetchIfOn(url) }
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 foreground.value = true

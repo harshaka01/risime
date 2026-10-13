@@ -424,9 +424,15 @@ fun MessageBubble(
     quoteLabel: String? = null,
     /** The first bubble of a run (a new sender or side): the tail and a little more space above. */
     tail: Boolean = true,
+    /** v1.44 §39.4 the link-preview card above the text (from the message only), read by TalkBack as [linkPreviewLabel]. */
+    linkPreview: (@Composable () -> Unit)? = null,
+    linkPreviewLabel: String? = null,
 ) {
     val c = RisiTheme.colors
     val statusLabel = status?.let { tickLabel(it) }
+    // §39.4 links in the text are tappable (and a TalkBack action of the merged bubble).
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val firstLink = androidx.compose.runtime.remember(body, muted) { if (muted) null else ai.risicloud.risime.net.LinkUrls.find(body).firstOrNull()?.target }
     val dark = c.bubbleTheirs.luminance() < 0.5f
     Box(
         Modifier.fillMaxWidth()
@@ -455,6 +461,7 @@ fun MessageBubble(
                         if (forwardHops != null) append(if (forwardHops >= ai.risicloud.risime.net.Forwarding.MANY_TIMES) "Forwarded many times, " else "Forwarded, ")
                         attachmentLabel?.let { append(it).append(", ") }
                         quoteLabel?.let { append(it).append(", ") }
+                        linkPreviewLabel?.let { append(it).append(", ") }
                         append(if (image == null) body else if (body.isBlank()) "Photo" else "Photo, $body")
                         imageStatus?.let { append(", ").append(it) }
                         append(", ").append(time)
@@ -463,9 +470,11 @@ fun MessageBubble(
                         if (starred) append(", starred")
                         if (selected) append(", selected")
                     }
-                    imageAction?.let { (label, run) ->
-                        customActions = listOf(androidx.compose.ui.semantics.CustomAccessibilityAction(label) { run(); true })
-                    }
+                    val actions = listOfNotNull(
+                        imageAction?.let { (label, run) -> androidx.compose.ui.semantics.CustomAccessibilityAction(label) { run(); true } },
+                        firstLink?.let { u -> androidx.compose.ui.semantics.CustomAccessibilityAction(ai.risicloud.risime.ui.chat.LinkPreviewStrings.OPEN_LINK) { runCatching { uriHandler.openUri(u) }; true } },
+                    )
+                    if (actions.isNotEmpty()) customActions = actions
                 },
         ) {
             val tailPad = RisiShapes.tailWidth
@@ -489,6 +498,7 @@ fun MessageBubble(
                 quote?.invoke()
                 image?.invoke()
                 attachment?.invoke()
+                linkPreview?.invoke()
                 val meta: @Composable () -> Unit = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (starred) {
@@ -506,7 +516,7 @@ fun MessageBubble(
                     TextWithMeta(
                         text = {
                             Text(
-                                body,
+                                if (firstLink == null) androidx.compose.ui.text.AnnotatedString(body) else ai.risicloud.risime.ui.chat.linkified(body, if (mine) c.onBubbleMine else MaterialTheme.colorScheme.primary),
                                 style = if (muted) MaterialTheme.typography.bodyLarge.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic) else MaterialTheme.typography.bodyLarge,
                                 color = if (muted) androidx.compose.material3.LocalContentColor.current.copy(alpha = 0.7f) else Color.Unspecified,
                                 onTextLayout = it,

@@ -114,6 +114,10 @@ interface MessageDao {
     @Query("UPDATE messages SET played_at = COALESCE(played_at, :at), read_at = COALESCE(read_at, :at), delivered_at = COALESCE(delivered_at, :at) WHERE client_msg_id = :clientMsgId AND outgoing = 1")
     suspend fun setOutgoingPlayed(clientMsgId: String, at: Long): Int
 
+    /** v1.44 §39.3 my pending text message's fetched preview (only while it is still pending: never after it went out). */
+    @Query("UPDATE messages SET link_preview = :json WHERE client_msg_id = :clientMsgId AND outgoing = 1 AND status = 'PENDING' AND kind = 'text'")
+    suspend fun setLinkPreview(clientMsgId: String, json: String?): Int
+
     /** §37.4 a group voice note's `played` count (and the blue mic once all played). */
     @Query("UPDATE messages SET receipt_played = :played WHERE message_id = :messageId AND outgoing = 1")
     suspend fun setGroupPlayed(messageId: String, played: Int): Int
@@ -420,7 +424,7 @@ interface DeleteDao {
      * image reference or receipts; an incoming one is read and acked (never unread, never acked again).
      */
     @Query(
-        "UPDATE messages SET kind = 'deleted', body = '', system_json = NULL, blob_id = NULL, forward_hops = NULL, reply_to_message_id = NULL, reply_to_from = NULL, deleted_by = :by, " +
+        "UPDATE messages SET kind = 'deleted', body = '', system_json = NULL, link_preview = NULL, blob_id = NULL, forward_hops = NULL, reply_to_message_id = NULL, reply_to_from = NULL, deleted_by = :by, " +
             "deleted_by_admin = :byAdmin, deleted_at = :at, delete_state = NULL, delete_unverified = 0, " +
             "receipt_delivered = NULL, receipt_read = NULL, receipt_of = NULL, receipt_played = NULL, played_at = NULL, fail_reason = NULL, " +
             "status = CASE WHEN outgoing = 0 THEN 'READ' ELSE status END, " +

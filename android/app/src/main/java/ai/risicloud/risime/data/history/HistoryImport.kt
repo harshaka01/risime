@@ -129,8 +129,9 @@ class HistoryImporter(
             var file: ai.risicloud.risime.data.media.FileEnvelope? = null
             var voice: ai.risicloud.risime.data.media.VoiceEnvelope? = null
             var extras = ai.risicloud.risime.net.EnvelopeExtras.NONE
+            var linkPreview: String? = null
             when (payload) {
-                is MlsPayload.Decoded.Text -> { kind = MessageEntity.KIND_TEXT; body = payload.body; extras = payload.extras }
+                is MlsPayload.Decoded.Text -> { kind = MessageEntity.KIND_TEXT; body = payload.body; extras = payload.extras; linkPreview = payload.linkPreview?.encode() }
                 is MlsPayload.Decoded.Image -> {
                     if (images == null) { skip("malformed"); continue }
                     kind = MessageEntity.KIND_IMAGE; body = payload.envelope.caption.orEmpty(); image = payload.envelope; extras = payload.envelope.extras
@@ -183,7 +184,7 @@ class HistoryImporter(
                 outgoing = outgoing, ackedStatus = MessageStatus.READ.name, kind = kind, systemJson = systemJson,
                 blobId = image?.blob?.blobId ?: file?.blob?.blobId ?: voice?.blob?.blobId, callId = callId, origin = origin, sharedBy = c.providerUser.lowercase(),
                 fromDevice = g.fromDevice ?: e.fromDevice?.lowercase(),
-                forwardHops = extras.forwardHops, replyToMessageId = extras.replyTo?.messageId, replyToFrom = extras.replyTo?.from,
+                forwardHops = extras.forwardHops, replyToMessageId = extras.replyTo?.messageId, replyToFrom = extras.replyTo?.from, linkPreview = linkPreview,
                 viewOnce = if (extras.viewOnce) true else null,
             )
             if (messages.insert(row) == -1L) { skip("existing_row"); done += id; continue }

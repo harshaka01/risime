@@ -519,7 +519,7 @@ class ChatEngine(
                 r.conversationId?.let { upsertMarker(it, SystemLine.UNDECRYPTABLE, r.serverTs) }
                 recordGaps(r.gaps)
             }
-            if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body, systemJson = r.risi, extras = r.extras) || incoming
+            if (r is MlsResult.Plaintext) incoming = applyMessage(me, r.message, r.body, systemJson = r.risi, extras = r.extras, linkPreview = r.linkPreview) || incoming
             if (r is MlsResult.Image) {
                 val hooks = images
                 if (hooks != null) {
@@ -991,6 +991,8 @@ class ChatEngine(
         systemJson: String? = null,
         /** §33.4 / §33.9 / §33.0: `forwarded`, `reply_to`, `view_once` of the envelope. */
         extras: ai.risicloud.risime.net.EnvelopeExtras = ai.risicloud.risime.net.EnvelopeExtras.NONE,
+        /** v1.44 §39 the validated `link_preview` of a text envelope (e2ee only). */
+        linkPreview: ai.risicloud.risime.net.LinkPreview? = null,
         /** Item 1/3: how it travelled (a plaintext `message` event: [MessageEntity.E2EE_PLAIN]). */
         e2ee: String = MessageEntity.E2EE_YES,
         /** In the same transaction, right after the new row (§14.7: the image's media row). */
@@ -1058,6 +1060,7 @@ class ChatEngine(
             replyToFrom = extras.replyTo?.from,
             viewOnce = if (extras.viewOnce) true else null,
             e2ee = e2ee,
+            linkPreview = linkPreview?.takeIf { kind == MessageEntity.KIND_TEXT && e2ee == MessageEntity.E2EE_YES && systemJson == null }?.encode(),
         )
         if (messages.insert(row) == -1L) return false
         deletes?.unhide(row.conversationId) // §15.7 Delete chat: a new message brings the chat back
@@ -1131,9 +1134,32 @@ class ChatEngine(
         )
         deletes?.unhide(conv) // §15.7: a deleted chat comes back with my new message
         behaviour?.messageSent(to, body.length, previous?.takeIf { !it.outgoing }?.let { now - it.localTs })
-        scope.launch { flushOutbox() }
+        // v1.44 §39.3: an E2EE chat's first https link gets its preview (the switch is checked by [linkPreviews]); the
+        // row is shown pending at once and waits for the fetch at most 5 s. A plaintext chat never fetches.
+        val fetch = linkPreviews
+        val url = ai.risicloud.risime.net.LinkUrls.firstHttps(body)
+        if (fetch != null && url != null && runCatching { mlsEngine()?.group(conv) != null }.getOrDefault(false)) {
+            previewing += id
+            scope.launch {
+                try {
+                    val lp = runCatching { fetch(url) }.getOrNull()?.takeIf { body.contains(it.url) }
+                    if (lp != null) messages.setLinkPreview(id, lp.encode())
+                } finally {
+                    previewing -= id
+                    flushOutbox()
+                }
+            }
+        } else {
+            scope.launch { flushOutbox() }
+        }
         return id
     }
+
+    /** v1.44 §39.3 the sender's preview fetch (null: off, e.g. tests); returns null when the switch is off or on any failure. */
+    @Volatile var linkPreviews: (suspend (url: String) -> ai.risicloud.risime.net.LinkPreview?)? = null
+
+    /** v1.44 §39.3 my rows waiting (≤ 5 s) for their preview: the outbox skips their conversation meanwhile. */
+    private val previewing: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /** Push every pending message in local_ts order with its original client_msg_id. */
     /**
@@ -1163,11 +1189,13 @@ class ChatEngine(
             return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { env }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
         val extras = ai.risicloud.risime.data.mls.sendExtras(m)
+        // v1.44 §39: the preview travels only inside the E2EE envelope (the plaintext fallback below sends the body alone).
+        val lp = ai.risicloud.risime.net.LinkPreview.decode(m.linkPreview, m.body)
         // §33.4: a forward or a reply is e2ee-only (its fields never travel in a plaintext `msg:send`).
         if (extras != ai.risicloud.risime.net.EnvelopeExtras.NONE) {
-            return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { ai.risicloud.risime.data.mls.MlsPayload.text(m.body, extras) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
+            return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { ai.risicloud.risime.data.mls.MlsPayload.text(m.body, extras, lp) }) { PushResult.Rejected(AuthErrors.NOT_E2EE) }
         }
-        return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { ai.risicloud.risime.data.mls.MlsPayload.text(m.body) }) {
+        return sendPayload(m.conversationId, m.to, m.clientMsgId, m.localTs, { ai.risicloud.risime.data.mls.MlsPayload.text(m.body, linkPreview = lp) }) {
             realtime().sendMessage(MsgSend(m.clientMsgId, m.to, m.body, isoMillis(m.localTs))).also { if (it is PushResult.Ok) sentPlain += m.clientMsgId }
         }
     }
@@ -1577,6 +1605,8 @@ class ChatEngine(
         var holdShort = false
         for (m in messages.pendingOutbox()) {
             if (m.conversationId in waiting) continue
+            // v1.44 §39.3: a message still fetching its preview (≤ 5 s) holds its conversation (order kept).
+            if (m.clientMsgId in previewing) { waiting += m.conversationId; continue }
             // §18.5 (android A2): a dirty group gets this device's photo before its next own message.
             if (isGroupConversation(m.conversationId)) profilePhotos?.let { runCatching { it.beforeOwnMessage(m.conversationId) } }
             // Item 3: a 1:1 message waits for encryption ("Waiting for encryption…"), never plaintext on its own; it was

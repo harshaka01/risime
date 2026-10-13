@@ -171,6 +171,20 @@ class ContractExamplesTest {
                 text(s).also { require(it.extras.replyTo == ReplyRef("c1a2b3e1-a0b1-11f0-8000-0242ac120002", "0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e") && it.extras.forwardHops == null) }
             },
             "envelope_text_view_once_reserved.json" to { s -> text(s).also { require(it.extras.viewOnce) } },
+            // v1.44 §39 link previews: validated against the body; a bad one is ignored and the message stays.
+            "envelope_text_link_preview.json" to { s ->
+                text(s).also {
+                    val lp = it.linkPreview!!
+                    require(lp.url == "https://example.org/agenda" && lp.title == "Friday agenda" && lp.siteName == "Example" && lp.description != null)
+                    require(lp.thumb!!.mime == "image/jpeg" && lp.thumb.w == 128 && lp.thumb.h == 67)
+                    // Re-encoding gives the example back exactly.
+                    require(ProtocolJson.parseToJsonElement(ai.risicloud.risime.data.mls.MlsPayload.text(it.body, it.extras, lp).decodeToString()) == ProtocolJson.parseToJsonElement(s))
+                }
+            },
+            "envelope_text_link_preview_no_thumb.json" to { s ->
+                text(s).also { require(it.linkPreview!!.thumb == null && it.linkPreview.description == null && it.extras.replyTo != null) }
+            },
+            "envelope_text_link_preview_bad.json" to { s -> text(s).also { require(it.linkPreview == null && it.body == "Look at https://example.org/") } },
             "image_payload_forwarded.json" to { s -> imageEnvelope(s).also { require(it.extras.forwardHops == 2 && it.caption == "Site visit, level 3") } },
             "file_payload.json" to { s ->
                 file(s).also {

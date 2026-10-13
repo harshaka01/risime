@@ -17,7 +17,7 @@ class MlsNotReady : IllegalStateException("MLS core not open yet: event not appl
 /** What one inbox event meant for MLS (contract §10.3, decision 033). */
 sealed interface MlsResult {
     /** A decrypted e2ee message: insert it like a plaintext one (same transaction). */
-    data class Plaintext(val message: MessageData, val body: String, val risi: String? = null, val extras: ai.risicloud.risime.net.EnvelopeExtras = ai.risicloud.risime.net.EnvelopeExtras.NONE) : MlsResult
+    data class Plaintext(val message: MessageData, val body: String, val risi: String? = null, val extras: ai.risicloud.risime.net.EnvelopeExtras = ai.risicloud.risime.net.EnvelopeExtras.NONE, val linkPreview: ai.risicloud.risime.net.LinkPreview? = null) : MlsResult
 
     /** v1.34 §33.13: a decrypted, validated `file` envelope (a `parts` file is a placeholder row without media). */
     data class File(val message: MessageData, val envelope: ai.risicloud.risime.data.media.FileEnvelope) : MlsResult
@@ -340,6 +340,7 @@ class MlsPipeline(
                         ai.risicloud.risime.data.tabs.RisiMessages.honoured(p.risi, if (p.risi != null) mls.groupMeta(conv) else null, d.sender.userId, if (p.risi != null) mls.agentUsers(conv) else emptySet())
                             ?.let(ai.risicloud.risime.data.tabs.RisiMessages::encode)?.also { j -> runCatching { onRisiObject(j) } },
                         p.extras,
+                        p.linkPreview,
                     )
                     is MlsPayload.Decoded.Reaction -> MlsResult.Reaction(msg, p.target, p.emoji, p.op)
                     is MlsPayload.Decoded.Image -> MlsResult.Image(msg, p.envelope)

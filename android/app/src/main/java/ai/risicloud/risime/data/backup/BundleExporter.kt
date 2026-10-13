@@ -154,7 +154,7 @@ class BundleExporter(
         val payload: JsonObject = when (m.kind) {
             // §24.10: a Risi message keeps its `risi` object.
             // v1.34: `forwarded` and `reply_to` are part of the payload (and a reserved `view_once` stays one).
-            MessageEntity.KIND_TEXT -> json(MlsPayload.text(m.body, ai.risicloud.risime.data.mls.sendExtras(m))).let { t ->
+            MessageEntity.KIND_TEXT -> json(MlsPayload.text(m.body, ai.risicloud.risime.data.mls.sendExtras(m), ai.risicloud.risime.net.LinkPreview.decode(m.linkPreview, m.body))).let { t ->
                 val risi = if (ai.risicloud.risime.data.tabs.RisiMessages.meta(m) != null) runCatching { ProtocolJson.parseToJsonElement(m.systemJson!!) as JsonObject }.getOrNull() else null
                 if (risi == null) t else JsonObject(t + ("risi" to risi))
             }.let { viewOnce(m, it) }

@@ -399,7 +399,13 @@ internal fun Bubble(
     val send = if (m.image) photoSendState(m, media, upload) else null
     // The photo's tap target: a failed photo (when a retry can help) or one waiting in its backoff.
     val retryPhoto: (() -> Unit)? = if (canRetry && (retryable || !failed) && (send is PhotoSend.Failed || send == PhotoSend.Waiting)) ({ onRetry(m.clientMsgId) }) else null
+    // v1.44 §39.4 the card from the message's own `link_preview` (never fetched here).
+    val lp = remember(m.linkPreview, m.body) { if (m.showsAsDeleted) null else ai.risicloud.risime.net.LinkPreview.decode(m.linkPreview, m.body) }
+    // PART 11 (d) swipe right to reply, under the Reply action's rules (§33.9).
+    SwipeToReply(if (x != null && sel?.selecting != true && x.canSend && ai.risicloud.risime.data.messaging.SelectionRules.replyable(m)) ({ x.ctl.reply(m) }) else null) {
     MessageBubble(
+        linkPreview = lp?.let { p -> { LinkPreviewCard(p, m.outgoing) } },
+        linkPreviewLabel = lp?.let(LinkPreviewStrings::label),
         body = m.body,
         time = timeOf(m.localTs),
         mine = m.outgoing,
@@ -434,6 +440,7 @@ internal fun Bubble(
         attachmentLabel = if (m.file) "File, " + (ai.risicloud.risime.data.media.FileMeta.decode(m.systemJson)?.let { ai.risicloud.risime.data.media.FileEnvelope.displayName(it.name) } ?: "")
             else if (m.voice) VoiceStrings.label(m, ai.risicloud.risime.data.media.VoiceMeta.decode(m.systemJson)) else null,
     )
+    }
     if (sheet) {
         val actions = buildList<Pair<String, () -> Unit>> {
             // Item 3: the waiting message's own choice comes first (the sheet's end can sit under the navigation bar).

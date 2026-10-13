@@ -76,6 +76,10 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
             HorizontalDivider()
             ai.risicloud.risime.calls.CallsSettingsSection()
             HorizontalDivider()
+            (androidx.compose.ui.platform.LocalContext.current.applicationContext as? ai.risicloud.risime.RisiMeApp)?.container?.let { c ->
+                ChatsSettingsSection(c)
+                HorizontalDivider()
+            }
             SectionHeader("Notifications")
             Text(
                 "Check what could stop messages and calls from reaching you while RisiMe is closed.",
