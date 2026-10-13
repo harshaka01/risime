@@ -1,5 +1,39 @@
 # Android status — 0.2 nightlies
 
+## v1.45 §40 adding people to a call (13 Oct; decision 086) — built, behind `ADD_TO_CALL_ENABLED` (off); device gate pending
+**Agent design (decision 085/086): no agent: infrastructure** (call media, the move, keys); Official group-call
+transcription reuses the §36/§38 Voice-agent path. Flag: `-Prisime.addToCall=true` turns on `add_to_call`, `features: ["add"]`
+and the button; off by default until `scripts/group-call-test` prints `GCTEST OK`.
+- **The move (1:1 → group, make before break)** `calls/CallMover.kt` over both machines: A's picker → a new group chat
+  (the §12.3 create op; Official tab too for an Official call, Private fallback "Continuing as a Private call") → the room
+  started **in hold** (`GroupCallMachine.startHeld`: connected, keys installed, nothing published, LiveKit audio
+  prewarming off) → `call_escalate move` to B's device over the 1:1 path → `group_call started` + the SFU ring with
+  `ring_users` = the invitees → each side switches when it sees the other's identity in the room as an MLS member
+  (`HoldSpec.onReady`): the P2P media closes (`CallStateMachine.movedOut`; A sends the durable `call_end moved` with
+  `moved_to`), then the microphone/camera publish (`release`). B: `beginMove` → waits ≤ 20 s for the group's MLS state →
+  `joinHeld` → same switch, or follows at once on A's `call_end moved`. Give-up at 30 s, on `call_escalate failed`, or a
+  hang-up during the move: the room is left (A cancels the ring), the 1:1 call goes on ("Couldn't add people. You're still
+  in the call with Nimal."). While moving, P2P ICE loss and the media stall watch never end the call. One Telecom call
+  through the move (`CallManager.platformLinks`: the 1:1 call's Telecom handle is re-keyed to the group call id; route and
+  focus stay). At most one move per call.
+- **Group calls:** `ring_users` (only named users ring; others keep Join), re-ring of a running call (`ringAgain`; a seen
+  call id rings again only when named, newer and not joined), Add participant in group calls (members not in the room →
+  Ring; admins: friends → group add op, wait for the leaves, then ring), local "Missed voice call" on a group line when the
+  ring ran out here (`x_missed`, kept across `ended`, stripped from backups, one notification), active speaker takes the
+  large video tile (`tileOrder`, odd counts put one large tile on top).
+- **Official group-call transcription (§40.9):** `TranscribeCall.group/alone`, the `paused` state (bar stays, "Paused until
+  Sunil allows", the joiner's prompt, recorder keeps its `seq` but records nothing and resumes at the right offset), no
+  `stop ended` on leave unless last, own-mic tap on LiveKit's ADM (`javaAudioDeviceModuleCustomizer`).
+- **Lines:** `call_end moved` → "Voice call · 2:10 · continued as a group call". `Friend.group_calls` greys out the picker.
+  `PROTOCOL_VERSION` 1.45.
+- **Gates:** `./gradlew assembleDebug testDebugUnitTest` green (1,9xx JVM tests, 0 failed; one run hit the known Robolectric
+  leak "uncaught exceptions before the test started" in `RequiredUpdateScreenTest` from a ChatTabDao read after another
+  test closed its DB; green on rerun). New: `CallMoverTest` (11: both sides, hold, switch on presence, peer follows on
+  `moved`, give-up at 20/30 s, hang-up during the move, no group, a foreign escalate dropped), `GroupCallMachineTest` +6
+  (`ring_users`, re-ring after decline, missed, `ringAgain`, held call, abort/room failure), `TranscribeConsentTest` +4,
+  `GroupCallUiTest` (grid, tile order), ContractExamplesTest (every v1.45 example, re-encoded exactly).
+- **Device gate:** `scripts/group-call-test` (3 redroids, throwaway LiveKit on the bridge). Not run yet: see the root report.
+
 ## READY PART 11 (d) swipe-to-reply + (a) v1.44 §39 link previews (13 Oct; next APK)
 **Agent design (decision 085): no agent: infrastructure.** Both are deterministic messaging UI (a gesture on the
 existing §33.9 `reply_to`; a sender-side fetch under fixed rules). Nothing to learn, no model call, no learning-log row.
