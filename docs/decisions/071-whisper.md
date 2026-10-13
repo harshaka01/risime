@@ -352,3 +352,16 @@ Results: docs/RISI-MODELS.md, "Routing check and language hints".
   equals before.
 - **Image** `risime/whisper:ct2-4.8.2-fw-1.2.1-asr5`, deployed 2026-10-12 ~22:00 UTC, asr-smoke
   PASS. Rollback: `WHISPER_HINT_MODE=off` in `.env` (hints ignored), or `image: …-asr4`.
+
+## Amendment 2026-10-14 (e): omniASR as an eval / compare-only service (Harsha Part 12)
+- **What:** `risime-omniasr` (`infra/omniasr`, `infra/docker-compose.omniasr.yml`, 127.0.0.1:8210):
+  Meta Omnilingual ASR (Apache-2.0) on fairseq2 0.6 (MIT), built from source for aarch64 against the
+  NGC torch. Same API as risime-whisper. Developer compare mode can append its results
+  (`RISI_SPEECH_COMPARE_EXTRA_URL`, off by default); never on the production route.
+- **Why a second service, not a whisper-pool model:** fairseq2 needs its own native build and
+  patches; keeping it out of risime-whisper means the production speech image and its memory pool
+  are unchanged.
+- **Agent design:** no new agent. The speech capability stays owned by the Risi transcription agent
+  (decision 085); omniASR is one more tool it can be scored with (eval: `scripts/asr-eval` sets,
+  the new real Singlish set; promotion only by the decision 084 rule).
+- **Result:** no route change. Numbers, memory and caveats: docs/status/asr-omni-eval-2026-10-14.md.
