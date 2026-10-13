@@ -29,15 +29,23 @@ transcript is posted as `risi_call_transcript` when the call ends. One `risi_age
 (agent `voice_call`, timings only) feeds the daily scoreboard.
 
 ## Latency (scripts/call-risi-harness)
-LATENCY_TABLE
+| Run (end of turn 350 ms) | Caller heard p50 | p95 | Server p50 | p95 |
+|---|---|---|---|---|
+| 10 turns, no echo | 1415 ms | 1576 ms | 1324 ms | 1444 ms |
+| latest 10 turns, no echo | 1411 ms | 1677 ms | 1349 ms | 1641 ms |
+| echo −6 dB | 1388 ms | 1747 ms | – | – |
+
+Per stage p50 (p95): end of turn 360 (371), STT large-v3 `en` 416 (494), first token 198 (209), first piece after
+the utterance 778 (958), Kokoro first audio 218 (338). Tool route filler ≈ 0.9–1.0 s. End of turn 450 ms → caller
+p50 1715 ms. Kokoro alone: GPU 330/445 ms, CPU 660/887 ms. Targets 1.5 s p50 / 3 s p95: met in the harness.
 
 ## Gaps
 1. **The pilot LiveKit and the worker on the same host.** The pilot's LiveKit advertises only
    203.189.69.76 (NAT 1:1 of 10.20.20.15), and the edge does not hairpin it, so a process on spark2 can't
-   reach its media. The harness uses a loopback LiveKit. PILOT_LIKE_RESULT
+   reach its media. The harness uses a loopback LiveKit. `--pilot-like` (loopback candidate) is not run yet; root's plan is `enable_loopback_candidate: true` on the pilot LiveKit at a deploy.
 2. **E2EE:** v1 has no frame encryption for Risi calls (Risi's MLS core has no `call_frame_keys`, crypto
    C10). Said honestly on the call screen and in the start reply.
-3. **Echo:** ECHO_RESULT
+3. **Echo:** one −6 dB run was clean, another had ~9 self-barge-ins (Risi's words heard as the caller's); the echo guard (700 ms tail, barge-in > 0.35 × Risi's own level) is untested. A real phone's echo cancellation should cover most of it: needs a device test.
 4. English only (STT language fixed to `en`, Kokoro English voices). si/ta: another TTS engine via the
    admin console's per-language voice choice.
 5. Tool turns in the harness use a stand-in §25 Turn (timed filler path, no real calendar). Real tool
