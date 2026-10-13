@@ -1165,12 +1165,15 @@ class ChatEngine(
         // row is shown pending at once and waits for the fetch at most 5 s. A plaintext chat never fetches.
         val fetch = linkPreviews
         val url = ai.risicloud.risime.net.LinkUrls.firstHttps(body)
-        if (fetch != null && url != null && runCatching { mlsEngine()?.group(conv) != null }.getOrDefault(false)) {
+        if (fetch != null && url != null) {
             previewing += id
-            scope.launch {
+            // Off the caller's (main) thread: the MLS state is read on [io] (debug builds guard it).
+            scope.launch(io) {
                 try {
-                    val lp = runCatching { fetch(url) }.getOrNull()?.takeIf { body.contains(it.url) }
+                    val e2ee = runCatching { mlsEngine()?.group(conv) != null }.getOrDefault(false)
+                    val lp = if (!e2ee) null else runCatching { fetch(url) }.getOrNull()?.takeIf { body.contains(it.url) }
                     if (lp != null) messages.setLinkPreview(id, lp.encode())
+                    runCatching { android.util.Log.i("RisiMe", "link preview: ${if (!e2ee) "not e2ee, none" else if (lp != null) "attached" else "none"}") }
                 } finally {
                     previewing -= id
                     flushOutbox()

@@ -106,7 +106,11 @@ class LinkPreviewFetcher(
 
     /** The preview of [url] within [TOTAL_MS], or null (silently) on any failure or refusal. */
     suspend fun fetch(url: String): LinkPreview? = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(TOTAL_MS) { runCatching { fetchOrNull(url) }.getOrNull() }
+        withTimeoutOrNull(TOTAL_MS) {
+            runCatching { fetchOrNull(url) }
+                .onFailure { e -> runCatching { android.util.Log.i("RisiMe", "link preview fetch failed: ${e.javaClass.simpleName}") } }
+                .getOrNull()
+        }
     }
 
     private fun fetchOrNull(url: String): LinkPreview? {
