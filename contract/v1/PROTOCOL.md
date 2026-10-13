@@ -1463,7 +1463,8 @@ Incident 2026-10-13 (`docs/status/incident-2026-10-13-official.md`), decision 08
   agent runs in the server) and is named like any device (§12.4: 60 s, `tried`, strikes and exhaustion of
   §12.12.4). It commits through the ordinary commit path (`op_id` required, `added`/`removed` exactly the
   op's, §12.4a server authorisation; the core's §12.4a/§24.1 rules are unchanged: a non-admin, non-agent
-  target, a user with a leaf, a removal only with its re-add). The added device's key package is the one the
+  target, a user with a leaf, a removal only with its re-add). Risi's own leaf never closes the §12.4a gate (it
+  runs the server's current core; it advertises only `groups` and `tabs`). The added device's key package is the one the
   server holds for that exact device (§12.5, attestation verified by the core, §10.1). Risi never commits an
   `add`, `remove`, `role` or `rebuild` op, a cleanup op (§12.12.6), a `group_meta` change, or anything in a
   Private group or DM.
@@ -1486,7 +1487,8 @@ Incident 2026-10-13 (`docs/status/incident-2026-10-13-official.md`), decision 08
   when no candidate can ever commit, it resets the group (§12.8) with the waiting admin device as the
   rebuilder. What it can't repair, and any stuck Private group or DM (never touched), is reported to the
   operators' Risi chats as an `ops_alert` (§32, `state: "alert"`, `check: "conversation_stuck"`; counts and
-  short ids only). Flag `RISI_AGENT_HEALTH` (decision 084).
+  short ids only). Flag `RISI_AGENT_HEALTH` (decision 084; default `canary`: repairs only conversations with a
+  `RISI_DEV_USERS` member, shadow elsewhere).
 - **Wire:** no new fields, events or errors. `PendingOp.committer` may now name Risi's device for an Official
   `devices` op (only Risi receives that `group_op`); `candidates` may count Risi's device; `created_by` of a
   `creating` Official may change.

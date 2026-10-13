@@ -60,3 +60,26 @@ See the "Permanent fixes" section below, written by the hotfix work. In short:
 - 1:1 wording;
 - a Health agent that repairs stuck chats and alerts;
 - a new blocking gate, `scripts/official-start-test`.
+
+## Permanent fixes (written by the hotfix work)
+Contract **v1.46 §12.12.9** (amends §12.12.3 and §24.2), decision **088**. Private groups, a group chat's Private
+and DMs are unchanged (parity tests on both sides).
+
+| Root cause | Fix | Where |
+|---|---|---|
+| Official needed a human phone to re-add a reinstalled phone | **Risi commits the re-add** of an existing member's new device in Official (member-committable `devices` ops only; first candidate; ordinary commit path with `op_id`; key package of that exact device from the server; strikes/exhaustion as any device). Never in Private or DMs, never add/remove/role/rebuild/cleanup | `Groups.Ops.risi_can_commit?/3`, `Groups.Commit` (agent exception), `Agent.Conversation` (`group_op` → `Nif.change_members/4`), `MLS.claim_for_readd/2`, NIF `change_members` |
+| Risi's leaf (caps `groups`, `tabs`) closed the §12.4a member gate in every Official group: even an online member couldn't re-add | Risi's leaf never closes the gate (it runs the server's current core) | `Groups.Ops.gate_open?/3` |
+| Dead devices (row gone) counted as candidates; `rejoin_guard` blocked the reset for 24 h with nobody able to commit | In Official, candidates leave out devices that can never commit; `candidates: 0` ⇒ the admin device may reset **at once** (server guard and app rule) | `Ops.candidates/2` (`drop_gone`), `Ops.rejoin_guard/2`, Android `RejoinRules.group(official=)` |
+| A creator that never builds epoch 0 blocks everyone | `POST …/official` on a `creating` Official older than 60 s hands it to the caller (under the group lock); the app builds epoch 0 only as `created_by` (otherwise waits and re-POSTs). Concurrent POSTs already give one group (unique index), now tested | `Chats.take_over/2`, Android `officialEpoch0Mine` |
+| "Starting Official…" spun forever | Watchdog: re-kick every 20 s; after 60 s the reason (offline / "Waiting for <name> to open RisiMe" / "Official isn't ready on this phone yet.") and **Try again** (`official_try_again`) | Android `ChatTabsController`, `ChatTabsUi`, `AppContainer.rekickOfficial` |
+| "Waiting for a group member" in a 1:1; no way out | A 1:1 Official names the other person; every waiting strip has **Try again** (`e2ee_try_again`) | Android `groupE2eeStrip`, `GroupScreens` |
+| Nobody noticed stuck chats | **Health agent** (`RisiMe.Agents.Health`, cron every 5 min, flag `RISI_AGENT_HEALTH` default `canary`): finds chats stuck > 5 min, repairs Official ones (Risi renamed; stale `creating` expired; reset by the waiting admin device when nobody can ever commit), alerts the rest to the `RISI_DEV_USERS` Risi chats (`ops_alert` `conversation_stuck`), records `risi_health_stuck`, daily scoreboard row `health` (reliability) | `server/lib/risime/agent/agents/health.ex` |
+
+**Gate:** `scripts/official-start-test` (3 redroids; `OSTEST OK`), blocking in `scripts/nightly-release` after the
+Official banner check. **Unit tests:** server `official_never_waits_v146_test.exs`, `health_agent_test.exs`, the NIF
+end-to-end re-add in `agent_tree_test.exs`, Rust `risi_re_adds_a_members_new_device_in_official`; Android
+`OfficialStartWatchdogTest`.
+
+**For the live H↔R chat:** after the hotfix deploy, the Health agent (canary covers Harsha's chats) would
+re-add both phones through Risi, because H and R each still hold an old leaf. Root's manual reset remains the
+immediate repair.

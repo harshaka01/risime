@@ -200,7 +200,8 @@ gate_ports() { local d; for d in "$@"; do fport "${d%%=*}" "${d#*=}"; done; }
 gate_ports CALLTEST_LLM_PORT=8197 CALLTEST_PORT=4410 CALLTEST_REDROID_A_PORT=5730 CALLTEST_REDROID_B_PORT=5731 \
   UITEST_LLM_PORT=8217 UITEST_PORT=4677 UITEST_REDROID_A_PORT=5877 UITEST_REDROID_B_PORT=5878 \
   EC_LLM_PORT=8165 EC_PORT=4165 EC_REDROID_A_PORT=5751 EC_REDROID_B_PORT=5752 \
-  RC_LLM_PORT=8166 RC_PORT=4166 RC_PROXY_PORT=8167 RC_REDROID_A_PORT=5761 RC_REDROID_B_PORT=5762 RC_CLIP_PORT=8169 TX_CLIP_PORT=8766 VN_CLIP_PORT=8768
+  RC_LLM_PORT=8166 RC_PORT=4166 RC_PROXY_PORT=8167 RC_REDROID_A_PORT=5761 RC_REDROID_B_PORT=5762 RC_CLIP_PORT=8169 TX_CLIP_PORT=8766 VN_CLIP_PORT=8768 \
+  OSTEST_PORT=4188 OSTEST_LLM_PORT=8188 OSTEST_REDROID_A_PORT=5881 OSTEST_REDROID_B_PORT=5882 OSTEST_REDROID_C_PORT=5883
 # P0 2026-10-12 product gates (BLOCKING; own redroids and ports): B = the sign-in screen reaches a slow server and
 # says "This phone is offline"; C = the Official banner is its own row below the tabs at 720 px, font 1.0 and 1.3.
 if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
@@ -208,6 +209,11 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   STEP_T=900 step scripts/server-reach-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "SERVER REACH FAILED: not releasing"; exit 1; }
   echo "==> Official banner layout (scripts/official-banner-check, bug C)"
   STEP_T=1800 step scripts/official-banner-check --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "OFFICIAL BANNER CHECK FAILED: not releasing"; exit 1; }
+  # P0 2026-10-13 (decision 088, contract v1.46 §12.12.9): Official never waits for a human. Three redroids: a simultaneous
+  # start gives one working Official; an offline peer catches up; a stalled creator shows Try again and is taken over;
+  # a reinstalled phone is re-added by Risi while the other app stays closed; Private unchanged. "OSTEST OK".
+  echo "==> Official start (scripts/official-start-test, incident 2026-10-13)"
+  STEP_T=2700 step scripts/official-start-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "OFFICIAL START TEST FAILED: not releasing"; exit 1; }
   echo "==> call -> back cycles (scripts/call-back-test, bug E: no black screen after a call)"
   STEP_T=2700 step scripts/call-back-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-BACK TEST FAILED: not releasing"; exit 1; }
   echo "==> Official-call transcription (scripts/call-transcribe-test, §36: consent, speakers, Stop, no audio left, Private untouched)"
