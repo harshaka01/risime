@@ -203,6 +203,19 @@ class ForwardingTest {
         assertNotEquals(srcBlob.cipherSize, 0L)
     }
 
+    /** Proposal 2026-10-14: a forward drops the sender phone's `phone_transcript` (only the recording phone writes one). */
+    @Test fun voiceForwardDropsThePhoneTranscript() {
+        val wave = java.util.Base64.getEncoder().encodeToString(ByteArray(64) { it.toByte() })
+        val meta = ai.risicloud.risime.data.media.VoiceMeta(
+            ai.risicloud.risime.data.media.VoiceEnvelope.MIME_OGG_OPUS, 12_400, wave,
+            phoneTranscript = ai.risicloud.risime.data.media.PhoneTranscript("hello", "en-US"),
+        )
+        val src = row("p", kind = MessageEntity.KIND_VOICE, body = "", systemJson = meta.encode())
+        val spec = ForwardRules.build(src, me)!!
+        assertNull(ai.risicloud.risime.data.media.VoiceMeta.decode(spec.systemJson)!!.phoneTranscript)
+        assertFalse(spec.systemJson!!.contains("phone_transcript"))
+    }
+
     /** v1.41 §37.3: a forwarded voice note keeps mime/duration/waveform, drops transcribe/request_id/reply_to, and is a fresh upload per target. */
     @Test fun voiceForwardDropsOptOutsAndRotatesTheKeyPerTarget() = runTest {
         val wave = java.util.Base64.getEncoder().encodeToString(ByteArray(64) { it.toByte() })

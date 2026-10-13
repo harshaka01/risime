@@ -133,6 +133,7 @@ class VoiceRecorder(
     private var thread: Thread? = null
     private var encoder: VoiceEncoder? = null
     private var source: PcmSource? = null
+    @Volatile private var tap: PcmTap? = null
     private var peaks = IntArray(1024)
     private var frames = 0
     private var samples = 0L
@@ -142,9 +143,12 @@ class VoiceRecorder(
 
     val recording: Boolean get() = running
 
-    /** Starts recording; false when this phone can't (no encoder, the microphone is busy or refused). */
+    /**
+     * Starts recording; false when this phone can't (no encoder, the microphone is busy or refused). [tap] (the
+     * developer `phone_stt` flag only; null otherwise, which is exactly the v1.41 path) also gets every frame.
+     */
     @Synchronized
-    fun start(): Boolean {
+    fun start(tap: PcmTap? = null): Boolean {
         if (running) return true
         val enc = runCatching { newEncoder() }.getOrElse { log("voice: no encoder (${it.javaClass.simpleName})"); return false }
         val src = newSource()
@@ -155,6 +159,7 @@ class VoiceRecorder(
         }
         encoder = enc
         source = src
+        this.tap = tap
         peaks = IntArray(1024)
         frames = 0
         samples = 0
@@ -170,6 +175,7 @@ class VoiceRecorder(
                     if (n < 0) { failed = true; break }
                     if (n == 0) continue
                     enc.feed(frame, n)
+                    tap?.let { t -> runCatching { t.feed(frame, n) } } // a tap never fails the recording
                     val p = Waveform.peak(frame, n)
                     if (frames == peaks.size) peaks = peaks.copyOf(peaks.size * 2)
                     peaks[frames++] = p
@@ -219,6 +225,8 @@ class VoiceRecorder(
         thread?.join(2_000)
         thread = null
         source?.stop()
+        tap?.let { t -> runCatching { t.end() } }
+        tap = null
         encoder = null
         _state.value = State.Idle
         return enc

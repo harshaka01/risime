@@ -1139,8 +1139,16 @@ class AppContainer(
             },
             mediaReady = { imagesSupported() },
             recorder = ai.risicloud.risime.voice.VoiceRecorder(log = { Log.i("RisiMe", it) }),
+            phoneStt = phoneSttFlag,
+            phoneSessions = { tag -> phoneRecogniser.session(tag) },
         )
     }
+
+    /** Part 12 quick fix 2: the developer flag `phone_stt` (off unless a `risi_dev` account turns it on). */
+    val phoneSttFlag by lazy { ai.risicloud.risime.voice.PhoneSttFlag(voicePrefs) }
+
+    /** The on-device recogniser (never the online one); used only while `phone_stt` is on and by the developer test. */
+    val phoneRecogniser by lazy { ai.risicloud.risime.voice.AndroidPhoneRecogniser(appContext) { Log.i("RisiMe", it) } }
 
     /** §37.3 the one player: in-memory decrypt, `played` on first start, auto-play next, screen off, earpiece. */
     val voicePlayer by lazy {

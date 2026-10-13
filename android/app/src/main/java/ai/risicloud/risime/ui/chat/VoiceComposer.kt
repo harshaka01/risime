@@ -68,6 +68,8 @@ fun rememberVoiceComposer(
     var rationale by remember { mutableStateOf(false) }
     var officialNote by remember { mutableStateOf(false) }
     var mine by remember { mutableStateOf(false) } // this composer owns the running recording
+    // Developer flag `phone_stt` only (proposal 2026-10-14): the on-device recogniser hearing this recording. Null otherwise.
+    var stt by remember { mutableStateOf<ai.risicloud.risime.voice.PhoneSttSessionHandle?>(null) }
     LaunchedEffect(conversationId) {
         // A chat that just became e2ee (a new group, Official just started) or whose members just updated turns ready
         // within seconds: re-check while it isn't (bounded), never after.
@@ -82,19 +84,26 @@ fun rememberVoiceComposer(
     }
     // Leaving the chat (or the screen going away) mid-recording discards it; nothing is sent by accident.
     DisposableEffect(conversationId) {
-        onDispose { if (mine) recorder.cancel() }
+        onDispose {
+            if (mine) recorder.cancel()
+            stt?.cancel()
+            stt = null
+        }
     }
     fun send() {
         mine = false
         locked = false
         dragX = 0f
+        val session = stt
+        stt = null
         scope.launch {
             val note = recorder.stop()
             if (note == null) {
+                session?.cancel()
                 toast(VoiceStrings.TOO_SHORT)
                 return@launch
             }
-            if (c.voice.send(conversationId, note, reply()) == null) toast(VoiceStrings.CANT_RECORD)
+            if (c.voice.send(conversationId, note, reply(), session, toast) == null) toast(VoiceStrings.CANT_RECORD)
         }
     }
     fun cancel() {
@@ -102,6 +111,8 @@ fun rememberVoiceComposer(
         locked = false
         dragX = 0f
         recorder.cancel()
+        stt?.cancel()
+        stt = null
     }
     if (rationale) {
         AlertDialog(
@@ -152,10 +163,13 @@ fun rememberVoiceComposer(
                             return@press false
                         }
                         c.voicePlayer.pause()
-                        if (!recorder.start()) {
+                        val session = c.voice.phoneSttSession(conversationId, toast)
+                        if (!recorder.start(session)) {
+                            session?.cancel()
                             toast(VoiceStrings.MIC_BUSY)
                             return@press false
                         }
+                        stt = session
                         mine = true
                         locked = false
                         dragX = 0f

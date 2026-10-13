@@ -142,10 +142,11 @@ object ForwardRules {
                 val meta = FileMeta.decode(src.systemJson)?.takeIf { !it.parts } ?: return null
                 ForwardSpec(MessageEntity.KIND_FILE, src.body, hops, meta.encode(), mediaSource = src.clientMsgId)
             }
-            // §37.3: `mime`, `duration_ms`, `waveform` copied; `transcribe`, `request_id`, `reply_to` dropped (fresh key per target, §33.5).
+            // §37.3: `mime`, `duration_ms`, `waveform` copied; `transcribe`, `request_id`, `reply_to` dropped (fresh key per target, §33.5);
+            // proposal 2026-10-14: `phone_transcript` dropped too (only the recording phone writes one).
             src.voice -> {
                 val meta = ai.risicloud.risime.data.media.VoiceMeta.decode(src.systemJson) ?: return null
-                ForwardSpec(MessageEntity.KIND_VOICE, "", hops, meta.copy(transcribe = null, requestId = null).encode(), mediaSource = src.clientMsgId)
+                ForwardSpec(MessageEntity.KIND_VOICE, "", hops, meta.copy(transcribe = null, requestId = null, phoneTranscript = null).encode(), mediaSource = src.clientMsgId)
             }
             src.kind == MessageEntity.KIND_TEXT -> src.body.takeIf { it.isNotBlank() }?.let { ForwardSpec(MessageEntity.KIND_TEXT, it, hops) }
             else -> null

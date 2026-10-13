@@ -333,7 +333,36 @@ fun voiceTap(c: AppContainer, m: MessageEntity) {
 @Composable
 fun VoiceFooter(m: MessageEntity, x: ChatMessaging?) {
     if (!m.voice || x == null) return
-    if (x.c.voice.place(m.conversationId) == ai.risicloud.risime.voice.VoicePlace.PRIVATE) return
+    // Proposal 2026-10-14: the sender phone's own on-device transcript (inside the E2EE note; any tab). Absent on every
+    // note sent without the developer `phone_stt` flag, so nothing changes for those.
+    val phone = remember(m.systemJson) { VoiceMeta.decode(m.systemJson)?.phoneTranscript }
+    if (x.c.voice.place(m.conversationId) != ai.risicloud.risime.voice.VoicePlace.PRIVATE) RisiVoiceFooter(m, x)
+    if (phone != null) PhoneTranscriptBlock(m.clientMsgId, phone.text, mine = m.outgoing)
+}
+
+/** The sender phone's transcript under the bubble, collapsed to one line, expandable. Never labelled as Risi's. */
+@Composable
+fun PhoneTranscriptBlock(key: String, text: String, mine: Boolean) {
+    var open by remember(key) { mutableStateOf(false) }
+    Column(
+        Modifier.widthIn(max = 320.dp).padding(top = Spacing.xxs, start = if (mine) 0.dp else Spacing.sm, end = if (mine) Spacing.sm else 0.dp)
+            .testTag("voice_phone_transcript"),
+    ) {
+        Row(
+            Modifier.clickable { open = !open }
+                .semantics { contentDescription = "${ai.risicloud.risime.voice.PhoneSttStrings.BLOCK_LABEL}: ${if (open) "expanded" else "collapsed"}" },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(ai.risicloud.risime.voice.PhoneSttStrings.BLOCK_LABEL, style = MaterialTheme.typography.labelMedium, color = LocalContentColor.current.copy(alpha = 0.75f))
+            Icon(if (open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null, Modifier.size(16.dp), tint = LocalContentColor.current.copy(alpha = 0.75f))
+        }
+        if (open) Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = Spacing.xxs).testTag("voice_phone_transcript_text"))
+    }
+}
+
+/** §37.6 Risi's transcript under an Official / Risi-chat note (the v1.41 footer, unchanged). */
+@Composable
+private fun RisiVoiceFooter(m: MessageEntity, x: ChatMessaging) {
     val t = remember(m.messageId, x.rows) { transcriptFor(m, x.rows) } ?: return
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     VoiceTranscriptBlock(

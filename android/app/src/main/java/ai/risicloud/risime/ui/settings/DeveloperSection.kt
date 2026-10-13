@@ -60,10 +60,12 @@ fun RisiDevSection(c: AppContainer) {
     LaunchedEffect(Unit) {
         val me = c.api.me()
         dev = (me as? ApiResult.Ok)?.value?.user?.risiDev == true
+        // Part 12 quick fix 2: the `phone_stt` flag follows a fresh `risi_dev` (a non-developer account turns it off).
+        if (me is ApiResult.Ok) c.phoneSttFlag.setDeveloper(dev == true)
         if (dev == true) {
             when (val r = c.api.risiDev()) {
                 is ApiResult.Ok -> compare = r.value.transcribeCompare
-                is ApiResult.Error -> if (r.code == CallTranscribeErrors.NOT_DEVELOPER) dev = false else error = "Couldn't load the developer settings"
+                is ApiResult.Error -> if (r.code == CallTranscribeErrors.NOT_DEVELOPER) { dev = false; c.phoneSttFlag.setDeveloper(false) } else error = "Couldn't load the developer settings"
                 is ApiResult.NetworkError -> error = "Not connected"
             }
         }
@@ -101,6 +103,7 @@ fun RisiDevSection(c: AppContainer) {
                 )
             }
             error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            PhoneRecogniserSection(c)
         }
     }
 }

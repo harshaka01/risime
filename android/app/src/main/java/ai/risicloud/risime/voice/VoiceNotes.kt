@@ -2,6 +2,7 @@ package ai.risicloud.risime.voice
 
 import ai.risicloud.risime.data.db.MessageEntity
 import ai.risicloud.risime.data.media.VoiceEnvelope
+import ai.risicloud.risime.data.media.PhoneTranscript
 import ai.risicloud.risime.data.media.VoiceMeta
 import ai.risicloud.risime.net.ApiClient
 import ai.risicloud.risime.net.ApiResult
@@ -25,9 +26,12 @@ object VoiceStamp {
         mime = VoiceEnvelope.MIME_OGG_OPUS,
         durationMs = note.durationMs,
         waveform = Base64.getEncoder().encodeToString(note.waveform),
-        transcribe = if (place == VoicePlace.OFFICIAL && !transcribeMine) false else null,
+        transcribe = transcribeStamp(place, transcribeMine),
         requestId = if (place == VoicePlace.RISI_CHAT) newRequestId() else null,
     )
+
+    /** §37.2 `transcribe`: `false` only in Official while the sender's setting is off; otherwise absent. */
+    fun transcribeStamp(place: VoicePlace, transcribeMine: Boolean): Boolean? = if (place == VoicePlace.OFFICIAL && !transcribeMine) false else null
 
     /** §37.3 the one-time Official note ("Risi transcribes…"), due before the first Official note while the switch is on. */
     fun officialNoteDue(place: VoicePlace, serverTranscribeOn: Boolean, shown: Boolean): Boolean =
@@ -45,6 +49,9 @@ class VoiceNotes(
     private val placeOf: (String) -> VoicePlace,
     private val mediaReady: () -> Boolean,
     val recorder: VoiceRecorder,
+    /** The developer `phone_stt` flag (null or off: the v1.41 path, unchanged). */
+    val phoneStt: PhoneSttFlag? = null,
+    private val phoneSessions: PhoneSttSessions? = null,
 ) {
     private val _serverTranscribeOn = MutableStateFlow(prefs?.getBoolean(KEY_SERVER, false) ?: false)
 
@@ -94,11 +101,39 @@ class VoiceNotes(
         runCatching { prefs?.edit()?.putBoolean(KEY_MINE, s.transcribe)?.putBoolean(KEY_ACTION_ITEMS, s.actionItems)?.apply() }
     }
 
-    /** Encrypts [note] with a fresh key and queues it (upload, then the `voice` envelope). The audio is wiped either way. */
-    suspend fun send(conversationId: String, note: RecordedNote, replyTo: ReplyRef?): MessageEntity? = try {
-        commit(note.audio, conversationId, VoiceStamp.meta(note, place(conversationId), _transcribeMine.value), replyTo)
+    /**
+     * Proposal 2026-10-14: an on-device recognition session for a recording in [conversationId], started, or null when
+     * the `phone_stt` flag is off, in the Risi chat or for a note that opts out of transcription. Null keeps the v1.41
+     * path exactly. [notice] gets the honest reason when the phone can't (e.g. the language isn't on-device).
+     */
+    fun phoneSttSession(conversationId: String, notice: (String) -> Unit = {}): PhoneSttSessionHandle? {
+        val flag = phoneStt ?: return null
+        val place = place(conversationId)
+        if (!PhoneSttPolicy.allowed(flag.on.value, place, VoiceStamp.transcribeStamp(place, _transcribeMine.value))) return null
+        val s = phoneSessions?.open(flag.locale.value) ?: return null
+        if (s.start()) return s
+        s.cancel()
+        notice(PhoneSttStrings.notAvailable(flag.locale.value))
+        return null
+    }
+
+    /**
+     * Encrypts [note] with a fresh key and queues it (upload, then the `voice` envelope). The audio is wiped either way.
+     * [stt] (flag on only) waits briefly for the phone's final text and attaches it as `phone_transcript`.
+     */
+    suspend fun send(conversationId: String, note: RecordedNote, replyTo: ReplyRef?, stt: PhoneSttSessionHandle? = null, notice: (String) -> Unit = {}): MessageEntity? = try {
+        val meta = VoiceStamp.meta(note, place(conversationId), _transcribeMine.value)
+        val phone = stt?.let { phoneTranscriptOf(it.await(PhoneSttPolicy.waitMs(note.durationMs)), notice) }
+        commit(note.audio, conversationId, if (phone == null) meta else meta.copy(phoneTranscript = phone), replyTo)
     } finally {
+        stt?.cancel()
         note.wipe()
+    }
+
+    private fun phoneTranscriptOf(r: PhoneSttResult?, notice: (String) -> Unit): PhoneTranscript? = when (r) {
+        is PhoneSttResult.Text -> PhoneTranscript.of(r.text, r.locale)
+        is PhoneSttResult.NotAvailable -> { notice(PhoneSttStrings.notAvailable(phoneStt?.locale?.value ?: "")); null }
+        else -> null
     }
 
     companion object {

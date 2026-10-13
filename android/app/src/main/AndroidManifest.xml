@@ -48,6 +48,10 @@
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
+        <!-- Developer flag phone_stt: the ON-DEVICE recognition service (createOnDeviceSpeechRecognizer; never the online one). -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
         <!-- §26.6 set_alarm: a Clock app that takes AlarmClock.ACTION_SET_ALARM (else `unsupported`). -->
         <intent>
             <action android:name="android.intent.action.SET_ALARM" />

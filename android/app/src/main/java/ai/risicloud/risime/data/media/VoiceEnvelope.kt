@@ -28,6 +28,8 @@ data class VoiceEnvelope(
     val transcribe: Boolean? = null,
     val requestId: String? = null,
     val extras: EnvelopeExtras = EnvelopeExtras.NONE,
+    /** Proposal 2026-10-14 (v1.47 candidate): the sender phone's own on-device transcript; null = absent (v1.46 bytes). */
+    val phoneTranscript: PhoneTranscript? = null,
 ) {
     fun encode(): ByteArray {
         val b64 = Base64.getEncoder()
@@ -44,13 +46,14 @@ data class VoiceEnvelope(
                 if (transcribe == false) put("transcribe", false)
                 requestId?.let { put("request_id", it) }
                 extras.putInto(this)
+                phoneTranscript?.let { put(PhoneTranscript.FIELD, it.toJson()) }
             },
         ).toByteArray(Charsets.UTF_8)
     }
 
     override fun equals(other: Any?) = other is VoiceEnvelope && blob == other.blob && enc == other.enc && mime == other.mime &&
         durationMs == other.durationMs && waveform.contentEquals(other.waveform) && transcribe == other.transcribe &&
-        requestId == other.requestId && extras == other.extras
+        requestId == other.requestId && extras == other.extras && phoneTranscript == other.phoneTranscript
 
     override fun hashCode() = blob.hashCode() * 31 + waveform.contentHashCode()
 
@@ -100,6 +103,8 @@ data class VoiceEnvelope(
             return VoiceEnvelope(
                 BlobRef(blobId, size, sha), ImageEnc(MediaFormat.ALG, key, plain), mime, duration, waveform,
                 transcribe = transcribe, requestId = requestId, extras = EnvelopeExtras.of(o),
+                // Lenient (proposal 2026-10-14): a malformed `phone_transcript` is ignored, the note is kept.
+                phoneTranscript = PhoneTranscript.parse(o[PhoneTranscript.FIELD]),
             )
         }
     }
@@ -109,6 +114,7 @@ data class VoiceEnvelope(
  * What a `voice` row keeps besides its media row (in `messages.system_json`): the mime, duration, waveform (base64)
  * and the sender-side fields that travel again on a resend ([transcribe] `false` only, [requestId] in the Risi chat).
  */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @kotlinx.serialization.Serializable
 data class VoiceMeta(
     val mime: String,
@@ -116,6 +122,9 @@ data class VoiceMeta(
     val waveform: String,
     val transcribe: Boolean? = null,
     @SerialName("request_id") val requestId: String? = null,
+    /** Never written when absent, so a note without it stores exactly the v1.46 JSON. */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("phone_transcript") val phoneTranscript: PhoneTranscript? = null,
 ) {
     fun encode(): String = ProtocolJson.encodeToString(serializer(), this)
 
@@ -124,9 +133,45 @@ data class VoiceMeta(
         ?: ByteArray(VoiceEnvelope.WAVEFORM_LEVELS)
 
     companion object {
-        fun of(e: VoiceEnvelope) = VoiceMeta(e.mime, e.durationMs, Base64.getEncoder().encodeToString(e.waveform), e.transcribe?.takeIf { !it }, e.requestId)
+        fun of(e: VoiceEnvelope) = VoiceMeta(e.mime, e.durationMs, Base64.getEncoder().encodeToString(e.waveform), e.transcribe?.takeIf { !it }, e.requestId, e.phoneTranscript)
 
         fun decode(json: String?): VoiceMeta? = json?.let { runCatching { ProtocolJson.decodeFromString(serializer(), it) }.getOrNull() }
+    }
+}
+
+/**
+ * Proposal 2026-10-14 (v1.47 candidate) `voice.phone_transcript`: what the sender's phone heard, recognised **on the
+ * device** before encryption. It travels only inside the E2EE envelope. [lang] is the BCP-47 locale the recogniser
+ * ran with; [engine] is `android-on-device` from this app.
+ */
+@kotlinx.serialization.Serializable
+data class PhoneTranscript(val text: String, val lang: String, val engine: String = ENGINE_ANDROID) {
+    fun toJson(): JsonObject = buildJsonObject { put("text", text); put("lang", lang); put("engine", engine) }
+
+    companion object {
+        const val FIELD = "phone_transcript"
+        const val ENGINE_ANDROID = "android-on-device"
+        const val MAX_CHARS = 4000
+        const val MAX_BYTES = 12_000
+
+        /** A sender's transcript, trimmed and capped (null when nothing usable was heard). */
+        fun of(text: String?, lang: String): PhoneTranscript? {
+            var t = text?.trim()?.replace(Regex("\\s+"), " ") ?: return null
+            if (t.isEmpty() || lang.length !in 2..35) return null
+            if (t.length > MAX_CHARS) t = t.take(MAX_CHARS).trimEnd()
+            while (t.toByteArray(Charsets.UTF_8).size > MAX_BYTES) t = t.dropLast(1)
+            return PhoneTranscript(t, lang)
+        }
+
+        /** Lenient receive-side check: anything off → null (ignored), never fatal for the note. */
+        fun parse(el: kotlinx.serialization.json.JsonElement?): PhoneTranscript? {
+            val o = el as? JsonObject ?: return null
+            fun s(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            val text = s("text")?.trim()?.takeIf { it.isNotEmpty() && it.length <= MAX_CHARS && it.toByteArray(Charsets.UTF_8).size <= MAX_BYTES } ?: return null
+            val lang = s("lang")?.takeIf { it.length in 2..35 && it.all { c -> c.isLetterOrDigit() || c == '-' } } ?: return null
+            val engine = s("engine")?.takeIf { it.length in 1..64 } ?: return null
+            return PhoneTranscript(text, lang, engine)
+        }
     }
 }
 

@@ -173,6 +173,7 @@ object HistoryExport {
                     val env = ai.risicloud.risime.data.media.VoiceEnvelope(
                         ai.risicloud.risime.net.BlobRef(blobId, row.blobSize, row.blobSha256), enc, meta.mime, meta.durationMs, meta.levels,
                         transcribe = meta.transcribe?.takeIf { !it }, extras = ai.risicloud.risime.data.mls.sendExtras(m),
+                        phoneTranscript = meta.phoneTranscript,
                     )
                     val obj = json(env.encode())
                     ai.risicloud.risime.data.media.VoiceEnvelope.validate(obj) ?: continue
