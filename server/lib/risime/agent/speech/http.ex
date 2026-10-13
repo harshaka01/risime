@@ -12,6 +12,14 @@ defmodule RisiMe.Agent.Speech.Http do
     plus `script` and `romanised` for a Sinhala chunk, v1.40 §36.11);
     without it (404) each model is asked through `/v1/audio/transcriptions` in parallel. Every
     model has a 30-s timeout.
+  * **Extra compare candidates** (2026-10-14, developer compare mode only): when
+    `compare_extra_url` (else `RISI_SPEECH_COMPARE_EXTRA_URL`) names a second loopback service
+    with the same `/v1/audio/compare` (the omniASR eval service, `infra/omniasr`), it is asked
+    after the speech service, with the detected language and `models` =
+    `compare_extra_models` (else `RISI_SPEECH_COMPARE_EXTRA_MODELS`, default
+    `omniasr-llm-1b`), and its results are appended (same §36.11 result shape; `chosen` and
+    `language_detected` stay the speech service's). Its failure or timeout only marks those
+    models `failed` / `timeout`. Off by default; `transcribe/1,2` never uses it.
   * **Health:** `GET /health`, cached 15 s.
   * **Language hint** (decision 071 amendment d): `opts[:language_hint]` (`["si", "en"]`) is
     sent as the multipart field `language_hint=si,en` on transcribe and compare (and the
@@ -198,6 +206,13 @@ defmodule RisiMe.Agent.Speech.Http do
 
   @impl true
   def compare(audio, opts \\ []) when is_binary(audio) do
+    case compare_main(audio, opts) do
+      {:ok, c} -> {:ok, with_extra(c, audio, opts)}
+      other -> other
+    end
+  end
+
+  defp compare_main(audio, opts) do
     with {:ok, base} <- base_url() do
       timeout = Keyword.get(opts, :timeout, @timeout_ms)
       # All three models may run one after another on the service.
@@ -231,27 +246,7 @@ defmodule RisiMe.Agent.Speech.Http do
   end
 
   defp compare_result(b) do
-    results =
-      (b["results"] || [])
-      |> Enum.filter(&is_map/1)
-      |> Enum.map(fn r ->
-        error =
-          case r["error"] do
-            nil -> nil
-            "timeout" -> "timeout"
-            _ -> "failed"
-          end
-
-        %{
-          model: to_string(r["model"]),
-          text: if(error, do: nil, else: r["text"] && String.trim(to_string(r["text"]))),
-          language: if(error, do: nil, else: r["language"]),
-          elapsed_ms: ms(r["processing_s"], r["elapsed_ms"] || 0),
-          error: error,
-          script: if(error, do: nil, else: script(r["script"])),
-          romanised: if(error || not is_boolean(r["romanised"]), do: nil, else: r["romanised"])
-        }
-      end)
+    results = compare_results(b)
 
     detected =
       Speech.lang(
@@ -264,6 +259,86 @@ defmodule RisiMe.Agent.Speech.Http do
       chosen: b["routed_model"] || b["chosen"] || Speech.route(detected),
       results: results
     }
+  end
+
+  defp compare_results(b) do
+    (b["results"] || [])
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn r ->
+      error =
+        case r["error"] do
+          nil -> nil
+          "timeout" -> "timeout"
+          _ -> "failed"
+        end
+
+      %{
+        model: to_string(r["model"]),
+        text: if(error, do: nil, else: r["text"] && String.trim(to_string(r["text"]))),
+        language: if(error, do: nil, else: r["language"]),
+        elapsed_ms: ms(r["processing_s"], r["elapsed_ms"] || 0),
+        error: error,
+        script: if(error, do: nil, else: script(r["script"])),
+        romanised: if(error || not is_boolean(r["romanised"]), do: nil, else: r["romanised"])
+      }
+    end)
+  end
+
+  # The extra compare-only candidates (moduledoc), appended after the speech service's own.
+  defp with_extra(c, audio, opts) do
+    case extra() do
+      {:ok, base, models} ->
+        models = Enum.reject(models, fn m -> Enum.any?(c.results, &(&1.model == m)) end)
+        %{c | results: c.results ++ extra_results(base, models, c, audio, opts)}
+
+      :off ->
+        c
+    end
+  end
+
+  defp extra_results(_base, [], _c, _audio, _opts), do: []
+
+  defp extra_results(base, models, c, audio, opts) do
+    timeout = Keyword.get(opts, :timeout, @timeout_ms)
+
+    fields = [
+      file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"},
+      language: c.language_detected,
+      models: Enum.join(models, ",")
+    ]
+
+    case Req.post(req(base <> "/v1/audio/compare", timeout * length(models) + 5_000),
+           form_multipart: fields
+         ) do
+      {:ok, %{status: 200, body: %{} = b}} -> compare_results(b)
+      {:error, %{reason: :timeout}} -> Enum.map(models, &missing(&1, "timeout", timeout))
+      _ -> Enum.map(models, &missing(&1, "failed", 0))
+    end
+  end
+
+  defp missing(model, error, ms),
+    do: %{model: model, text: nil, language: nil, elapsed_ms: ms, error: error}
+
+  defp extra do
+    cfg = config()
+
+    url =
+      if Keyword.has_key?(cfg, :compare_extra_url),
+        do: cfg[:compare_extra_url],
+        else: System.get_env("RISI_SPEECH_COMPARE_EXTRA_URL")
+
+    models =
+      (cfg[:compare_extra_models] || System.get_env("RISI_SPEECH_COMPARE_EXTRA_MODELS") ||
+         "omniasr-llm-1b")
+      |> List.wrap()
+      |> Enum.flat_map(&String.split(&1, [",", " "], trim: true))
+
+    with true <- is_binary(url) and url != "" and models != [],
+         {:ok, base} <- Local.check_url(url) do
+      {:ok, base, models}
+    else
+      _ -> :off
+    end
   end
 
   # A service without `/v1/audio/compare`: each model by itself, in parallel.

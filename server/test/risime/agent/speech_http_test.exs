@@ -298,6 +298,119 @@ defmodule RisiMe.Agent.SpeechHttpTest do
     assert Enum.all?(hints.(), &(elem(&1, 1) == nil))
   end
 
+  describe "extra compare candidates (omniASR eval service, 2026-10-14)" do
+    defp main_compare(conn) do
+      Req.Test.json(conn, %{
+        "detected" => %{"language" => "si", "probability" => 0.9},
+        "routed_model" => "qwen3-asr-0.6b-sinhala",
+        "results" => [
+          %{"model" => "qwen3-asr-0.6b-sinhala", "text" => "අ", "processing_s" => 0.5}
+        ]
+      })
+    end
+
+    defp with_extra(kv) do
+      cfg = Application.get_env(:risime, :risi_speech_http)
+      Application.put_env(:risime, :risi_speech_http, Keyword.merge(cfg, kv))
+    end
+
+    test "off by default: only the speech service is asked" do
+      rec = stub(fn conn, _ -> main_compare(conn) end)
+      with_extra(compare_extra_url: nil)
+      assert {:ok, c} = Http.compare("x")
+      assert [%{model: "qwen3-asr-0.6b-sinhala"}] = c.results
+      assert [{"/v1/audio/compare", _, _}] = Agent.get(rec, & &1)
+    end
+
+    test "appended after the speech service's results, with the detected language" do
+      rec =
+        stub(fn conn, body ->
+          case conn.port do
+            8200 ->
+              main_compare(conn)
+
+            8210 ->
+              assert field(body, "language") == "si"
+              assert field(body, "models") == "omniasr-llm-1b,omniasr-llm-7b"
+
+              Req.Test.json(conn, %{
+                "language" => "si",
+                "results" => [
+                  %{
+                    "model" => "omniasr-llm-1b",
+                    "text" => " ආ ",
+                    "language" => "si",
+                    "processing_s" => 1.2,
+                    "script" => %{
+                      "expected" => "sinh",
+                      "sinhala_chars" => 1,
+                      "latin_chars" => 0,
+                      "ok" => true
+                    },
+                    "romanised" => false
+                  },
+                  %{"model" => "omniasr-llm-7b", "error" => "not enough memory: x"}
+                ]
+              })
+          end
+        end)
+
+      with_extra(
+        compare_extra_url: "http://127.0.0.1:8210",
+        compare_extra_models: "omniasr-llm-1b,omniasr-llm-7b"
+      )
+
+      assert {:ok, c} = Http.compare("x", language_hint: ["si"])
+      assert c.chosen == "qwen3-asr-0.6b-sinhala"
+      assert c.language_detected == "si"
+
+      assert [
+               %{model: "qwen3-asr-0.6b-sinhala", text: "අ"},
+               %{
+                 model: "omniasr-llm-1b",
+                 text: "ආ",
+                 elapsed_ms: 1200,
+                 error: nil,
+                 romanised: false,
+                 script: %{ok: true, sinhala_chars: 1}
+               },
+               %{model: "omniasr-llm-7b", text: nil, error: "failed"}
+             ] = c.results
+
+      assert [_main, _extra] = Agent.get(rec, & &1)
+      assert Enum.all?(Agent.get(rec, & &1), &(elem(&1, 2) == ["Bearer test-speech-key"]))
+    end
+
+    test "a failing extra service only marks its models failed" do
+      stub(fn conn, _ ->
+        case conn.port do
+          8200 -> main_compare(conn)
+          8210 -> conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{})
+        end
+      end)
+
+      with_extra(compare_extra_url: "http://127.0.0.1:8210")
+      assert {:ok, c} = Http.compare("x")
+
+      assert [
+               %{model: "qwen3-asr-0.6b-sinhala", error: nil},
+               %{model: "omniasr-llm-1b", text: nil, error: "failed"}
+             ] = c.results
+    end
+
+    test "a non-loopback extra URL is never asked; a failed main compare skips it" do
+      rec = stub(fn conn, _ -> main_compare(conn) end)
+      with_extra(compare_extra_url: "http://10.0.0.5:8210")
+      assert {:ok, %{results: [_]}} = Http.compare("x")
+      assert [_] = Agent.get(rec, & &1)
+
+      rec = stub(fn conn, _ -> conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{}) end)
+      with_extra(compare_extra_url: "http://127.0.0.1:8210")
+      assert {:error, :unavailable} = Http.compare("x")
+      assert [_] = Agent.get(rec, & &1)
+    end
+  end
+
   test "health, cached; a non-loopback URL is refused before any request" do
     stub(fn conn, _ -> Req.Test.json(conn, %{"status" => "ok"}) end)
     assert Http.healthy?()
