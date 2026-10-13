@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.44 (Release 0.3)
+# RisiMe Wire Protocol — v1.45 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -4263,7 +4263,7 @@ that is in the group's MLS device list; otherwise `403 invalid_device`). Body
 - **Push** (server S6): for `ring: true`, the `call` push (§16.8) at once to every `group_calls`
   device of the other members that has no live inbox channel. No 3-s fallback in groups.
 - **Limits** (server S5), per user, inside the 60 per 10 s total: `ring: true` at most **1 per group
-  per 30 s** and **10 per hour**; `ring: false` at most **30 per group per 10 s**.
+  per 30 s** and **10 per hour** (v1.45: 1 per 10 s and 20 per hour, §40.4); `ring: false` at most **30 per group per 10 s**.
 - **Envelopes** (MLS application messages in the group, §16.2 rules for `call_id` and `sent_at`):
   - **`call_offer`** with **`"mode": "sfu"`**, `ring: true` (`call_offer_sfu_payload.json`):
     ```json
@@ -10380,6 +10380,7 @@ risi: {"v": 1, "kind": "call_transcript_compare", "call_id", "session_id", "seq"
   - Never logged anywhere: audio, and transcript text outside these rows.
 
 ### 36.9 Groups (later; reserved)
+(v1.45: activated and specified by §40.9.)
 Group Official calls (§20) use the same push, signal, upload and kinds, with these differences:
 - the participants are the human identities in the LiveKit room;
 - a joiner while `on` turns the state to **`paused`** (uploads get `409 not_consented`) until they allow;
@@ -10921,7 +10922,248 @@ the body:
   on both phones (a local OG page through the debug seam), no card with the switch off, and no URL text in the
   server's log or database.
 
+## 40. Adding people to a call (v1.45)
+Decision 086 (Harsha PART 10, 2026-10-13). Extends §16, §19, §20, §23 and §36 and overrides them where they
+differ. **Additive:** one device capability `add_to_call`; the `features` value `add` (§23.1); one ephemeral
+envelope `call_escalate`; the `call_end` reason `moved` with `moved_to`; `ring_users` on the `mode: "sfu"`
+`call_offer` and the re-ring of a running group call; `Friend.group_calls`; relaxed group ring limits; §36.9
+activated (Official group calls, the Session state `paused`). No MLS core change, no new exporter label, no
+server call table, no new store.
+
+### 40.0 Principles
+- **More than two people is always a §20 call on a `grp:`.** A `dm:` group can't hold a third member
+  (§10.2, §24.1), so adding people to a 1:1 call **creates a new group chat** of everyone in the call (the
+  adder, the peer, the invitees) with the normal §12.3 create (and §24.2 Official) flow, and **moves the
+  call into it**. Frame keys come from that group's MLS exporter exactly as §20.6; rooms, tokens, caps,
+  removal and the roster rule (K7) are §20/§23 unchanged.
+- **The tab follows the call.** A Private 1:1 call moves into the new group's **Private** conversation; a
+  call placed from the 1:1's **Official** tab (`call_offer.tab`, §36.1) into its **Official** conversation.
+  If Official isn't `active` within 15 s of the group, the call moves into Private and both screens say
+  "Continuing as a Private call" (never toward Risi hearing, §24.0).
+- **Nobody is dropped.** Make before break: the room comes up, both devices connect and install the
+  group's keys while the peer-to-peer call carries the audio; each side switches when it sees the other in
+  the room (§40.3). If the room doesn't come up within 30 s, nothing changes for the two.
+- **Old peers are never asked** (per-call `features`, §40.1); old invitees can't be picked; old sibling
+  devices ring briefly and stop on `call_member` `joined` (§20.3).
+- No model calls for the call itself (decision 086: infrastructure). Official group calls may be
+  transcribed only under §40.9, with everyone's consent.
+
+### 40.1 Capability, features, readiness
+- A v1.45 app advertises **`"add_to_call"`** in `mls.capabilities` (`device_put_add_to_call.json`) together
+  with `group_calls` and `call_switch`, once it implements §40.2–§40.8. The server keeps it (it joins
+  `@known_capabilities`); it is information only (no readiness field).
+- **Per call, inside MLS:** `call_offer` (first offer) and `call_answer` list **`"add"`** in `features`
+  (§23.1) when the sending device advertises `add_to_call` (`call_offer_features_add_payload.json`,
+  `call_answer_features_add_payload.json`).
+- **"Add participant"** in a 1:1 call is enabled only while the call is connected (`ACTIVE`), both
+  selected devices listed `add`, and this device advertises `add_to_call`. Otherwise it stays visible and
+  disabled with why: "<name> needs to update RisiMe to add people" (no `add` from the peer), "Update
+  RisiMe on this phone to add people", "Add people once the call has connected".
+- **`Friend` (§9.2) gains `"group_calls": bool`** (`friends_reply_v145.json`; absent = unknown, treated
+  as true): the friend has a `group_calls` device that can still receive (§12.1). The picker greys out
+  friends with `group_ready: false` ("needs to update") or `group_calls: false` ("can't join calls yet").
+
+### 40.2 The picker (client)
+- Lists my friends except the peer, searchable, multi-select. **Caps:** with the people already in the
+  call, at most **32** in a voice call and **8** in a video call (§20.9; the picker says "Up to 8 people
+  in a video call").
+- Official call: the subtitle says "Risi will be in this group chat (Official)"; Private: "A new group
+  chat with everyone in the call".
+- **[Add]** confirms: "Add Sunil to this call? A group chat with Nimal, Sunil and you is created; Sunil
+  hears the call from when they join." Nothing is created before this tap.
+
+### 40.3 Moving a 1:1 call into a group (normative)
+**The adder (A), with the peer's selected device B:**
+1. **Create the group:** `POST /groups` with `member_ids` = the peer plus the invitees (§12.3), the
+   epoch-0 commit; name = the members' first names as A knows them, sorted, A last ("Nimal, Sunil and
+   Harsha"), cut to 100 grapheme clusters; for an Official call also `POST /chats/{chat_id}/official`
+   (§24.2) and wait ≤ 15 s for it to be `active`. The **call conversation** is the Official `grp:` if it
+   is active, else the Private one. Errors (`not_friends`, `not_ready`, `too_many_*`, offline) end the add
+   with "Couldn't add people" and nothing else changes.
+2. **Start the room:** a new `room_call_id` (UUIDv4); `POST /calls/rooms` `start` with the call
+   conversation, `room_call_id` and **`media`** = `"video"` if the 1:1 call is in video mode (§23.2),
+   else `"audio"`; connect (§20.5) and install the keys (§20.6) — **in hold**: nothing is published.
+3. **Tell the peer:** `call_escalate` `state: "move"` (§40.5) to B over the 1:1 path (`call:signal`,
+   `to` = the peer, `ring: false`, the 1:1 call's start `media`).
+4. **Ring the invitees:** the durable `group_call` `started` (§20.4, with the room's `media`), then the
+   `call_offer` `mode: "sfu"` with **`ring_users`** = the invitees (never the peer) (§40.4).
+5. **Switch** when B's identity (`<peer user>/<B device>`) is present in the room and is a leaf of the
+   call conversation at the current epoch: stop the peer-to-peer media (the `RTCPeerConnection` closes;
+   nothing more is sent on it), then publish the microphone (and the camera if it was on, §19.5), and
+   send the durable **`call_end`** with **`reason: "moved"`** (§40.5) in the `dm:`. The call screen
+   becomes the group call screen; the platform call and audio route stay (§40.7).
+6. **Give up** if B isn't in the room **30 s** after step 3, or on B's `call_escalate` `failed`: leave the
+   room, send `call_cancel` `ended` and `group_call` `ended` `timeout` in the call conversation (invitees
+   stop ringing), stay on the 1:1 call and show "Couldn't add people. You're still in the call with
+   Nimal." The new group chat stays (it was created; nothing is deleted).
+
+**The peer (B), on `call_escalate` `move`** from the selected peer device of its connected call:
+1. Validate (§40.5) and show "Kamal is adding Sunil…" (the invitees: the call conversation's members
+   other than the two of us, from MLS).
+2. Catch up groups until the call conversation's MLS state is local and its leaves include the sender
+   device and this device (≤ 20 s; a Welcome arrives with the group's `created`, §12.7). Then
+   `POST /calls/rooms` `join` with `room_call_id` and the envelope's `media`, connect, keys, **hold**,
+   send `call_member` `joined` (§20.3: B's other devices stop ringing).
+3. **Switch** when the sender's identity is present and a leaf (as step 5 above): stop the peer-to-peer
+   media and publish. B sends **no** `call_end` (A's `moved` is the line).
+4. **Fail** (no group state in 20 s, `call_ended`/`call_full`/an error from `join`, keys failing, busy):
+   `call_escalate` `state: "failed"` with `reason`, leave the room if joined, stay on the 1:1 call.
+- While a move is pending (from step 3 for A, from receipt for B, until the switch or the give-up), the
+  1:1 machine **ignores** peer-to-peer ICE loss and restarts caused by the move for 30 s (no `failed`,
+  no restart storm), and a hang-up on either side ends both the 1:1 call (`call_end` `hangup`, as
+  before) and the room (leave; A also cancels the ring).
+- **Invitees (C)** ring as for any §20 group call ("Kamal · Nimal, Sunil and Kamal", Answer / Decline);
+  answering is §20.4 step 2.
+- A move happens at most once per 1:1 call; the button is gone afterwards (the group call has its own
+  Add, §40.4).
+
+### 40.4 `ring_users`, late adds and re-rings (groups)
+- **`call_offer` `mode: "sfu"`** gains optional **`"ring_users": [uuid]`** (1–31 user ids, lowercase;
+  `call_offer_sfu_ring_users_payload.json`). When present, **only devices of those users ring**; other
+  members' devices note the call (the chat line with Join) and don't ring. Absent = every other member
+  (v1.19). The sender's own user is never rung.
+- **Re-ring:** a participant of a running group call may send the offer again for the **same `call_id`**
+  with a fresh `sent_at` and `ring_users` = the people to ring. A receiver rings again for a `call_id` it
+  has seen only when `ring_users` names its user, the offer passes §20.3 freshness, its `sent_at` is
+  later than the last offer of that `call_id` this device acted on, and the device isn't in that call.
+  Declining a re-ring is `call_member` `declined` as before.
+- **"Add participant" in a group call** (any §20 call, including a moved one): the picker shows
+  (a) members of the call conversation who aren't in the room → **Ring** (a re-ring); (b) for an
+  **admin** of the chat, friends who aren't members → **Add to group and ring**: a confirmation ("Add
+  Sunil to Pilot team? They'll see new messages in this group."), the §12.3 add (§24.3 for both tabs),
+  then, once the add commit has landed (the call rekeys, K3), a re-ring naming them. Non-admins see "Only
+  admins can add people to this group".
+- **Server limits** (amends §20.3 S5): `ring: true` at most **1 per user per group per 10 s** and **20 per
+  user per hour** (was 30 s and 10); `ring: false` unchanged.
+
+### 40.5 Envelopes
+**`call_escalate`** (ephemeral: `call:signal`, `to` = the peer, `ring: false`, the 1:1 call's start
+`media`, the cleartext `call_id` = the 1:1 call's; sender pinning of §16.3: only from the selected peer
+device of that call):
+```json
+{"v": 1, "type": "call_escalate", "call_id": "<1:1 call_id>", "to_device": "<peer device_id>",
+ "state": "move", "conversation_id": "grp:…", "room_call_id": "<uuid>", "media": "audio"}
+{"v": 1, "type": "call_escalate", "call_id": "<1:1 call_id>", "to_device": "<peer device_id>",
+ "state": "failed", "reason": "no_group"}
+```
+(`call_escalate_move_payload.json`, `call_escalate_failed_payload.json`.)
+- `state` `move` (adder → peer) carries `conversation_id` (a `grp:` id), `room_call_id` (a lowercase
+  UUIDv4, never equal to `call_id`) and `media` (`audio` | `video`); `failed` (peer → adder) carries
+  `reason`: `no_group` | `room` | `keys` | `busy` | `cancelled`.
+- Accepted only for a connected call (`ACTIVE`/`RECONNECTING`) whose peer listed `add`, at most one `move`
+  per call (a repeat with the same `room_call_id` is ignored, another one dropped).
+- Strict validation: the UUIDs, `to_device` = this device, `state` one of two, the fields of that state
+  present and valid; else drop and log. ≤ v1.43 apps never receive it (they didn't list `add`) and would
+  ignore it (§16.2 unknown type).
+
+**`call_end` `reason: "moved"`** (durable, the adder only; `call_end_moved_payload.json`):
+```json
+{"v": 1, "type": "call_end", "call_id": "…", "media": "audio", "reason": "moved",
+ "connected_at": "…", "duration_s": 130, "moved_to": {"conversation_id": "grp:…", "call_id": "…"}}
+```
+`connected_at`/`duration_s` cover the 1:1 part. `moved_to` is optional (display only: the line links to
+the group chat). §16.2 renders an unknown reason as "Voice call", so older devices of either user show
+"Voice call · 2:10".
+
+### 40.6 History lines (client)
+- **The 1:1 chat:** "Voice call · 2:10 · continued as a group call" (or "Video call …"); tapping opens the
+  `moved_to` chat when this device has it. Same direction rules as §16.6.
+- **The group chat:** the §20.4 lines of the room's call: "Kamal started a voice call" with Join while it
+  runs, then "Voice call · 12:03"; an invitee who never answered sees "Missed voice call" (and gets the
+  §16.6 missed-call notification once, at the end of the ring); one who declined sees "Voice call ·
+  12:03" like every member. The Calls tab lists both lines.
+
+### 40.7 Group voice and video behaviour (android, normative where it says "must")
+- **One platform call.** The Telecom call of the 1:1 call **must** carry on for the group call (no
+  disconnect and re-add): its audio route (earpiece, speaker, wired, Bluetooth) and the user's pick stay.
+  The ongoing notification and the call bar switch to the group's name.
+- **Join and leave:** Leave = disconnect (§20.4). **The call goes on when the starter leaves:** the room
+  lives while anyone is in it; the last one out sends `group_call` `ended` (§20.4 step 4).
+- **Late join:** Join on the running line (§20.4) at any time while the room exists, also after a decline
+  or a missed ring, and after this device left (rejoin).
+- **Reconnect:** LiveKit's reconnect (ICE restart, resume, full reconnect) for up to **20 s**
+  ("Reconnecting…"); then "Lost connection", and Join on the line while the room exists. A network change
+  (Wi-Fi ↔ mobile) is a reconnect, not a leave.
+- **Mute** shows on every tile (the participant's microphone mute state); the **active speaker**
+  (LiveKit's speaker list, only for MLS members whose frames decrypt) is highlighted and, in video, takes
+  the large tile.
+- **Video:** a grid of up to 8 tiles (1 large + 7 small with adaptive stream, §20.5), my camera preview,
+  **Flip** (front/back), camera on/off. Screen sharing in groups follows §23.5/§23.6 when the device
+  advertises `screen_share`.
+- **Busy:** a device in a group call doesn't ring for a 1:1 call and vice versa (§20.4); the move itself
+  is the one allowed overlap of the two.
+
+### 40.8 Rollout and old apps
+- **Order:** server (capability, `Friend.group_calls`, limits, §40.9) → a nightly with the android flag
+  `ADD_TO_CALL_ENABLED` off (receives `ring_users`, `moved` lines, re-rings) → the flag on (advertises
+  `add_to_call`, sends `features` `add`, shows the button) once `scripts/group-call-test` is green.
+- **v1.19–v1.43 devices:** never get `call_escalate`; a group ring with `ring_users` rings them anyway
+  (they ignore the field) until a sibling's `call_member` `joined`/`declined` or the ring's end; `call_end`
+  `moved` reads "Voice call · m:ss".
+- **A server before v1.45:** `Friend.group_calls` absent (treated as true; an invitee who can't join
+  simply never answers), a re-ring within 30 s gets `rate_limited` ("Try again in a moment").
+
+### 40.9 Official group calls: transcription (activates §36.9; reuses §36, §38)
+Everything in §36 holds for a §20 call on an **Official** `grp:` with Official `on` (a group's Official
+call, or a 1:1 Official call moved there), with these differences (server and android, normative):
+- **The call record** (server): a group `call:signal` `ring: true` records `{conv, starter, media}` for its
+  `call_id` (4 h, §36.2; the first ring wins). `call:transcribe` names that conversation in
+  `conversation_id` (it must equal the record's); `unknown_call` without a record; `not_official` unless
+  it is Official with Official on.
+- **Participants are the human users in the LiveKit room** (`ListParticipants` of the room named by
+  §20.2 from `conv`, `call_id` and the start `media`; agent identities excluded), read at every push and
+  on the 5-s tick. A user who isn't in the room and isn't already a participant can't request or allow
+  (`not_participant`).
+- **A joiner** (a user who appears in the room after the request) is added as `pending`. If the session
+  is `requested`, it waits for them too; if it is `on`, it turns **`paused`**: uploads get `409
+  not_consented`, the phones show "Paused until Sunil allows" and the joiner gets the §36.6 prompt. The
+  joiner's `allow` (the last pending) → `on`; their `decline` → `declined` (stops for everyone); 30 s
+  without an answer → `stopped` with `reason: "expired"`. A participant who leaves the room keeps their
+  consent and stops uploading.
+- **Session** gains `"paused"` in `state` (`signal_call_transcribe_paused.json`); `paused` is not final.
+  Transitions added: `on ──joiner──▶ paused`, `paused ──allow by the last pending──▶ on`, `paused
+  ──decline──▶ declined`, `paused ──30 s──▶ stopped (expired)`, `paused ──stop──▶ stopped`. `left` (§36.2)
+  applies when **no** participant has uploaded for 90 s; a session also ends (`ended`) when the room is
+  gone.
+- **Hang-up:** a participant leaving a group call sends `stop` `ended` **only** when nobody else is left
+  in the room; otherwise nothing (the others carry on).
+- `peer_not_ready`: some other participant in the room has no live `call_transcribe` device.
+- **The §27.7 listener and this path never run in the same call** (`busy`).
+- **After the call:** §36.7 unchanged (≥ 30 s of speech from ≥ 2 speakers): per-person summaries to each
+  speaker's Risi chat, one card in Official, §38 action items with the §38.9 rules.
+- **Phones:** [Transcribe] on the group call screen under §36.1 (Official, `on`, this device has
+  `call_transcribe`); the red bar names who is pending while `paused`.
+
+### 40.10 Limits on spark2 (measured 2026-10-13)
+The §20.9 caps (32 voice, 8 video) stay the contract. Measured with a test LiveKit (the pilot's image and
+configuration, its own ports) and synthetic participants; the numbers and the honest limits are in
+decision 086.
+
+### 40.11 Examples, gate
+- **Examples:** `device_put_add_to_call.json`, `call_offer_features_add_payload.json`,
+  `call_answer_features_add_payload.json`, `call_escalate_move_payload.json`,
+  `call_escalate_failed_payload.json`, `call_end_moved_payload.json`,
+  `call_offer_sfu_ring_users_payload.json`, `friends_reply_v145.json`,
+  `signal_call_transcribe_paused.json`.
+- **Server:** `add_to_call` kept; `Friend.group_calls`; the new ring limits (a re-ring after 10 s passes,
+  within 10 s `rate_limited`, the hour cap 20); `call_escalate` is an ordinary 1:1 `ring: false` signal;
+  §40.9 (participants from the room, a joiner pauses, decline stops, the 30-s pause expiry, uploads
+  refused while paused, the listener's `busy`); every new example.
+- **Android (JVM):** encode/decode and the strict drops of every new example; the button gating; the
+  move machine (both sides: hold, the switch on presence, give-up at 30 s, `failed`, hang-up during the
+  move, ICE loss ignored while moving); `ring_users` and the re-ring rule; the history lines; one
+  Telecom call through the move.
+- **Device:** `scripts/group-call-test` (3 redroids, a test LiveKit): A calls B (voice), A adds C, C
+  answers, every phone receives decrypted audio from both others, B leaves and A–C go on; then the same
+  with video (frames decoded from every remote). `GCTEST OK`.
+
 ## Changelog
+- **v1.45** (2026-10-13): adding people to a call (§40, decision 086). A 1:1 call moves into a new group chat of
+  everyone in it (Private or Official as the call) and continues as a §20 call: capability `add_to_call`,
+  `features` `add`, the envelope `call_escalate` (`move` / `failed`), make-before-break with one audio switch,
+  `call_end` `reason: "moved"` with `moved_to`; `ring_users` on the SFU offer and re-rings of a running group call
+  (late add); `Friend.group_calls`; group ring limits 1 per 10 s and 20 per hour; §36.9 activated (Official group
+  calls: participants from the room, the `paused` state). Additive.
 - **v1.44** (2026-10-13): Link previews (§39, Harsha PART 11). The optional `link_preview` on the `text` envelope
   (`url` in the body, `title`, `description`, `site_name`, the §14.4 inline `thumb`), fetched by the sender's phone
   under strict rules (https only, no private addresses, 5 s, size caps, no cookies) and sent only inside E2EE; the
