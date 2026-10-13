@@ -18,6 +18,8 @@ defmodule RisiMeWeb.Admin.Headers do
           "script-src 'self'",
           "style-src 'self' 'unsafe-inline'",
           "img-src 'self' data:",
+          # The Voices page's test players (audio returned in the page, never a URL).
+          "media-src 'self' data:",
           "connect-src 'self' #{ws}#{url.host}#{port(url)}",
           "frame-ancestors 'none'",
           "base-uri 'none'",

@@ -299,6 +299,81 @@ defmodule RisiMeWeb.AdminConsoleTest do
     end
   end
 
+  describe "Voices page and Auto (Part 12 items 2–3)" do
+    test "renders the voice choice, the engine catalogue (not installed) and Auto", %{conn: conn} do
+      {a, _} = admin("voices@example.com")
+      html = conn |> admin_conn(a.id) |> get("/admin/voices") |> html_response(200)
+
+      for s <- ["Voices (text-to-speech)", "Mixed / Singlish", "Kokoro", "Orpheus", "Chatterbox"],
+          do: assert(html =~ s)
+
+      assert html =~ "Indic Parler"
+      assert html =~ "today&#39;s route"
+
+      [csp] =
+        conn
+        |> admin_conn(a.id)
+        |> get("/admin/voices")
+        |> get_resp_header("content-security-policy")
+
+      assert csp =~ "media-src 'self' data:"
+    end
+
+    test "the Speech page lists the model families and what Auto does today", %{conn: conn} do
+      {a, _} = admin("families@example.com")
+      html = conn |> admin_conn(a.id) |> get("/admin/speech") |> html_response(200)
+
+      for s <- [
+            "Qwen-Sinhala",
+            "omniASR 1B",
+            "omniASR 3B",
+            "omniASR 7B",
+            "Tamil models",
+            "Phone (on-device)"
+          ],
+          do: assert(html =~ s)
+
+      assert html =~ "Auto uses today"
+      assert html =~ "promotion rule"
+    end
+
+    test "saving a voice on the Voices page is validated and audit-logged" do
+      {a, _} = admin("voices2@example.com")
+
+      installed = [
+        %{
+          id: "kokoro",
+          name: "Kokoro",
+          module: nil,
+          status: :ok,
+          voices: [%{id: "kokoro:si1", name: "si", languages: ["si"]}]
+        }
+      ]
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{__changed__: %{}, admin_id: a.id, installed: installed, test: nil, flash: %{}}
+      }
+
+      {:noreply, s} =
+        RisiMeWeb.Admin.VoicesLive.handle_event(
+          "save",
+          %{"lang" => "si", "voice" => "kokoro:si1"},
+          socket
+        )
+
+      assert {:ok, _} = s.assigns.notice
+      assert RisiMe.Agent.TTS.voice_for("si") == {:manual, "kokoro:si1"}
+
+      {:noreply, s} =
+        RisiMeWeb.Admin.VoicesLive.handle_event("test", %{"text" => "  "}, s)
+
+      assert {:error, _} = s.assigns.notice
+
+      assert Repo.all(from e in AuditEntry, where: e.actor_id == ^a.id, select: e.action) ==
+               ["setting_set"]
+    end
+  end
+
   describe "test clips" do
     test "lists only top-level audio files; reads only listed names" do
       dir = Path.join(System.tmp_dir!(), "risime-clips-#{System.unique_integer([:positive])}")

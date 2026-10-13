@@ -136,6 +136,44 @@ defmodule RisiMe.Agent.SpeechRoutes do
     }
   end
 
+  # Part 12: the families Harsha expects. A family is installed when the speech service serves
+  # a model whose alias matches; "phone" is the phone's own recogniser (developer flag
+  # phone_stt), never a server model.
+  @catalogue [
+    {"Qwen-Sinhala", &__MODULE__.qwen_sinhala?/1},
+    {"omniASR 1B", &__MODULE__.omni_1b?/1},
+    {"omniASR 3B", &__MODULE__.omni_3b?/1},
+    {"omniASR 7B", &__MODULE__.omni_7b?/1},
+    {"Whisper", &__MODULE__.whisper?/1},
+    {"Tamil models", &__MODULE__.tamil?/1}
+  ]
+
+  @doc """
+  The expected model families with the served aliases that belong to each:
+  `[%{family, installed: [alias]}]`, plus Phone (on-device), which is never a server model.
+  """
+  def catalogue(models) do
+    ids = Enum.map(models, & &1.id)
+
+    for({family, match} <- @catalogue, do: %{family: family, installed: Enum.filter(ids, match)}) ++
+      [%{family: "Phone (on-device)", installed: [], phone: true}]
+  end
+
+  @doc false
+  def qwen_sinhala?(id), do: id =~ ~r/qwen3?-asr/i and id =~ ~r/sinhala|-si\b/i
+  @doc false
+  def omni_1b?(id), do: omni?(id) and id =~ ~r/(^|[-_])1b([-_.]|$)/i
+  @doc false
+  def omni_3b?(id), do: omni?(id) and id =~ ~r/(^|[-_])3b([-_.]|$)/i
+  @doc false
+  def omni_7b?(id), do: omni?(id) and id =~ ~r/(^|[-_])7b([-_.]|$)/i
+  @doc false
+  def whisper?(id), do: id =~ ~r/whisper/i and not tamil?(id)
+  @doc false
+  def tamil?(id), do: id =~ ~r/tamil/i
+
+  defp omni?(id), do: id =~ ~r/omni/i
+
   @doc "The models offered for `lang`: the ones for that language, then the multilingual ones."
   def candidates(models, lang) when lang in @langs do
     if lang == "mixed",

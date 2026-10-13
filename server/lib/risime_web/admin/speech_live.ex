@@ -33,6 +33,7 @@ defmodule RisiMeWeb.Admin.SpeechLive do
       |> assign(:clip, nil)
       |> assign(:test, nil)
       |> assign(:notice, nil)
+      |> assign(:auto, RisiMe.Agent.VoiceAuto.status(:stt))
       |> load_choices()
       |> load_audit()
 
@@ -187,10 +188,29 @@ defmodule RisiMeWeb.Admin.SpeechLive do
         </table>
         <p class="muted">
           Auto today is the production route: the speech service detects the language and picks its
-          routed model. Mixed / Singlish means the chunks the detector is unsure about. Once the
-          Voice agent's transcription Intelligence Index exists, Auto will follow it (switching only
-          through the promotion rule, with a note in Harsha's Risi chat).
+          routed model. Mixed / Singlish means the chunks the detector is unsure about.
         </p>
+        <p><strong>Auto:</strong> <span class="muted">{@auto.text}</span></p>
+      </div>
+
+      <div class="card">
+        <strong>Models</strong>
+        <table>
+          <tr>
+            <th>Family</th>
+            <th>On this server</th>
+          </tr>
+          <tr :for={f <- catalogue(@installed)}>
+            <td>{f.family}</td>
+            <td>
+              <span :if={f[:phone]} class="muted">
+                On the phone only (developer flag phone_stt), not a server model
+              </span>
+              <span :if={!f[:phone] and f.installed == []} class="muted">not installed</span>
+              <span :if={f.installed != []} class="ok">{Enum.join(f.installed, ", ")}</span>
+            </td>
+          </tr>
+        </table>
       </div>
 
       <div class="card">
@@ -289,6 +309,9 @@ defmodule RisiMeWeb.Admin.SpeechLive do
       do: ms,
       else: ms ++ [%{id: choice, language: "not installed"}]
   end
+
+  defp catalogue({:ok, %{models: models}}), do: SpeechRoutes.catalogue(models)
+  defp catalogue(_), do: SpeechRoutes.catalogue([])
 
   defp auto_route({:ok, %{routes: routes}}, lang), do: Map.get(routes, lang, "-")
   defp auto_route(_, _), do: "-"

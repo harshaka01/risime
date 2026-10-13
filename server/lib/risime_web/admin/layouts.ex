@@ -7,6 +7,7 @@ defmodule RisiMeWeb.Admin.Layouts do
 
   @pages [
     {"speech", "Speech models", true},
+    {"voices", "Voices (TTS)", true},
     {"intelligence", "Intelligence", false},
     {"agents", "Agents", false},
     {"servers", "Servers", false},

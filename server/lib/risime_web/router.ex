@@ -51,6 +51,7 @@ defmodule RisiMeWeb.Router do
     live_session :admin, on_mount: RisiMeWeb.Admin.LiveAuth do
       live "/", SpeechLive, :index
       live "/speech", SpeechLive, :index
+      live "/voices", VoicesLive, :index
       live "/:page", ComingSoonLive, :show
     end
   end
