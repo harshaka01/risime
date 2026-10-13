@@ -61,3 +61,17 @@ publish.
   long notes, a small screen, dark mode and the button being visible and enabled.
 - **`required` is only set when the server drops support** for an older protocol (as before). On
   2026-10-06 it was cleared on nightly.8 after testers were locked out by the broken gate.
+
+## Amendment (2026-10-13, Harsha): public notes are user notes, never the changelog
+- **What the public page and the in-app update screen show:** only `docs/releases/v<ver>.user.md`, with "New"
+  and "Fixed" lists (3–8 plain bullets each) and an optional "Coming soon". The SHA-256 stays visible.
+- **Drafting:** `scripts/draft-public-notes` drafts them from the user-facing commits with the local Risi model,
+  then reviews them in two ways:
+  - the model drops bullets that present a switched-off feature as available
+    (`docs/releases/switched-off.md`), or that are internal only;
+  - `scripts/check-public-notes` enforces the format and bans developer terms (commit prefixes, file and script
+    names, protocol and decision numbers, settings, IPs and ports, env names, tooling).
+- **Blocking:** a failure blocks only the publish. `publish-release` refuses missing or failing notes.
+- **Developer changelog:** the full changelog stays in `docs/releases/v<ver>.md` (git only).
+- **Secrets:** `scripts/check-public-secrets` scans every page, feed and APK entry against `.env` values, keystore
+  passwords and token/key patterns before any upload, and refuses on a hit.

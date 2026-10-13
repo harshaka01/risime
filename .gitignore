@@ -19,3 +19,4 @@ android/captures/
 crypto/**/target/
 __pycache__/
 crypto/target-nif-prod/
+*.user.md.rejected

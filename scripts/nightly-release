@@ -425,6 +425,16 @@ if [ -n "${MSG_LOG:-}" ] && [ -f "$MSG_LOG" ]; then
   { echo; echo "## Basic messaging end-to-end (non-blocking, CLAUDE.md rule 11): ${MSG_RES:-not run}"
     grep -E '^UIENTRY (PASS|FAIL|SKIP)' "$MSG_LOG" | sed -E 's/^UIENTRY (PASS|FAIL|SKIP) /- \1: /'; } >> "$notes"
 fi
+# Public user notes (Harsha 2026-10-13): drafted by scripts/draft-public-notes (local Risi model) from the commits,
+# reviewed by it and by scripts/check-public-notes. A hand-written docs/releases/v$next.user.md wins. If they fail,
+# the release still happens but is NOT published (publish-release refuses too): write them by hand, then run
+# scripts/nightly-release --publish-only v$next.
+user_notes="docs/releases/v$next.user.md"
+if scripts/draft-public-notes "$next" "${last:-}" "$user_notes"; then
+  git add "$user_notes"
+else
+  PUBLISH=0; echo "WARN: public user notes failed review: not publishing v$next (see $user_notes.rejected)"
+fi
 git add VERSION "$notes"
 git commit -q -m "chore(root): release v$next
 
@@ -463,6 +473,7 @@ git push -q spark2-backup "HEAD:${HOTFIX:-main}" "v$next" 2>/dev/null || echo "w
 out="$REL/v$next"; mkdir -p "$out"
 cp "$APK" "$out/risime-$next.apk"
 cp "$notes" "$out/RELEASE-NOTES.md"
+[ -f "$user_notes" ] && cp "$user_notes" "$out/USER-NOTES.md"
 "$BT/apksigner" verify --print-certs "$out/risime-$next.apk" | grep -E "SHA-256 digest" > "$out/SIGNER.txt" || true
 (cd "$out" && sha256sum "risime-$next.apk" > SHA256SUMS)
 echo "v$next" > "$REL/LATEST"

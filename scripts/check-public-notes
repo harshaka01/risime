@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Check a release's PUBLIC user notes (Harsha 2026-10-13) before they go on risicloud.ai/app/risime.
+
+  scripts/check-public-notes docs/releases/v<ver>.user.md
+
+The file is plain Markdown with exactly these sections:
+  ## New       3–8 "- " bullets, everyday words
+  ## Fixed     3–8 "- " bullets
+  ## Coming soon   (optional) 0–5 bullets, for features that are built but still switched off
+Nothing else is allowed. There are no commit prefixes, file or script names, protocol or contract versions,
+decision numbers, server settings, IPs, ports, env names or internal tooling words. Exits 1 and prints
+every violation, so the publish is blocked.
+"""
+import re
+import sys
+
+MIN_B, MAX_B = 3, 8
+SECTIONS = {"New": (MIN_B, MAX_B), "Fixed": (MIN_B, MAX_B), "Coming soon": (0, 5)}
+
+# (pattern, reason). Case-insensitive, except CASE_SENSITIVE below.
+BANNED = [
+    (r"\b(feat|fix|chore|docs|test|wip|refactor)\s*\(", "commit prefix"),
+    (r"\b(feat|fix|chore|docs|wip):", "commit prefix"),
+    (r"\b[\w./-]+\.(ex|exs|kt|kts|rs|py|sh|md|json|ya?ml|toml|xml|gradle|apk|env|conf|sql|html|js|ts)\b", "file name"),
+    (r"\bscripts?/|\bserver/|\bandroid/|\bcontract/|\bdocs/|\binfra/|~/|/home/|/tmp/", "path"),
+    (r"§\s*\d|\bv1\.\d+\b|\bprotocol\b|\bcontract\b|\bPROTOCOL\b|\benvelope\b|\bwire\b", "protocol/contract"),
+    (r"\bdecision\s*0?\d{2,3}\b|\bADR\b", "decision number"),
+    (r"\b\d{1,3}(\.\d{1,3}){3}\b|\blocalhost\b|:\d{2,5}\b|\bport\s*\d+", "IP/port"),
+    (r"\b(mix|gradle|gradlew|redroid|adb|oban|cassandra|postgres|xandra|phoenix|livekit|coturn|vllm|nif|"
+     r"rustler|openmls|mls|keycloak|caddy|docker|tmux|systemd|rpc|epmd|ecto|robolectric|exunit|cqlsh)\b",
+     "internal tooling"),
+    (r"\b(gate|gates|canary|shadow mode|feature flag|flag|fast lane|nightly-release|fastlane|parity test|"
+     r"unit test|interop|harness|fixture|regression test|ci)\b", "internal process"),
+    (r"\b[0-9a-f]{7,40}\b", "commit hash"),
+    (r"\b(srv\d+|risi-l\d|risi-l1|qwen|whisper|faster-whisper|large-v3|omniasr|nemotron|lora)\b", "model/infra name"),
+    (r"https?://|www\.", "URL"),
+    (r"`", "code formatting"),
+    (r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b", "code identifier"),
+
+]
+CASE_SENSITIVE = [(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b", "env/setting name")]
+
+
+def main(path):
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError as e:
+        print(f"check-public-notes: FAIL can't read {path}: {e}")
+        return 1
+    errs = []
+    sections, cur = {}, None
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        m = re.match(r"^##\s+(.+?)\s*$", line)
+        if m:
+            cur = m.group(1)
+            if cur not in SECTIONS:
+                errs.append(f"line {n}: unknown section '{cur}' (only {', '.join(SECTIONS)})")
+            elif cur in sections:
+                errs.append(f"line {n}: section '{cur}' twice")
+            sections.setdefault(cur, [])
+            continue
+        if line.startswith("# "):
+            continue  # an optional title line
+        b = re.match(r"^- (.+)$", line)
+        if not b or cur is None:
+            errs.append(f"line {n}: only '## <section>' headings and '- ' bullets are allowed")
+            continue
+        item = b.group(1).strip()
+        sections[cur].append(item)
+        if len(item) > 160:
+            errs.append(f"line {n}: bullet longer than 160 characters")
+        for pat, why, fl in [(p, w, re.I) for p, w in BANNED] + [(p, w, 0) for p, w in CASE_SENSITIVE]:
+            hit = re.search(pat, item, fl)
+            if hit:
+                errs.append(f"line {n}: {why}: '{hit.group(0)}'")
+    for name, (lo, hi) in SECTIONS.items():
+        got = len(sections.get(name, []))
+        if name != "Coming soon" and name not in sections:
+            errs.append(f"missing section '## {name}'")
+        elif not lo <= got <= hi:
+            errs.append(f"'## {name}' has {got} bullets (needs {lo}–{hi})")
+    if errs:
+        print(f"check-public-notes: FAIL {path}")
+        for e in errs:
+            print(f"  - {e}")
+        return 1
+    print(f"check-public-notes: OK {path} ({', '.join(f'{k} {len(v)}' for k, v in sections.items())})")
+    return 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print(__doc__)
+        sys.exit(2)
+    sys.exit(main(sys.argv[1]))

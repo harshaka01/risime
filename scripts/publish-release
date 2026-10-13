@@ -61,6 +61,15 @@ BASE_URL="$BASE_ROOT$SUB"
 sha="$(sha256sum "$apk" | cut -d' ' -f1)"
 notes_md="$src/RELEASE-NOTES.md"
 [ -z "$STAGE" ] || notes_md="$REL/v$ver/RELEASE-NOTES.md"   # a candidate's notes, when already written
+# PUBLIC notes (Harsha 2026-10-13): the page and the in-app update screen show only the short user notes
+# (docs/releases/v<ver>.user.md, copied to <release>/USER-NOTES.md), never the developer changelog. A new-app
+# publish without them, or with notes that fail scripts/check-public-notes, is refused.
+user_md="$src/USER-NOTES.md"; [ -f "$user_md" ] || user_md="docs/releases/v$ver.user.md"
+if [ "$LEGACY" = 0 ] && [ -z "$STAGE" ]; then
+  [ -f "$user_md" ] || { echo "no public user notes for v$ver (docs/releases/v$ver.user.md): refusing to publish"; exit 1; }
+  scripts/check-public-notes "$user_md" || { echo "public user notes fail the check: refusing to publish"; exit 1; }
+fi
+[ -f "$user_md" ] || user_md=""
 
 # --stage <dir>: <dir> is the feed directory itself (served as $BASE_URL). A publish: the feed is
 # $MIRROR/$SUB, and the page index.html sits at the mirror root.
@@ -77,10 +86,22 @@ if [ "${#apks[@]}" -gt "$KEEP" ]; then
 fi
 fi
 
-python3 - "$FEED" "$ver" "$code" "$sha" "$cert" "$REQUIRED" "$BASE_URL" "$notes_md" "$MIRROR" "${STAGE:+stage}" "$NEW_PKG" <<'PY'
+python3 - "$FEED" "$ver" "$code" "$sha" "$cert" "$REQUIRED" "$BASE_URL" "$notes_md" "$MIRROR" "${STAGE:+stage}" "$NEW_PKG" "$user_md" "$LEGACY" <<'PY'
 import json, sys, html, datetime, os, re
-feed, ver, code, sha, cert, required, base, notes_md, mirror, stage, new_pkg = sys.argv[1:]
+feed, ver, code, sha, cert, required, base, notes_md, mirror, stage, new_pkg, user_md, legacy = sys.argv[1:]
 notes = open(notes_md).read() if os.path.exists(notes_md) else ""
+# The public user notes, as {"New": [...], "Fixed": [...], "Coming soon": [...]}.
+user = {}
+if user_md and os.path.exists(user_md):
+    cur = None
+    for line in open(user_md, encoding="utf-8").read().splitlines():
+        m = re.match(r"^##\s+(.+?)\s*$", line)
+        if m:
+            cur = m.group(1); user.setdefault(cur, []); continue
+        b = re.match(r"^- (.+)$", line.strip())
+        if b and cur:
+            user[cur].append(b.group(1).strip())
+USER_ORDER = ["New", "Fixed", "Coming soon"]
 # Short plain-text notes for the app: the "New for users" section, else the first lines.
 m = re.search(r"## New for users\n(.*?)(\n## |\Z)", notes, re.S) or re.search(r"## New\n(.*?)(\n## |\Z)", notes, re.S)
 short = (m.group(1) if m else notes).strip()[:2000]
@@ -96,7 +117,12 @@ def plain(md):
 # summary: short plain text the app shows on the update screen (decision 016 amendment).
 # An explicit docs/releases/v<ver>.summary.txt wins; otherwise the first lines of "New", made plain.
 summary_path = os.path.join(os.getcwd(), "docs", "releases", f"v{ver}.summary.txt")
-if os.path.exists(summary_path):
+if user or (legacy != "1"):
+    # The new app (and a stage): only the public user notes, never the developer changelog.
+    short = "\n\n".join(k + ":\n" + "\n".join("• " + b for b in user[k]) for k in USER_ORDER if user.get(k)) \
+        or "Improvements and fixes."
+    summary = "\n".join(user.get("New", [])[:3]) or "Improvements and fixes."
+elif os.path.exists(summary_path):
     summary = open(summary_path).read().strip()
 else:
     lines = [l for l in plain(short).splitlines() if l.strip()]
@@ -135,11 +161,24 @@ if old and not old["href"].startswith(new_pkg + "/"):
 moved = ("<p><strong>Had the previous RisiMe app?</strong> This is a new app: it installs next to the old one and "
          "never touches it. Your account, friends and groups come back when you sign in; old chats stay in the old app "
          "(export them there first if you want to keep them).</p>") if is_new else ""
+def whats_new_html(notes_text):
+    # The feed's plain user notes ("New:\n• …\n\nFixed:\n• …") as headed lists.
+    out = []
+    for block in notes_text.split("\n\n"):
+        lines = [l for l in block.splitlines() if l.strip()]
+        if not lines:
+            continue
+        if lines[0].endswith(":") and all(l.startswith("• ") for l in lines[1:]):
+            out.append(f"<h3>{e(lines[0][:-1])}</h3><ul>" + "".join(f"<li>{e(l[2:])}</li>" for l in lines[1:]) + "</ul>")
+        else:
+            out.append(f"<p>{e(' '.join(lines))}</p>")
+    return "".join(out)
+whats_new = whats_new_html(newest.get("notes", ""))
 page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Get RisiMe</title>
 <style>body{{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#1b1b1b}}
 a.btn{{display:inline-block;background:#0B6E69;color:#fff;padding:.9rem 1.4rem;border-radius:.6rem;text-decoration:none;font-weight:600}}
-code{{word-break:break-all;font-size:.8rem}} pre{{white-space:pre-wrap;background:#f4f6f6;padding:1rem;border-radius:.5rem}}
+h3{{margin-bottom:.2rem}} code{{word-break:break-all;font-size:.8rem}} pre{{white-space:pre-wrap;background:#f4f6f6;padding:1rem;border-radius:.5rem}}
 @media (prefers-color-scheme:dark){{body{{background:#111;color:#eee}} pre{{background:#1d2222}}}}</style></head><body>
 <h1>RisiMe</h1><p>Talk. Connect. Act.</p>
 <p><a class="btn" href="{e(newest["href"])}">Download RisiMe {e(newest["versionName"])} for Android</a></p>
@@ -147,7 +186,7 @@ code{{word-break:break-all;font-size:.8rem}} pre{{white-space:pre-wrap;backgroun
 {moved}
 {old_link}
 <p><strong>Updates install over the app &mdash; never uninstall it: uninstalling deletes your chats. If Android says 'App not installed', don't uninstall &mdash; contact your RisiMe admin.</strong></p>
-<h2>What's new</h2><pre>{e(newest.get("notes", ""))}</pre>
+<h2>What's new in {e(newest["versionName"])}</h2>{whats_new}
 <h2>Install</h2><ol><li>Open the downloaded file and allow "install unknown apps" for your browser when asked.</li>
 <li>Sign in with your work email; you'll get a code by email.</li></ol>
 <h2>Verify</h2><p>SHA-256: <code>{e(newest["sha256"])}</code><br>Signing certificate SHA-256: <code>{e(newest["certSha256"])}</code></p>
@@ -158,6 +197,9 @@ PY
 echo "==> mirror $MIRROR:"; printf '    %s\n' "$MIRROR"/*
 [ "$UPLOAD" = 1 ] || { echo "==> --no-upload: done"; exit 0; }
 
+# Nothing secret leaves (Harsha 2026-10-13): pages, feeds and every APK entry against .env values, keystore
+# passwords and token/key patterns.
+scripts/check-public-secrets "$MIRROR" || { echo "the mirror holds a secret: refusing to upload"; exit 1; }
 rsh=(); [ -n "${RISIME_PUBLISH_RSH:-}" ] && rsh=(-e "$RISIME_PUBLISH_RSH")
 # 1) APKs first, so version.json never points at a missing file; 2) index + version.json;
 # 3) prune anything not in the mirror (older APKs).

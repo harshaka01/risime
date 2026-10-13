@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Draft a release's PUBLIC user notes (Harsha 2026-10-13) with the local Risi model, then review them with
+# scripts/check-public-notes. It retries once with the reviewer's findings, and exits 1 if the draft still fails.
+#   scripts/draft-public-notes <version> <since-tag|""> <out.user.md>
+# Input: the user-facing commit subjects since the last tag (feat/fix only), plus the list of features that are
+# still switched off, so they become "Coming soon" or are left out. Nothing leaves spark2 (risi-l1 on loopback,
+# no commercial model). A hand-written <out> that already passes the check is kept as is.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+VER="${1:?version}"; SINCE="${2:-}"; OUT="${3:?out file}"
+if [ -f "$OUT" ] && scripts/check-public-notes "$OUT" >/dev/null; then echo "draft-public-notes: keeping hand-written $OUT"; exit 0; fi
+URL="${RISI_LLM_URL:-http://127.0.0.1:8100/v1}"
+KEY="${LLM_API_KEY:-$(grep -m1 '^LLM_API_KEY=' .env 2>/dev/null | cut -d= -f2- || true)}"
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+# User-facing commits only: feat/fix of the app, server or Risi (root's are tooling), minus tests, gates and
+# anything switched off.
+git log --no-merges --format='%s' ${SINCE:+$SINCE..}HEAD | grep -E '^(feat|fix)\((android|server|risi)\)' \
+  | grep -viE 'behind|flag|off by default|\(off\)|canary|shadow|dev only|test|gate|harness|fixture|script|parity|interop' \
+  > "$WORK/commits.txt" || true
+[ -s "$WORK/commits.txt" ] || { printf 'Improvements and fixes.\n' > "$WORK/commits.txt"; }
+# Features built but switched off by default: say "coming soon" or leave them out.
+# Features built but switched off: "Coming soon" at most (docs/releases/switched-off.md, kept by root).
+{ echo "Built but switched off (never describe these as available; at most list them under \"Coming soon\"):"
+  grep -E '^- ' docs/releases/switched-off.md; } > "$WORK/off.txt"
+python3 - "$WORK" "$VER" <<'PY'
+import json, sys
+work, ver = sys.argv[1:]
+rules = """You write the short public "What's new" notes for RisiMe, a messaging app, for ordinary users.
+Output ONLY Markdown in exactly this shape and nothing else:
+## New
+- ...
+## Fixed
+- ...
+## Coming soon
+- ...
+Rules: "New" and "Fixed" each 3 to 8 bullets ("Coming soon" 0 to 5; omit the section if empty). One plain sentence
+per bullet, under 160 characters, everyday words, what the user notices. Merge related commits. Never mention
+commit prefixes, file or script names, protocol/contract/version numbers, decision numbers, settings, IPs, ports,
+environment names, server/test/release tooling, model or library names, code identifiers, URLs or backticks. If a
+change is internal only (tests, tooling, docs), leave it out. If there are too few user-visible fixes, describe
+reliability fixes the commits clearly show (e.g. "Fixed a case where …"). Never invent features or overstate a fix:
+describe exactly what the user now sees."""
+open(f"{work}/prompt.json", "w").write(json.dumps({"rules": rules,
+    "user": f"Release {ver}.\nCommits:\n" + open(f"{work}/commits.txt").read() + "\n" + open(f"{work}/off.txt").read()}))
+PY
+ask() { # $1 = extra feedback
+  python3 - "$WORK" "$URL" "$KEY" "$1" <<'PY'
+import json, sys, urllib.request
+work, url, key, feedback = sys.argv[1:]
+p = json.load(open(f"{work}/prompt.json"))
+models = json.load(urllib.request.urlopen(urllib.request.Request(url + "/models", headers={"Authorization": f"Bearer {key}"}), timeout=20))
+model = models["data"][0]["id"]
+msgs = [{"role": "system", "content": p["rules"]}, {"role": "user", "content": p["user"]}]
+if feedback:
+    msgs.append({"role": "user", "content": "Your previous draft failed the review:\n" + feedback + "\nRewrite it, fixing every point."})
+body = {"model": model, "messages": msgs, "temperature": 0.2, "max_tokens": 900,
+        "chat_template_kwargs": {"enable_thinking": False}}
+req = urllib.request.Request(url + "/chat/completions", data=json.dumps(body).encode(),
+                             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+out = json.load(urllib.request.urlopen(req, timeout=180))["choices"][0]["message"]["content"].strip()
+out = out.strip("`").removeprefix("markdown").strip()
+open(f"{work}/draft.md", "w").write(out + "\n")
+PY
+}
+# Second pass (the reviewer): drop every bullet that describes a switched-off feature as available, or that is
+# internal only (tests, tooling, release process). Sections that fall under 3 bullets then fail the checker.
+review_facts() {
+  python3 - "$WORK" "$URL" "$KEY" <<'PY'
+import json, re, sys, urllib.request
+work, url, key = sys.argv[1:]
+draft = open(f"{work}/draft.md").read()
+off = open(f"{work}/off.txt").read()
+bullets = [(i, l) for i, l in enumerate(draft.splitlines()) if l.startswith("- ")]
+section_of, cur = {}, None
+for i, l in enumerate(draft.splitlines()):
+    if l.startswith("## "): cur = l[3:].strip()
+    section_of[i] = cur
+listing = "\n".join(f"{n}. [{section_of[i]}] {l[2:]}" for n, (i, l) in enumerate(bullets))
+q = (off + "\nFor each numbered release-note bullet below answer DROP if (a) it is under New or Fixed but describes "
+     "a switched-off feature from the list above as available, or (b) it is about tests, tooling, scripts, downloads, "
+     "servers or the release process rather than something a user sees in the app; else KEEP. Bullets under "
+     "\"Coming soon\" may name switched-off features. Reply with JSON only: {\"drop\": [numbers]}.\n\n" + listing)
+models = json.load(urllib.request.urlopen(urllib.request.Request(url + "/models", headers={"Authorization": f"Bearer {key}"}), timeout=20))
+body = {"model": models["data"][0]["id"], "messages": [{"role": "user", "content": q}], "temperature": 0,
+        "max_tokens": 200, "chat_template_kwargs": {"enable_thinking": False}}
+req = urllib.request.Request(url + "/chat/completions", data=json.dumps(body).encode(),
+                             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+ans = json.load(urllib.request.urlopen(req, timeout=120))["choices"][0]["message"]["content"]
+m = re.search(r"\{.*\}", ans, re.S)
+drop = set(json.loads(m.group(0)).get("drop", [])) if m else set()
+lines = draft.splitlines()
+# "Coming soon" bullets may name switched-off features: the reviewer never drops those.
+drop = {n for n in drop if isinstance(n, int) and 0 <= n < len(bullets) and section_of[bullets[n][0]] != "Coming soon"}
+gone = {bullets[n][0] for n in drop}
+for n in sorted(drop):
+    print(f"reviewer dropped: {bullets[n][1][2:]}")
+open(f"{work}/draft.md", "w").write("\n".join(l for i, l in enumerate(lines) if i not in gone) + "\n")
+PY
+}
+feedback=""
+for attempt in 1 2; do
+  ask "$feedback" || { echo "draft-public-notes: FAIL the local model didn't answer"; exit 1; }
+  if review="$(scripts/check-public-notes "$WORK/draft.md")" && review_facts && review="$(scripts/check-public-notes "$WORK/draft.md")"; then
+    { echo "# RisiMe $VER"; echo; cat "$WORK/draft.md"; } > "$OUT"
+    scripts/check-public-notes "$OUT" && { echo "draft-public-notes: wrote $OUT (attempt $attempt)"; exit 0; }
+  fi
+  feedback="$review"; echo "$review"
+done
+cp "$WORK/draft.md" "$OUT.rejected"
+echo "draft-public-notes: FAIL the draft still breaks the public-notes rules (kept as $OUT.rejected); write $OUT by hand"
+exit 1
