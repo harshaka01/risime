@@ -51,7 +51,7 @@ RUN pip install --no-cache-dir --no-deps --ignore-requires-python /wheels/*.whl 
  && python3 -c "import torchaudio.functional, fairseq2n; from omnilingual_asr.models.inference.pipeline import ASRInferencePipeline; print('omniasr imports ok')"
 # (torchaudio's C++ extension is built for upstream torch 2.9 and does not load against NVIDIA's
 # torch; without it torchaudio uses its pure-PyTorch code, which covers resample/Spectrogram.)
-COPY server.py stream_eval.py /app/
+COPY server.py stream_eval.py ckpt_reader.py /app/
 WORKDIR /app
 USER 1000:1000
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 HOME=/tmp DO_NOT_TRACK=1

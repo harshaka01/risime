@@ -4,7 +4,7 @@ Why: the 7B checkpoints need ~15 GB (LLM-7B) / ~12 GB (CTC-7B) in bf16, and the 
 memory has only 6-13 GB available next to risi-l1, minus the 4 GB floor. So the model is built
 with zero encoder layers (frontend, encoder layer norm, projection and the LLaMA decoder resident:
 ~3.5 GB for the LLM-7B), plus ONE encoder-layer module that receives layer i's weights from the
-memory-mapped fp32 checkpoint in turn. Every chunk of a group goes through layer i before layer
+fp32 checkpoint in turn (ckpt_reader: one tensor resident at a time). Every chunk of a group goes through layer i before layer
 i+1 is loaded, so the checkpoint is read once per group. The encoder output then goes through
 Meta's normal path (ASRInferencePipeline._apply_model: stacking, projection, beam search or CTC,
 tokenizer) via a stand-in encoder module. Same numerics as the resident model (bf16 per layer);
@@ -129,13 +129,15 @@ def main():
 
     avail0 = S.mem_available_mb()
     t_load = time.monotonic()
-    sd = torch.load(spec["path"], map_location="cpu", mmap=True, weights_only=True)["model"]
+    from ckpt_reader import Checkpoint
+    ck = Checkpoint(spec["path"])
     cfg0 = copy.deepcopy(cfg)
     (cfg0.wav2vec2_asr_config if llm else cfg0).encoder_config.num_encoder_layers = 0
     model = hub.create_new_model(cfg0, device=dev, dtype=dtype)
-    rest = {k: v for k, v in sd.items() if not k.startswith("encoder.layers.")}
-    missing, unexpected = model.load_state_dict(rest, strict=False)
+    rest = {k: ck.get(k, dev, dtype) for k in ck.keys() if not k.startswith("encoder.layers.")}
+    missing, unexpected = model.load_state_dict(rest, strict=False, assign=True)
     assert not missing and not unexpected, (missing, unexpected)
+    del rest
     cfg1 = copy.deepcopy(cfg)
     (cfg1.wav2vec2_asr_config if llm else cfg1).encoder_config.num_encoder_layers = 1
     layer = hub.create_new_model(cfg1, device=dev, dtype=dtype, meta=True).encoder.layers[0]
@@ -199,8 +201,7 @@ def main():
                 compute[c["id"]] += time.monotonic() - t0
             for li in range(n_layers):
                 pre = f"encoder.layers.{li}."
-                layer.load_state_dict({k[len(pre):]: v for k, v in sd.items() if k.startswith(pre)},
-                                      strict=True)
+                layer.load_state_dict(ck.subset(pre, dev, dtype), strict=True, assign=True)
                 for j, (c, _i, _audio) in enumerate(group):
                     torch.cuda.synchronize()
                     t0 = time.monotonic()
@@ -235,7 +236,8 @@ def main():
           file=sys.stderr, flush=True)
 
     if a.check:
-        del model, pipe, layer, sd
+        del model, pipe, layer
+        ck.close()
         S.trim()
         rpipe, _ = S.pool.get(a.model)
         same = n = 0
