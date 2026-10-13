@@ -789,7 +789,15 @@ class LiveGroupInteropTest {
                     .firstOrNull { it.groupId == conv && it.op.type == PendingOp.REMOVE && it.op.userIds == listOf(bId) }
             }
             ensure(named.op.committer?.deviceId == a.deviceId && named.op.actor == bId) { "committer: ${named.op}" }
-            b.await(30_000, "B removed_self") { if (b.mls.engine.group(conv) == null) Unit else null }
+            try {
+                b.await(30_000, "B removed_self") { if (b.mls.engine.group(conv) == null) Unit else null }
+            } catch (e: AssertionError) {
+                // Diagnostics only (nightly.6 flake): where the named committer stood when B wasn't removed.
+                val aOps = a.on { a.opDao.rows.values.filter { it.conversationId == conv }.map { "${it.type}/${it.state}/${it.attempts}/${it.lastError}" } }
+                val aEpoch = a.on { a.epoch(conv) }
+                val bEpoch = b.on { b.epoch(conv) }
+                throw AssertionError("${e.message} [A ops=$aOps A epoch=$aEpoch B epoch=$bEpoch]")
+            }
             val left = b.awaitGroupEvent(conv, GroupEvent.LEFT)
             ensure(left.actor == bId && left.targets == listOf(bId)) { "left: $left" }
             val last = b.commits(conv).last()
