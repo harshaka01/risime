@@ -196,3 +196,9 @@ Before sending, the sender sees a clear chip: "Opens once · can't be saved".
   - Phoenix LiveDashboard for admins;
   - documented in `docs/MONITORING.md`.
 - **Downloads:** over 2 GB only between 22:00 and 06:00 Sri Lanka time, rate-limited, and logged to `docs/status/downloads.md`.
+
+## Future (Harsha 2026-10-13; not being built yet)
+- **Conferencing to beat Google Meet:** scheduled meetings, guest links, waiting room, recording with consent,
+  live captions and live translation in si/ta/en.
+- **Tutoring and classes:** class groups, whiteboard, tutor agents from the RisiCloud Marketplace, homework,
+  quizzes, attendance and progress; Risi as teaching assistant.

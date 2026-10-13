@@ -1,6 +1,10 @@
 # RisiMe — Claude Code Operating Manual
 Read this whole file at the start of every session. Then read the prompt file for your role.
 
+**Then read `docs/ARCHITECTURE-PRINCIPLES.md` (Harsha 2026-10-13, decision 085):** agent-oriented architecture
+first (every capability owned by an agent with an eval, an Intelligence Index and a learning loop), policy as
+language, and consequential actions (money, pay, HR, deletion, legal) only ever approved by a named human.
+
 ## What RisiMe is
 An agent-native communication network ("Talk. Connect. Act.").
 - Phase 1: corporate messaging for the CodeGen and Rise teams.
