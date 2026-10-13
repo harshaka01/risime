@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.43 (Release 0.3)
+# RisiMe Wire Protocol — v1.44 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10828,7 +10828,106 @@ then `action_confirm` + `item_update` to every member), `item_clarify` after an 
 with `reminders_skill`, the unclear wording; android: [It's mine], the live owner, the all-day calendar slot,
 the reminders note, the unclear text in en/si/ta, `PROTOCOL_VERSION` 1.43; device: `scripts/voice-actions-test`.
 
+## 39. Link previews (v1.44)
+Harsha PART 11 (WhatsApp-standard messaging), 2026-10-13. **Additive:** one optional field, `link_preview`, on the
+`text` envelope (§10.3, §33). No capability, no server logic, no REST, no new event: old apps ignore the field and
+show the text with its link. **No agent: infrastructure** (decision 085): a deterministic client feature, no
+decisions to learn.
+
+### 39.0 Principles
+- **The sender's phone fetches the preview** and sends it **inside the E2EE message**. The server never fetches a
+  URL and never sees one: the link and its preview exist only inside the MLS ciphertext.
+- **Receivers render the card from the message alone.** A receiver never fetches the URL, its page or its image.
+- **E2EE only.** A conversation that isn't end-to-end encrypted (a plaintext `msg:send`, decision 048) never carries
+  a preview, and its sender fetches nothing.
+- **The user's switch.** Settings → Chats → **"Link previews"** (default **on**). Off: no fetch, nothing sent. The
+  subtitle says what it does: "Your phone loads a preview of links you send. The website sees your phone's
+  address." It is device-local, never sent to the server.
+
+### 39.1 The field (`envelope_text_link_preview.json`)
+```json
+{"v": 1, "type": "text", "body": "Agenda for Friday: https://example.org/agenda",
+ "link_preview": {"url": "https://example.org/agenda", "title": "Friday agenda",
+                  "description": "Site visit at 10, review at 3.", "site_name": "Example",
+                  "thumb": {"mime": "image/jpeg", "w": 128, "h": 67, "data": "<b64, ≤ 4096 bytes decoded>"}}}
+```
+- **`url`** (required): an absolute `https://` URL of at most 2048 characters that occurs **verbatim in `body`**.
+- **`title`** (required): 1–200 characters after trimming, not whitespace-only.
+- **`description`** (optional, omitted when empty): at most 300 characters.
+- **`site_name`** (optional, omitted when empty): at most 100 characters.
+- **`thumb`** (optional, or `null`, `envelope_text_link_preview_no_thumb.json`): **exactly the §14.4 thumbnail
+  rules**: JPEG or WebP, `1 ≤ w, h ≤ 128`, `data` ≤ 4096 bytes decoded.
+- Senders cut longer `title` / `description` / `site_name` at a grapheme boundary (with "…") before sending.
+- `link_preview` may sit next to `reply_to` and `forwarded` (§33). It is defined on `text` only in v1.44 (captions
+  of `image`/`file` carry none).
+- **Envelope bound:** the §14.4 22 KiB bound applies. Over it, the sender first sets `thumb` to `null`, then drops
+  `link_preview`.
+- **Validation (receiver):** a `link_preview` that breaks any rule above (not an object, a non-https `url`, a `url`
+  not in `body`, a missing or blank `title`, an over-long field, a bad `thumb`) is **ignored**, and the message is
+  shown without a card, never dropped (`envelope_text_link_preview_bad.json`: an `http://` URL that is not in the
+  body).
+
+### 39.2 Why an inline thumbnail, not a blob
+The preview image travels as the inline §14.4 `thumb`, **not** as a §14 `media` blob:
+- the receiver fetches nothing at all (no blob download, so no read-timing or "this message has a link" signal at
+  the server, and nothing to fail later);
+- no upload, quota, rate limit or 30-day TTL (§14.5): the card survives in backups and history shares (§17, §22)
+  with the message, and a forward never needs a fresh per-conversation blob (§33.5);
+- a link card needs only a small image; 128 px at ≤ 4 KiB fits the 22 KiB envelope next to a long body.
+A larger "hero" image would need a blob; it is out of scope for v1.44.
+
+### 39.3 The sender's fetch (android, normative)
+Only when the switch is on and the conversation is E2EE (an MLS group exists), for the **first** `https://` URL in
+the body:
+- **Request:** `GET`, no cookies, no cache, no `Authorization`, no `Referer`, `User-Agent: RisiMe-LinkPreview/1`,
+  `Accept: text/html`. **`https` only**, on every hop; at most **3 redirects**.
+- **No private addresses:** the host is resolved and the fetch is refused when **any** resolved address is
+  loopback, link-local, site-local/private (10/8, 172.16/12, 192.168/16, fc00::/7), CGNAT (100.64/10),
+  unspecified, multicast or broadcast; an IP-literal host follows the same rule. It applies to every redirect.
+- **Limits:** connect 3 s, the whole fetch (page and image) at most **5 s**; the page must be `text/html`, and only
+  its first **512 KiB** are read; the image (`og:image`, absolute https after resolving against the page) at most
+  **2 MiB**, decoded, scaled to a longest side of 128 px and re-encoded (JPEG, starting at q60 and stepping down as
+  §14.4) so no metadata travels.
+- **Fields:** `og:title` (else `<title>`), `og:description` (else `meta name=description`), `og:site_name`, and
+  `og:image`; HTML entities decoded, whitespace collapsed.
+- **Failure is silent:** any error, refusal or timeout sends the message without `link_preview`. The message waits
+  for its preview at most 5 s; it is shown at once as pending meanwhile.
+- **Debug builds only:** a test seam may route one named test host to a `http://127.0.0.1:<port>` origin (the
+  device gate's local Open Graph page). Release builds contain no such route.
+
+### 39.4 Receiver (android, normative)
+- **Links in text are tappable:** `http(s)://…` and `www.…` in a message body open in the browser (the system
+  `ACTION_VIEW`), in every message type with text. The app fetches nothing for a link it receives.
+- **The card** (from `link_preview` only): the thumbnail (if any), `site_name`, `title` (2 lines), `description`
+  (2 lines), above the text inside the bubble. Tapping it opens `url`.
+- Room: `link_preview TEXT NULL` on `messages` (the validated object as JSON); a nullable column, so the upgrade
+  keeps every message (rule 9, decision 055).
+
+### 39.5 Copy, forward, backups, Risi, the server
+- **Copy and Share** copy the body only (§33.3). **Forward** drops `link_preview` (§33.4: a forward is a new
+  message; it carries no preview in v1.44).
+- **Backups and history shares** keep `link_preview` as part of the `text` payload (§17.6, §22).
+- **Risi** (Official): Risi decrypts Official messages as a visible member (§24.11) and ignores `link_preview`; it
+  never fetches a URL from a message. No learning-log record (§24.12): there is no model call.
+- **The server** stores ciphertext only and logs no message content (§10). Nothing changes server-side.
+
+### 39.6 Amendments, examples, gate
+- **§10.3 / §33.9:** `text` gains the optional `link_preview`. **§33.3 / §33.4:** not copied, not forwarded.
+- **Examples:** `envelope_text_link_preview.json`, `envelope_text_link_preview_no_thumb.json` (with `reply_to`),
+  `envelope_text_link_preview_bad.json` (ignored, the message is still shown).
+- **Gate:** server: `ExamplesV144Test` parses the examples (no logic). android: the validator (every rule above),
+  the address filter, the Open Graph parser, the switch, the Room migration 18 → 19 keeping every row; the device
+  gate `scripts/messaging-polish-test` (two redroid phones): swipe-to-reply in 1:1 and a group, a link with a card
+  on both phones (a local OG page through the debug seam), no card with the switch off, and no URL text in the
+  server's log or database.
+
 ## Changelog
+- **v1.44** (2026-10-13): Link previews (§39, Harsha PART 11). The optional `link_preview` on the `text` envelope
+  (`url` in the body, `title`, `description`, `site_name`, the §14.4 inline `thumb`), fetched by the sender's phone
+  under strict rules (https only, no private addresses, 5 s, size caps, no cookies) and sent only inside E2EE; the
+  receiver renders it and never fetches; the device-local "Link previews" switch (default on); not copied or
+  forwarded. No server logic. Also noted: swipe-to-reply uses the existing §33.9 `reply_to` (no wire change).
+  An additive change.
 - **v1.43** (2026-10-13): §38.9 ask, never guess. Unowned items carry `claim: true` and any member may send
   `item_claim` ("It's mine"; first wins; nothing tracked until the claimer confirms); undated items get the §28.6
   `item_clarify` on confirm; `add_calendar` also for all-day and undated items (all-day events); `item_update`s of
