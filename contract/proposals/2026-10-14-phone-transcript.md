@@ -1,6 +1,6 @@
 # Proposal: the sender phone's own transcript inside a voice note (2026-10-14, root worker for Part 12 quick fix 2)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.47** (§37.2 amendment). Nothing on the wire changes until
+**Status:** APPLIED as **v1.47 §37.10** (root, 2026-10-14). Was: proposal for root/Harsha, to be applied as **v1.47** (§37.2 amendment). Nothing on the wire changes until
 root edits PROTOCOL.md. The Android side is implemented against this text **behind a developer flag** (off for
 everyone; Harsha's `risi_dev` account can turn it on), so root can apply the contract and flip it.
 

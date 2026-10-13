@@ -35,7 +35,8 @@ risime.risicloud.ai {
 	}
 
 	# Only the app's paths are proxied; everything else is 404 at the edge.
-	@app path /api/* /socket/* /health
+	# /admin: the admin console (LiveView, decision 089), same release on 127.0.0.1:4000; admins only, Keycloak sign-in.
+	@app path /api/* /socket/* /health /admin /admin/*
 	handle @app {
 		# Caddy replaces X-Forwarded-For with the real client IP (it trusts no incoming XFF by
 		# default); Phoenix trusts XFF only from loopback. WebSocket upgrades

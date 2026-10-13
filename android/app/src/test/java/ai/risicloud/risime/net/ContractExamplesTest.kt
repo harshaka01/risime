@@ -430,6 +430,11 @@ class ContractExamplesTest {
                 listOf(obj(s), fixSize(obj(s))).map { ai.risicloud.risime.data.mls.MlsPayload.decode(it.toString().toByteArray()) }
                     .also { r -> require(r.all { it == ai.risicloud.risime.data.mls.MlsPayload.Decoded.Ignored("voice (malformed)") }) }
             },
+            // v1.47 §37.10: the sender phone's own on-device transcript; a malformed one is ignored, the note kept.
+            "voice_payload_phone_transcript.json" to { s ->
+                voice(s).also { require(it.phoneTranscript == ai.risicloud.risime.data.media.PhoneTranscript("හෙට උදේ දහයට meeting එක තියෙනවා", "si-LK", "android-on-device")) }
+            },
+            "voice_payload_phone_transcript_bad.json" to { s -> voice(s).also { require(it.phoneTranscript == null && it.durationMs == 12_400L) } },
             "msg_ack_played.json" to { s ->
                 ProtocolJson.decodeFromString<MsgAck>(s).also { require(it.status == ACK_PLAYED && ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) }
             },

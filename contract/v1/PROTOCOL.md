@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.46 (Release 0.3)
+# RisiMe Wire Protocol — v1.47 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10676,6 +10676,61 @@ shape (`me_risi_voice_put.json`, `me_risi_voice_reply.json`). Both default `true
   or `transcribe: false` note is not transcribed; android: strict validation (bad waveform dropped), forward
   re-upload, the Private tab has no Risi text. The full release gates apply (APK, protocol).
 
+### 37.10 The sender phone's own transcript (v1.47, Part 12)
+Applied from `contract/proposals/2026-10-14-phone-transcript.md`. Additive and optional: no capability, no readiness
+change; old apps ignore the field. Android sends it only behind the developer flag `phone_stt` (Harsha's
+`risi_dev` account first).
+
+`voice` envelope (§37.2) gains one optional field **`phone_transcript`**:
+
+| field | type | rule |
+|---|---|---|
+| `phone_transcript` | object, optional | absent = no phone transcript (every note before v1.47, and every note while the flag is off) |
+| `phone_transcript.text` | string | 1–4000 characters after trimming, ≤ 12 000 UTF-8 bytes; the recogniser's final text (segments joined with one space) |
+| `phone_transcript.lang` | string | the BCP-47 locale tag the recogniser ran with, 2–35 chars, e.g. `"si-LK"`, `"ta-LK"`, `"ta-IN"`, `"en-US"`, `"en-IN"`. Singlish (Sinhala with English mixed) is recognised as `"si-LK"`: no on-device pack exists for code-mixed speech |
+| `phone_transcript.engine` | string | 1–64 chars; v1.47 Android senders write **`"android-on-device"`**; receivers accept any value (e.g. a future `"apple-on-device"`) and don't show it |
+
+
+#### Sender rules (normative)
+- **On-device only.** Only an on-device recogniser may produce it. A phone must **never** use an online recogniser
+  (Android: never `SpeechRecognizer.createSpeechRecognizer`, never `ACTION_RECOGNIZE_SPEECH` activities); if the
+  chosen language has no installed on-device pack, the note goes without `phone_transcript` and the UI says so. No
+  audio leaves the phone except the §37.2 E2EE blob.
+- Only the device that **recorded** the note writes it, from its own recording, before encryption.
+- **Not written:** in the user's Risi chat (§37.8: the note is a request; Risi transcribes); on a note with
+  `transcribe: false` (the sender opted out of transcription in Official, so no text of that note goes to Risi's
+  leaf either); on a **forward** (§37.3: dropped like `transcribe`/`request_id`).
+- Allowed in Private and Official. It is part of the MLS-encrypted content (never plaintext metadata).
+- Best effort: the recogniser may take at most a few seconds after the recording stops (Android: 8 s); after that
+  the note is sent without it. Never delays a note beyond that, never blocks it.
+
+#### Receiver rules
+- §0 old apps ignore the unknown field; the note plays as before. **No capability**, no readiness change.
+- Validation is lenient: a malformed `phone_transcript` (wrong types, empty or too long `text`, missing `lang` or
+  `engine`) is **ignored and the note is kept** (unlike the §37.2 strict fields).
+- Rendering: under the bubble, collapsed to one line **"Transcript (sender's phone) ▾"**, expandable (the same
+  block as §37.6). In Official, a Risi `voice_transcript` (§37.6) is shown first, then this one. Shown in Private too.
+  Never claims to be Risi's.
+- Copy/forward/quote texts are unchanged (§37.3 previews stay "🎤 Voice note 0:12").
+- Backups (§22.5) and history shares (§17.7) carry the envelope as `payload`, so it travels with them.
+
+#### Server / Risi
+- The server sees only a larger ciphertext (it already learns the envelope size). Honest note for decision 048:
+  nothing else is learned.
+- **Risi's device in Official can decrypt the field.** In v1.47 Risi **ignores it**: it still transcribes per §37.6,
+  doesn't post it, doesn't use it for §38 extraction, never writes it to the learning log, buffer or logs. (A later
+  version may use it as a compare candidate in the §36 compare view; that needs its own proposal.)
+
+#### Size
+Envelope bound stays 22 KiB (§14.4): 12 000 bytes of text + ≈ 600 bytes of the rest fit.
+
+- **Examples:** `voice_payload_phone_transcript.json` (valid), `voice_payload_phone_transcript_bad.json` (the
+  field has no `lang`: ignored, the note is kept and valid).
+- **Gate:** android: encode/validate round trip; a malformed field ignored with the note kept; the field absent →
+  envelope bytes identical to v1.46 (parity); forward drops it; the online recogniser is never constructed.
+  server: both examples pass the §37.2 validator; Risi ignores the field (no post, no log). The full release gates
+  apply (APK, protocol).
+
 ## 38. Risi voice → action items (v1.42)
 Decision 082 (Part 5). **One pipeline:** the §27.2 extraction (already run on §36 call transcripts, §36.7)
 gains item kinds and line references, and also runs on §37.6 voice-note transcripts. **Scope: Official calls
@@ -11220,6 +11275,9 @@ under 1.5 % of one core and 5–10 MiB per participant, so **spark2's 31 Mbit/s 
   with video (frames decoded from every remote). `GCTEST OK`.
 
 ## Changelog
+- **v1.47** (2026-10-14, Part 12 quick fix 2): §37.10 optional `voice.phone_transcript` {`text`, `lang`, `engine`}:
+  the sender phone's own on-device transcript inside the E2EE voice envelope (never an online recogniser; not in
+  the Risi chat, not with `transcribe: false`, dropped on forward; receivers validate leniently; Risi ignores it).
 - **v1.46** (2026-10-13, P0 hotfix, decision 088): Official never waits for a human (§12.12.9). Risi's device
   commits the re-add of an existing member's new device in Official groups (member-committable `devices` ops
   only; never Private, never DMs); Official candidates leave out devices that can never commit and an Official
