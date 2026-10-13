@@ -291,7 +291,12 @@ defmodule RisiMe.Calls do
 
       reply = %{message_id: event_id, server_ts: Messaging.iso(server_ts)}
       State.put_reply(sender_id, req.client_msg_id, reply)
-      if req.ring, do: group_ring(req, members -- [sender_id])
+
+      if req.ring do
+        # v1.44 §39.9: the group call's record (conversation, starter, start media), 4 h.
+        RisiMe.Agent.CallTranscribe.note_group_ring(req.call_id, sender_id, req.conv, req.media)
+        group_ring(req, members -- [sender_id])
+      end
 
       :telemetry.execute([:risime, :call, :signal], %{count: 1}, %{ring: req.ring})
       {:ok, reply}

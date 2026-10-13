@@ -130,6 +130,56 @@ defmodule RisiMe.Agent.CallTranscribe do
     Calls.put(call_id, %{from: from, to: to, conv: conv, media: media})
   end
 
+  @doc """
+  v1.44 §39.9: a `ring: true` **group** `call_signal` was accepted: remembers the call's
+  conversation (the room's `grp:`), its starter and start media (4 h; the first ring wins, so a
+  re-ring of a running call changes nothing).
+  """
+  def note_group_ring(call_id, from, conv, media) do
+    Calls.put(call_id, %{from: from, to: nil, conv: conv, media: media, group: true})
+  end
+
+  @doc """
+  v1.44 §39.9: the human users in the call's LiveKit room (the room named by §20.2 from the
+  record's conversation, call id and start media; agents excluded), in join order, and whether
+  the §27.7 listener is on for the room (metadata `r: 1`). `{:ok, %{users, listen}}`,
+  `{:ok, :gone}` when the room doesn't exist, `{:ok, nil}` for a 1:1 record, or
+  `{:error, :transcribe_unavailable}` when LiveKit can't be asked.
+  """
+  def room_users(%{group: true, conv: conv, media: media} = _rec, call_id) do
+    alias RisiMe.Calls.LiveKit
+
+    with {:ok, config} <- LiveKit.config(),
+         room = LiveKit.room_name(config.api_secret, conv, call_id, media),
+         {:ok, rooms} <- LiveKit.api().list_rooms(config, [room]) do
+      case Enum.find(rooms, &(&1.name == room)) do
+        nil ->
+          {:ok, :gone}
+
+        r ->
+          with {:ok, ps} <- LiveKit.api().list_participants(config, room) do
+            users =
+              ps
+              |> Enum.map(&(&1.identity |> String.split("/") |> hd() |> String.downcase()))
+              |> Enum.uniq()
+
+            users = users -- RisiMe.Risi.agents(users)
+            {:ok, %{users: users, listen: listen?(r)}}
+          end
+      end
+    else
+      _ -> {:error, :transcribe_unavailable}
+    end
+  end
+
+  def room_users(_rec, _call_id), do: {:ok, nil}
+
+  defp listen?(%{metadata: m}) when is_binary(m) do
+    match?({:ok, %{"r" => 1}}, Jason.decode(m))
+  end
+
+  defp listen?(_), do: false
+
   ## The signal (§36.3)
 
   @doc "`call_transcribe` with the Session to every participant's `call_transcribe` devices."
@@ -155,11 +205,12 @@ defmodule RisiMe.Agent.CallTranscribe do
          {:ok, action, call_id, conv} <- parse_push(p),
          :ok <- RateLimiter.hit(:call_transcribe_push, user, @push_limit, @push_window),
          {:ok, rec} <- call_record(call_id),
-         :ok <- participant(rec, user),
+         {:ok, room} <- room_users(rec, call_id),
+         :ok <- participant(rec, user, room, call_id),
          :ok <- official(rec, conv),
-         :ok <- request_checks(action, user, device_id, rec),
-         {:ok, pid} <- Call.ensure(call_id, Map.put(rec, :official, conv)) do
-      case Call.push(pid, user, device_id, action, p) do
+         :ok <- request_checks(action, user, device_id, rec, room),
+         {:ok, pid} <- Call.ensure(call_id, call_rec(rec, conv)) do
+      case Call.push(pid, user, device_id, action, p, room) do
         {:ok, %Session{} = s} -> {:ok, %{session: Session.to_json(s)}}
         {:error, _} = e -> e
       end
@@ -192,8 +243,53 @@ defmodule RisiMe.Agent.CallTranscribe do
     end
   end
 
-  defp participant(rec, user),
+  # v1.44 §39.9: in a group call, a user in the room, or one who already is a participant of
+  # the call's newest session (left the room since: may still stop).
+  defp participant(%{group: true}, user, room, call_id) do
+    in_room? = is_map(room) and user in room.users
+
+    if in_room? or session_participant?(call_id, user),
+      do: :ok,
+      else: {:error, :not_participant}
+  end
+
+  defp participant(rec, user, _room, _call_id),
     do: if(user in [rec.from, rec.to], do: :ok, else: {:error, :not_participant})
+
+  defp session_participant?(call_id, user) do
+    case newest_session(call_id) do
+      %Session{} = s -> user in Session.user_ids(s)
+      nil -> false
+    end
+  end
+
+  defp newest_session(call_id) do
+    Repo.one(
+      from s in Session,
+        where: s.call_id == ^call_id,
+        order_by: [desc: s.requested_at],
+        limit: 1
+    )
+  end
+
+  # The record the call's process keeps: the Official conversation, and for a group its chat.
+  defp call_rec(%{group: true} = rec, conv) do
+    chat = (RisiMe.Groups.get_group(conv) || %{}) |> Map.get(:chat_id) || conv
+    Map.merge(rec, %{official: conv, chat: chat})
+  end
+
+  defp call_rec(rec, conv), do: Map.put(rec, :official, conv)
+
+  # v1.44 §39.9: a group call's own conversation, an Official `grp:` with Official on.
+  defp official(%{group: true} = rec, conv) do
+    case RisiMe.Groups.get_group(conv) do
+      %{tab: "official"} when conv == rec.conv ->
+        if official_on?(conv), do: :ok, else: {:error, :not_official}
+
+      _ ->
+        {:error, :not_official}
+    end
+  end
 
   # §36.0/§36.2: an Official `grp:` with Official on whose chat is the call's `dm:`.
   defp official(rec, conv) do
@@ -205,6 +301,26 @@ defmodule RisiMe.Agent.CallTranscribe do
         {:error, :not_official}
     end
   end
+
+  # v1.44 §39.9: the requester in the room; every other human in it with a live
+  # `call_transcribe` device (and at least one); never while the §27.7 listener runs.
+  defp request_checks("request", user, device_id, %{group: true}, room) do
+    others = if is_map(room), do: room.users -- [user], else: []
+
+    cond do
+      not transcribe_device?(user, device_id) -> {:error, :invalid_device}
+      not is_map(room) or user not in room.users -> {:error, :not_participant}
+      room.listen -> {:error, :busy}
+      others == [] -> {:error, :peer_not_ready}
+      not Enum.all?(others, &live_transcribe_device?/1) -> {:error, :peer_not_ready}
+      not (Out.ready?() and Speech.healthy?()) -> {:error, :transcribe_unavailable}
+      live_count() >= max_live() -> {:error, :transcribe_unavailable}
+      true -> :ok
+    end
+  end
+
+  defp request_checks(action, user, device_id, rec, _room),
+    do: request_checks(action, user, device_id, rec)
 
   defp request_checks("request", user, device_id, rec) do
     other = if rec.from == user, do: rec.to, else: rec.from
@@ -221,7 +337,8 @@ defmodule RisiMe.Agent.CallTranscribe do
   defp request_checks(_action, _user, _device_id, _rec), do: :ok
 
   defp live_count,
-    do: Repo.aggregate(from(s in Session, where: s.state in ["requested", "on"]), :count)
+    do:
+      Repo.aggregate(from(s in Session, where: s.state in ["requested", "on", "paused"]), :count)
 
   @doc false
   # §36.3: not within 10 s of this user's last request, and 10 requests per hour.
@@ -252,8 +369,20 @@ defmodule RisiMe.Agent.CallTranscribe do
 
         newest == nil ->
           case Calls.get(call_id) do
-            %{from: f, to: t} when user in [f, t] -> {:ok, nil}
-            _ -> {:error, :not_found}
+            %{group: true} = rec ->
+              case room_users(rec, call_id) do
+                {:ok, %{users: users}} ->
+                  if user in users, do: {:ok, nil}, else: {:error, :not_found}
+
+                _ ->
+                  {:error, :not_found}
+              end
+
+            %{from: f, to: t} when user in [f, t] ->
+              {:ok, nil}
+
+            _ ->
+              {:error, :not_found}
           end
 
         true ->
@@ -302,6 +431,8 @@ defmodule RisiMe.Agent.CallTranscribe do
 
   defp upload_state(%Session{state: "on"}), do: :ok
   defp upload_state(%Session{state: "requested"}), do: {:error, 409, :not_consented}
+  # v1.44 §39.9: paused until a joiner allows.
+  defp upload_state(%Session{state: "paused"}), do: {:error, 409, :not_consented}
   defp upload_state(_), do: {:error, 409, :stopped}
 
   defp chunk_fields(s, p) do
@@ -331,13 +462,16 @@ defmodule RisiMe.Agent.CallTranscribe do
   defp int(_), do: :error
 
   defp rec_of(%Session{} = s) do
-    [a, b] =
-      case Session.user_ids(s) do
-        [a, b] -> [a, b]
-        [a] -> [a, a]
-      end
+    case Calls.get(s.call_id) do
+      %{group: true} = rec ->
+        Map.merge(rec, %{official: s.conversation_id, chat: s.chat_id})
 
-    %{from: a, to: b, conv: s.chat_id, official: s.conversation_id, media: "audio"}
+      _ ->
+        # A group session has more than two participants (v1.44 §39.9); the 1:1 shape is kept.
+        [a | rest] = Session.user_ids(s)
+        b = List.first(rest) || a
+        %{from: a, to: b, conv: s.chat_id, official: s.conversation_id, media: "audio"}
+    end
   end
 
   ## Stops from outside
@@ -347,7 +481,7 @@ defmodule RisiMe.Agent.CallTranscribe do
     live =
       Repo.all(
         from s in Session,
-          where: s.conversation_id == ^conv and s.state in ["requested", "on"],
+          where: s.conversation_id == ^conv and s.state in ["requested", "on", "paused"],
           select: s.call_id
       )
 
@@ -360,7 +494,9 @@ defmodule RisiMe.Agent.CallTranscribe do
   @doc "§36.1 kill switch: every live session stops (`switch_off`)."
   def switch_off do
     live =
-      Repo.all(from s in Session, where: s.state in ["requested", "on"], select: s.call_id)
+      Repo.all(
+        from s in Session, where: s.state in ["requested", "on", "paused"], select: s.call_id
+      )
 
     for call_id <- live, pid = Call.whereis(call_id), do: safe_stop(pid, "switch_off")
     :ok
@@ -381,7 +517,7 @@ defmodule RisiMe.Agent.CallTranscribe do
     now = DateTime.utc_now()
 
     Repo.update_all(
-      from(s in Session, where: s.state in ["requested", "on"]),
+      from(s in Session, where: s.state in ["requested", "on", "paused"]),
       set: [state: "stopped", reason: reason, ended_at: now, expires_at: nil, updated_at: now]
     )
 

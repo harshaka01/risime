@@ -63,8 +63,12 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     end
   end
 
-  def push(pid, user, device, action, p),
-    do: GenServer.call(pid, {:push, user, device, action, p}, 15_000)
+  @doc """
+  One push. `room` (v1.44 §39.9, group calls): the room's human users as read for this push
+  (`%{users, listen}`, or `:gone`); nil for a 1:1 call. Joiners are synced before the action.
+  """
+  def push(pid, user, device, action, p, room \\ nil),
+    do: GenServer.call(pid, {:push, user, device, action, p, room}, 15_000)
 
   def chunk(pid, user, device, meta, audio),
     do: GenServer.call(pid, {:chunk, user, device, meta, fn -> audio end}, 15_000)
@@ -108,8 +112,9 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   end
 
   @impl true
-  def handle_call({:push, user, device, action, p}, _from, st) do
-    {reply, st} = push_action(action, user, device, p, st)
+  def handle_call({:push, user, device, action, p, room}, _from, st) do
+    st = sync_room(st, room)
+    {reply, st} = push_action(action, user, device, p, room, st)
     {:reply, reply, st}
   end
 
@@ -135,9 +140,14 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   def handle_info({:expire, sid}, %{session: %Session{session_id: sid, state: "requested"}} = st),
     do: {:noreply, finalize(st, "expired", "expired", nil, false)}
 
+  # v1.44 §39.9: a joiner didn't answer within 30 s of the pause.
+  def handle_info({:expire, sid}, %{session: %Session{session_id: sid, state: "paused"}} = st),
+    do: {:noreply, finalize(st, "stopped", "expired", nil, false)}
+
   def handle_info({:expire, _sid}, st), do: {:noreply, st}
 
-  def handle_info({:tick, sid}, %{session: %Session{session_id: sid, state: "on"} = s} = st) do
+  def handle_info({:tick, sid}, %{session: %Session{session_id: sid, state: state} = s} = st)
+      when state in ["on", "paused"] do
     now = mono()
     t = CallTranscribe.timing()
 
@@ -151,7 +161,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       now - st.rt.started_mono >= t.max_ms ->
         {:noreply, finalize(st, "ended", "max_length", nil, false)}
 
-      Enum.any?(st.rt.parts, fn {_u, p} -> now - p.last_chunk_at >= t.left_ms end) ->
+      left?(st, now, t.left_ms) ->
         {:noreply, finalize(st, "ended", "left", nil, false)}
 
       st.rt.fail_since != nil and now - st.rt.fail_since >= t.unavailable_ms ->
@@ -163,6 +173,29 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   end
 
   def handle_info({:tick, _sid}, st), do: {:noreply, st}
+
+  # v1.44 §39.9: a group session reads the room on every tick while it is live (joiners, the
+  # room gone). A LiveKit error skips this tick.
+  def handle_info({:room, sid}, %{session: %Session{session_id: sid} = s} = st) do
+    if Session.live?(s) do
+      st =
+        case CallTranscribe.room_users(st.rec, st.call_id) do
+          {:ok, room} -> sync_room(st, room)
+          _ -> st
+        end
+
+      st =
+        if st.session && Session.live?(st.session),
+          do: put_timer(st, :room, {:room, sid}, CallTranscribe.timing().tick_ms),
+          else: st
+
+      {:noreply, st}
+    else
+      {:noreply, st}
+    end
+  end
+
+  def handle_info({:room, _sid}, st), do: {:noreply, st}
 
   def handle_info({:flush_turn, sid, ref}, st) do
     {:noreply, with_rt(st, sid, &flush_turn(&1, &2, ref))}
@@ -197,9 +230,84 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     end)
   end
 
+  # §36.2 `left`: a 1:1 ends when one participant sent nothing for 90 s; a group call (v1.44
+  # §39.9) only when no participant has uploaded for 90 s (people leave and the rest go on).
+  defp left?(%{rec: %{group: true}} = st, now, left_ms),
+    do: Enum.all?(st.rt.parts, fn {_u, p} -> now - p.last_chunk_at >= left_ms end)
+
+  defp left?(st, now, left_ms),
+    do: Enum.any?(st.rt.parts, fn {_u, p} -> now - p.last_chunk_at >= left_ms end)
+
+  defp group?(st), do: Map.get(st.rec, :group) == true
+
+  ## The room (v1.44 §39.9, group calls)
+
+  # The room's human users as read now: joiners become `pending` (a `requested` session waits
+  # for them too; an `on` one is `paused` until they allow, 30 s); the room gone ends it.
+  defp sync_room(st, nil), do: st
+
+  defp sync_room(%{session: %Session{} = s} = st, :gone) do
+    if Session.live?(s), do: finalize(st, "ended", "ended", nil, false), else: st
+  end
+
+  defp sync_room(%{session: %Session{} = s} = st, %{users: users}) do
+    joiners = users -- Session.user_ids(s)
+
+    if joiners == [] or not Session.live?(s) or not group?(st) do
+      st
+    else
+      new =
+        for u <- joiners,
+            do: %{"user_id" => u, "consent" => "pending", "at" => nil, "device_id" => nil}
+
+      s = %{s | participants: s.participants ++ new}
+
+      case s.state do
+        "on" ->
+          t = CallTranscribe.timing()
+          now = Clock.usec(Clock.now())
+
+          s = %{
+            s
+            | state: "paused",
+              expires_at: DateTime.add(now, t.request_ttl_ms, :millisecond)
+          }
+
+          st
+          |> add_parts(joiners)
+          |> save(s)
+          |> put_timer(:expire, {:expire, s.session_id}, t.request_ttl_ms)
+
+        _ ->
+          save(st, s)
+      end
+    end
+  end
+
+  defp sync_room(st, _room), do: st
+
+  defp add_parts(%{rt: nil} = st, _users), do: st
+
+  defp add_parts(%{rt: rt} = st, users) do
+    parts = Enum.reduce(users, rt.parts, &Map.put_new(&2, &1, new_part(mono())))
+    %{st | rt: %{rt | parts: parts}}
+  end
+
+  defp new_part(now) do
+    %{
+      seen: MapSet.new(),
+      max_seq: nil,
+      queue: :queue.new(),
+      inflight: nil,
+      last_chunk_at: now,
+      tokens: CallTranscribe.timing().chunk_burst / 1,
+      tokens_at: now
+    }
+  end
+
   ## Pushes (§36.3)
 
-  defp push_action("request", user, device, _p, st) do
+  defp push_action("request", user, device, _p, room, st) do
     s = st.session
 
     cond do
@@ -211,13 +319,14 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
       true ->
         case CallTranscribe.request_limits(user) do
-          :ok -> start_session(user, device, st)
+          :ok -> start_session(user, device, st, room)
           {:error, _} = e -> {e, st}
         end
     end
   end
 
-  defp push_action(action, user, device, p, st) when action in ["allow", "decline", "stop"] do
+  defp push_action(action, user, device, p, _room, st)
+       when action in ["allow", "decline", "stop"] do
     sid = p["session_id"]
 
     case st.session do
@@ -235,17 +344,25 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     end
   end
 
-  defp push_action(_action, _user, _device, _p, st), do: {{:error, :bad_request}, st}
+  defp push_action(_action, _user, _device, _p, _room, st), do: {{:error, :bad_request}, st}
 
-  defp live_action("allow", %Session{state: "requested"} = s, user, device, _p, st) do
+  defp live_action("allow", %Session{state: state} = s, user, device, _p, st)
+       when state in ["requested", "paused"] do
     case Session.participant(s, user) do
       %{"consent" => "pending"} ->
         if CallTranscribe.transcribe_device?(user, device) do
           s = consent(s, user, "allowed", device)
 
-          if Enum.all?(s.participants, &(&1["consent"] == "allowed")),
-            do: {:ok, start_on(st, s)} |> wrap(),
-            else: {{:ok, s}, save(st, s)}
+          cond do
+            not Enum.all?(s.participants, &(&1["consent"] == "allowed")) ->
+              {{:ok, s}, save(st, s)}
+
+            state == "paused" ->
+              {:ok, resume_on(st, s)} |> wrap()
+
+            true ->
+              {:ok, start_on(st, s)} |> wrap()
+          end
         else
           {{:error, :invalid_device}, st}
         end
@@ -258,7 +375,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     end
   end
 
-  defp live_action("decline", %Session{state: "requested"} = s, user, _device, p, st) do
+  defp live_action("decline", %Session{state: state} = s, user, _device, p, st)
+       when state in ["requested", "paused"] do
     case Session.participant(s, user) do
       %{"consent" => "pending"} ->
         s = consent(s, user, "declined", nil)
@@ -277,11 +395,12 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     if bound != nil and bound != device do
       {{:error, :invalid_device}, st}
     else
-      discard = p["discard"] == true and s.state == "on"
+      discard = p["discard"] == true and s.state in ["on", "paused"]
 
       {state, reason} =
         case {s.state, p["reason"]} do
           {"on", "ended"} -> {"ended", "ended"}
+          {"paused", "ended"} -> {"ended", "ended"}
           _ -> {"stopped", "stopped"}
         end
 
@@ -296,25 +415,35 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
   defp wrap({:ok, st}), do: {{:ok, st.session}, st}
 
-  defp start_session(user, device, st) do
+  defp start_session(user, device, st, room) do
     now = Clock.usec(Clock.now())
     rec = st.rec
-    other = if rec.from == user, do: rec.to, else: rec.from
     t = CallTranscribe.timing()
     at = Clock.ts(now)
+
+    # v1.44 §39.9: a group call asks every other human in the room; a 1:1 call the peer.
+    others =
+      cond do
+        group?(st) and is_map(room) -> room.users -- [user]
+        rec.from == user -> [rec.to]
+        true -> [rec.from]
+      end
 
     s = %Session{
       session_id: Ecto.UUID.generate(),
       call_id: st.call_id,
       conversation_id: rec.official,
-      chat_id: rec.conv,
+      chat_id: Map.get(rec, :chat, rec.conv),
       state: "requested",
       requested_by: user,
       requested_at: now,
       expires_at: DateTime.add(now, t.request_ttl_ms, :millisecond),
       participants: [
-        %{"user_id" => user, "consent" => "allowed", "at" => at, "device_id" => device},
-        %{"user_id" => other, "consent" => "pending", "at" => nil, "device_id" => nil}
+        %{"user_id" => user, "consent" => "allowed", "at" => at, "device_id" => device}
+        | for(
+            o <- others,
+            do: %{"user_id" => o, "consent" => "pending", "at" => nil, "device_id" => nil}
+          )
       ],
       compare: CallTranscribe.compare?(user),
       discard: false
@@ -327,6 +456,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       %{st | session: s}
       |> put_timer(:expire, {:expire, s.session_id}, t.request_ttl_ms)
 
+    st = if group?(st), do: put_timer(st, :room, {:room, s.session_id}, t.tick_ms), else: st
     {{:ok, s}, st}
   end
 
@@ -352,19 +482,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     s = %{s | state: "on", started_at: Clock.usec(Clock.now()), expires_at: nil}
     now = mono()
 
-    parts =
-      Map.new(Session.user_ids(s), fn u ->
-        {u,
-         %{
-           seen: MapSet.new(),
-           max_seq: nil,
-           queue: :queue.new(),
-           inflight: nil,
-           last_chunk_at: now,
-           tokens: CallTranscribe.timing().chunk_burst / 1,
-           tokens_at: now
-         }}
-      end)
+    parts = Map.new(Session.user_ids(s), fn u -> {u, new_part(now)} end)
 
     rt = %{
       sid: s.session_id,
@@ -390,6 +508,12 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     st = save(%{st | rt: rt}, s)
     st = enqueue_post(st, {:consent, s})
     put_timer(st, :tick, {:tick, s.session_id}, t.tick_ms)
+  end
+
+  # v1.44 §39.9: every joiner allowed: the paused session is `on` again (same runtime).
+  defp resume_on(st, s) do
+    s = %{s | state: "on", expires_at: nil}
+    st |> cancel_timer(:expire) |> save(s)
   end
 
   # The speech service's `language_hint`, once per session (decision 071 amendment d): the
@@ -419,7 +543,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
         expires_at: nil
     }
 
-    st = st |> cancel_timer(:expire) |> cancel_timer(:tick)
+    st = st |> cancel_timer(:expire) |> cancel_timer(:tick) |> cancel_timer(:room)
 
     st =
       case st.rt do
@@ -496,7 +620,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
             accept(user, m, audio, st)
         end
 
-      %Session{session_id: sid, state: "requested"} when sid == m.session_id ->
+      %Session{session_id: sid, state: state}
+      when sid == m.session_id and state in ["requested", "paused"] ->
         {{:error, 409, :not_consented}, st}
 
       _ ->
