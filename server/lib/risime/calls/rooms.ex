@@ -40,6 +40,10 @@ defmodule RisiMe.Calls.Rooms do
           | :call_full
           | :not_in_call
           | :too_many_for_video
+          | :call_risi_off
+          | :not_risi_chat
+          | :risi_busy
+          | :risi_unavailable
           | {:rate_limited, pos_integer}
 
   @doc """
@@ -59,27 +63,67 @@ defmodule RisiMe.Calls.Rooms do
          {:ok, req} <- parse(params),
          true <- Groups.active_member?(req.conv, user_id) || {:error, :not_found},
          {:ok, device_id, caps} <- check_device(user_id, device_id, req),
-         :ok <- check_rate(user_id, req.action) do
+         :ok <- check_rate(user_id, req.action),
+         :ok <- check_risi_call(user_id, device_id, req) do
       room = LiveKit.room_name(config.api_secret, req.conv, req.call_id, req.media)
       me = %{identity: LiveKit.identity(user_id, device_id), screen?: caps.screen_share}
-      result = locked(req.action, room, fn -> run(req.action, config, req, room, me) end)
+
+      # Decision 090: a `start` with `risi_call` makes a Call Risi room (parity: absent = v1.47).
+      {action, me} =
+        if req.risi_call,
+          do: {"start_risi_call", Map.merge(me, %{user_id: user_id, device_id: device_id})},
+          else: {req.action, me}
+
+      result = locked(req.action, room, fn -> run(action, config, req, room, me) end)
       log(req, room, user_id, device_id, result)
       strip(result)
     end
   end
 
-  defp parse(%{"conversation_id" => conv, "call_id" => call_id, "media" => media, "action" => a})
+  defp parse(
+         %{"conversation_id" => conv, "call_id" => call_id, "media" => media, "action" => a} =
+           params
+       )
        when is_binary(conv) and is_binary(call_id) do
     cond do
-      not Groups.group_id?(conv) -> {:error, :bad_request}
-      not Regex.match?(@uuid, call_id) -> {:error, :bad_request}
-      media not in ["audio", "video"] -> {:error, :bad_request}
-      a not in ["start", "join", "status", "upgrade"] -> {:error, :bad_request}
-      true -> {:ok, %{conv: conv, call_id: call_id, media: media, action: a}}
+      not Groups.group_id?(conv) ->
+        {:error, :bad_request}
+
+      not Regex.match?(@uuid, call_id) ->
+        {:error, :bad_request}
+
+      media not in ["audio", "video"] ->
+        {:error, :bad_request}
+
+      a not in ["start", "join", "status", "upgrade"] ->
+        {:error, :bad_request}
+
+      # Decision 090 (proposal 2026-10-14-call-risi §41.2): `risi_call` only on `start`.
+      risi_call?(params) and a != "start" ->
+        {:error, :bad_request}
+
+      true ->
+        {:ok,
+         %{conv: conv, call_id: call_id, media: media, action: a, risi_call: risi_call?(params)}}
     end
   end
 
   defp parse(_), do: {:error, :bad_request}
+
+  defp risi_call?(params), do: Map.get(params, "risi_call") == true
+
+  # Decision 090: the Call Risi checks (switch, own Risi chat, `call_risi` device, limit, health).
+  defp check_risi_call(_user_id, _device_id, %{risi_call: false}), do: :ok
+
+  defp check_risi_call(user_id, device_id, req) do
+    caps =
+      case Repo.get_by(Device, user_id: user_id, device_id: device_id) do
+        %Device{capabilities: c} when is_list(c) -> c
+        _ -> []
+      end
+
+    RisiMe.Agent.CallRisi.check(user_id, req.conv, %{media: req.media, caps: caps})
+  end
 
   # Server S4: the token identity must be a `group_calls` leaf of this group; `upgrade` also
   # needs `call_switch` (v1.23 server S5).
@@ -131,6 +175,32 @@ defmodule RisiMe.Calls.Rooms do
     end
   end
 
+  # Decision 090 (§41.2): a Call Risi room (metadata `k: "risi"`) of 2 seats; Risi's session joins
+  # with its own server-minted token.
+  defp run("start_risi_call", config, req, room, me) do
+    opts = %{
+      max_participants: 2,
+      empty_timeout: @empty_timeout,
+      departure_timeout: @departure_timeout,
+      metadata: Jason.encode!(%{"c" => req.conv, "m" => "audio", "k" => "risi"})
+    }
+
+    with {:ok, _r} <- LiveKit.api().create_room(config, room, opts),
+         {:ok, _pid} <-
+           RisiMe.Agent.CallRisi.start(%{
+             conv: req.conv,
+             call_id: req.call_id,
+             user_id: me.user_id,
+             device_id: me.device_id,
+             room: room
+           }) do
+      {:ok, risi_reply(config, room, me)}
+    else
+      {:error, {:already_started, _}} -> {:ok, risi_reply(config, room, me)}
+      _ -> {:error, :risi_unavailable}
+    end
+  end
+
   # v1.23 server S2, S3: the cap comes from the room's current media; an identity already in the
   # room is a refresh (never `call_full`, re-granted in a video room).
   defp run("join", config, req, room, me) do
@@ -145,6 +215,10 @@ defmodule RisiMe.Calls.Rooms do
           {:ok, token_reply(config, room, me, media)}
 
         max(r.num_participants, length(present)) >= LiveKit.max_participants(media) ->
+          {:error, :call_full}
+
+        # Decision 090 (§41.2): nobody else joins a Call Risi room.
+        risi_room?(r) ->
           {:error, :call_full}
 
         true ->
@@ -278,6 +352,24 @@ defmodule RisiMe.Calls.Rooms do
   end
 
   defp media_of(_room, start), do: start
+
+  defp risi_room?(%{metadata: m}) when is_binary(m),
+    do: match?({:ok, %{"k" => "risi"}}, Jason.decode(m))
+
+  defp risi_room?(_room), do: false
+
+  defp risi_reply(config, room, me) do
+    config
+    |> token_reply(room, me, "audio")
+    |> Map.put(:max_participants, 2)
+    |> Map.put(:risi_call, %{
+      state: "joining",
+      e2ee: false,
+      risi_identity: RisiMe.Agent.CallRisi.risi_identity(),
+      max_s: RisiMe.Agent.CallRisi.max_s(),
+      lang: "en"
+    })
+  end
 
   defp token_reply(config, room, me, media) do
     now = System.os_time(:second)

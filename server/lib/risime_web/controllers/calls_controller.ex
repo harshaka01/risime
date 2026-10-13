@@ -70,6 +70,19 @@ defmodule RisiMeWeb.CallsController do
 
       {:error, :too_many_for_video} ->
         ApiError.send_error(conn, 409, :too_many_for_video)
+
+      # Decision 090 (proposal 2026-10-14-call-risi §41.2): only with `risi_call: true`.
+      {:error, :call_risi_off} ->
+        ApiError.send_error(conn, 403, :call_risi_off)
+
+      {:error, :not_risi_chat} ->
+        ApiError.send_error(conn, 422, :not_risi_chat)
+
+      {:error, :risi_busy} ->
+        ApiError.send_error(conn, 409, :risi_busy)
+
+      {:error, :risi_unavailable} ->
+        ApiError.send_error(conn, 503, :risi_unavailable)
     end
   end
 

@@ -22,7 +22,12 @@ defmodule RisiMe.Agents.Supervisor do
         Supervisor.child_spec({RisiMe.Agents.Server, mod}, id: {RisiMe.Agents.Server, mod})
       end
 
-    children = [{Task.Supervisor, name: RisiMe.Agents.TaskSup} | agents]
+    # Decision 090: the Voice agent's Call Risi sessions (idle unless RISI_CALL_RISI applies).
+    children = [
+      {Task.Supervisor, name: RisiMe.Agents.TaskSup},
+      RisiMe.Agent.CallRisi.Supervisor | agents
+    ]
+
     Supervisor.init(children, strategy: :one_for_one, max_restarts: 10, max_seconds: 60)
   end
 end

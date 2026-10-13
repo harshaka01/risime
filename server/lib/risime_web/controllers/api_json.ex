@@ -18,7 +18,14 @@ defmodule RisiMeWeb.ApiJSON do
     }
 
     # v1.39 §36.1: `risi_dev: true` only for the users in RISI_DEV_USERS (absent otherwise).
-    if RisiMe.Agent.CallTranscribe.dev?(user.id), do: Map.put(json, :risi_dev, true), else: json
+    json =
+      if RisiMe.Agent.CallTranscribe.dev?(user.id), do: Map.put(json, :risi_dev, true), else: json
+
+    # Decision 090 (proposal 2026-10-14-call-risi §41.1): `call_risi: true` while RISI_CALL_RISI
+    # applies to the user (absent otherwise, so off is byte-identical).
+    if RisiMe.Agent.CallRisi.enabled_for?(user.id),
+      do: Map.put(json, :call_risi, true),
+      else: json
   end
 
   # v1.20 §21.4: false while an open sign-up's phone is self-asserted.

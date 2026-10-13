@@ -48,6 +48,11 @@ defmodule RisiMeWeb.ApiError do
     call_full: "This call is full",
     not_in_call: "You're not in this call",
     too_many_for_video: "Video is available with 8 people or fewer",
+    # Decision 090 (proposal 2026-10-14-call-risi §41.2).
+    call_risi_off: "Calling Risi isn't available for this account yet",
+    not_risi_chat: "You can call Risi only from your Risi chat",
+    risi_busy: "Risi is on other calls right now. Try again in a minute",
+    risi_unavailable: "Risi can't take calls right now",
     signup_required: "Create your RisiMe account to continue",
     signup_closed: "RisiMe sign-up is by invitation only right now",
     phone_taken: "This phone number can't be used for a new RisiMe account",

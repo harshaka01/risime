@@ -18,8 +18,8 @@ defmodule RisiMe.Agents.Flags do
   Tests may set `config :risime, :risi_agent_flags, %{"RISI_AGENT_ROUTER" => "on"}`, which wins
   over everything (and skips the table).
 
-  **Feature switches with a canary** (PART 9, Harsha 2026-10-13): `RISI_VOICE_TRANSCRIBE` and
-  `RISI_ACTION_ITEMS` take `off` | `canary` | `on` (`feature/1`, `feature_for/2`). `canary` = on
+  **Feature switches with a canary** (PART 9, Harsha 2026-10-13): `RISI_VOICE_TRANSCRIBE`,
+  `RISI_ACTION_ITEMS` and (decision 090) `RISI_CALL_RISI` take `off` | `canary` | `on` (`feature/1`, `feature_for/2`). `canary` = on
   only for `RISI_DEV_USERS` (Harsha first). They resolve as: the table row **>** the OS
   environment when it says `canary` **>** the application env set by `config/runtime.exs` from
   the same variable (`true` = on; tests set it directly). Defaults stay `off`.
@@ -34,7 +34,9 @@ defmodule RisiMe.Agents.Flags do
   @feature_modes ~w(off canary on)
   @features %{
     "RISI_VOICE_TRANSCRIBE" => :risi_voice_transcribe,
-    "RISI_ACTION_ITEMS" => :risi_action_items
+    "RISI_ACTION_ITEMS" => :risi_action_items,
+    # Decision 090: "Call Risi" (a voice call Risi answers); canary = Harsha first.
+    "RISI_CALL_RISI" => :risi_call_risi
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000

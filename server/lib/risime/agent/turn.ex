@@ -1467,7 +1467,23 @@ defmodule RisiMe.Agent.Turn do
         _ -> answer_risi
       end
 
+    answer_risi = voice_sink(answer, answer_risi)
     Audience.deliver(ctx, answer, answer_risi, st.personal)
+  end
+
+  # Decision 090 (Call Risi): a turn run by a call's Voice agent hands the answer text to the call
+  # (to be spoken) and marks the card with the call's `call_id`. Without the call's process key
+  # (every other turn) nothing changes.
+  @doc false
+  def voice_sink(answer, answer_risi) do
+    case Process.get(:risi_voice_sink) do
+      {pid, call_id} when is_pid(pid) ->
+        send(pid, {:risi_voice_answer, answer_risi["request_id"], answer})
+        Map.put(answer_risi, "call_id", call_id)
+
+      _ ->
+        answer_risi
+    end
   end
 
   ## v1.35 §34.3: "Ask me again"

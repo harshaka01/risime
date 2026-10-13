@@ -229,6 +229,30 @@ if v = System.get_env("RISI_VOICE_TRANSCRIBE"),
 # §36.7 runs unchanged and voice notes are not extracted.
 if v = System.get_env("RISI_ACTION_ITEMS"), do: config(:risime, :risi_action_items, on?.(v))
 
+# Decision 090 (proposal 2026-10-14-call-risi): RISI_CALL_RISI=off|canary|on, "Call Risi" (default off;
+# canary = RISI_DEV_USERS). RISI_TTS_URL (loopback only, default http://127.0.0.1:8230) and TTS_API_KEY
+# (.env only) reach risime-tts; RISI_VOICE_PYTHON / RISI_VOICE_WORKER the media worker
+# (infra/voice/risi_voice_worker.py in ~/risime-voice/venv); RISI_CALL_RISI_MAX (default 2) calls at once;
+# RISI_LIVEKIT_WORKER_URL the URL the worker dials (default ws://127.0.0.1:7880).
+if v = System.get_env("RISI_CALL_RISI") do
+  config(:risime, :risi_call_risi, if(v == "canary", do: :canary, else: on?.(v)))
+end
+
+if config_env() != :test do
+  call_risi =
+    [
+      tts_url: System.get_env("RISI_TTS_URL", "http://127.0.0.1:8230"),
+      python: System.get_env("RISI_VOICE_PYTHON", Path.expand("~/risime-voice/venv/bin/python")),
+      worker:
+        System.get_env("RISI_VOICE_WORKER", Path.expand("~/risime-voice/risi_voice_worker.py")),
+      livekit_url: System.get_env("RISI_LIVEKIT_WORKER_URL", "ws://127.0.0.1:7880"),
+      max: String.to_integer(System.get_env("RISI_CALL_RISI_MAX", "2"))
+    ] ++ if(key = System.get_env("TTS_API_KEY"), do: [tts_key: key], else: [])
+
+  config :risime, :risi_call_risi_config, call_risi
+  config :risime, :risi_tts_engines, [RisiMe.Agent.TTS.Kokoro]
+end
+
 if v = System.get_env("RISI_DEV_USERS") do
   ids =
     v
