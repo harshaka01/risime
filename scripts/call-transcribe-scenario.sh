@@ -217,7 +217,7 @@ for DEV in A B; do
   done < <(A shell "run-as $PKG find . -type f -newer files/debug_keep_call_controls -size +8k" 2>/dev/null | tr -d '\r')
   [ -z "$left" ] || fail "transcribe: audio files left on $DEV: $left"
 done
-srv="$(find /tmp "$REPO/server/tmp" -maxdepth 3 -newer "$WORK/tx-marker" \( -name 'plug-*' -o -name '*.ogg' -o -name '*.opus' -o -name 'multipart-*' \) 2>/dev/null || true)"
+srv="$(find /tmp "$REPO/server/tmp" -maxdepth 3 -type f -newer "$WORK/tx-marker" \( -name 'plug-*' -o -name '*.ogg' -o -name '*.opus' -o -name 'multipart-*' \) 2>/dev/null || true)"
 [ -z "$srv" ] || fail "transcribe: server-side temp files: $srv"
 wc="$(docker ps --format '{{.Names}}' | grep -m1 whisper || true)"
 if [ -n "$wc" ]; then
