@@ -242,6 +242,10 @@ defmodule RisiMe.Agent.Conversation do
     {:ok, state}
   end
 
+  defp transcript_claim?(pt) do
+    match?({:ok, %{"type" => "voice_transcript"}}, Jason.decode(pt))
+  end
+
   defp voice(pt) do
     case Jason.decode(pt) do
       {:ok, %{"type" => "voice"} = env} -> env
@@ -250,7 +254,9 @@ defmodule RisiMe.Agent.Conversation do
   end
 
   defp buffer_human(human?, u, d, pt, data, state) do
-    if human? do
+    # PART 9: `voice_transcript` is Risi's own working-copy type (never a client envelope); a
+    # member's message claiming it is ignored, so only Risi's transcription feeds that path.
+    if human? and not transcript_claim?(pt) do
       m = %{message_id: data["message_id"], sender_id: u, sender_device: d, plaintext: pt}
       :ok = Transcript.put(state.conv, m)
       # v1.36 §35.1: the long-term memory (sealed; opt-outs dropped before sealing).

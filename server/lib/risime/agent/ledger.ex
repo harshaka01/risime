@@ -326,9 +326,17 @@ defmodule RisiMe.Agent.Ledger do
     |> Secretary.text_messages(cutoff)
     |> Enum.filter(fn m ->
       MapSet.member?(humans, m.sender_id) and
-        (cutoff == nil or DateTime.compare(msg_ts(m), cutoff) == :gt)
+        (cutoff == nil or DateTime.compare(msg_ts(m), cutoff) == :gt) and
+        not voice_for_38?(conv, m)
     end)
   end
+
+  # PART 9: a transcribed voice note counts like a typed message, except when §38 makes its
+  # action items (its promises are offered there, never twice).
+  defp voice_for_38?(conv, %{voice: true} = m),
+    do: RisiMe.Agent.ActionItems.handles_voice?(conv, m.sender_id, m[:duration_ms])
+
+  defp voice_for_38?(_conv, _m), do: false
 
   defp msg_ts(%{message_id: id}), do: TimeUUID.to_datetime(id)
 

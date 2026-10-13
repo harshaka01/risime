@@ -2,6 +2,100 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## PART 9: Risi reads every Official voice note, understands it and acts (2026-10-13)
+
+**State:** green (`MIX_TEST_PARTITION=p9`, full suite). Server-only, no migration and no wire change,
+so it is **fast-lane eligible**. Point 2 is a contract proposal and is not implemented. Root deploys.
+
+**1. Same pipelines as a typed Official message.** Once an Official note is transcribed `ok`,
+`Voice` hands its sealed working copy (`voice_transcript`, buffered under the note's `message_id`)
+to the entry points `Agent.Conversation` uses for a `text`: `Memory.put_message/2` and
+`Secretary.on_message/2`. There is no second pipeline.
+- **Memory:** the transcript is stored as the speaker's own message, with the note's id as its
+  source. Risi's transcript post is no longer remembered (`memory: false`), so nothing is stored
+  twice. Memory opt-outs are respected, and an `unclear` or `failed` note is not remembered.
+- **Context:** `Secretary.text_messages/3` returns the note (`voice: true`, `duration_ms`).
+  Summaries, @Risi answers, daily and period summaries, and the memory seed and backfill all see it.
+- **Ledger and calendar offers:**
+  - With `RISI_LEDGER` off, the v1.24 extraction runs.
+  - With it on, the §27.2 quiet rule counts the note, and calendar offers follow through the
+    discussion summary (`Offers` → `CalendarOffers`).
+  - When §38 makes the note's action items (`ActionItems.handles_voice?/3`: §38 on for the sender,
+    the note is at least 5 s, the sender's `action_items` is on and memory isn't opted out), the
+    quiet rule leaves the note out. Its promises, meetings and calendar come from the §38 card and
+    `action_confirm`, so nothing is offered twice. This follows §38.1: for in-scope sources,
+    `action_items` replaces the discussion card.
+- **Policy agent:** doesn't exist yet. When it is built, it hooks into `Secretary.on_message/2` and
+  so sees voice notes automatically.
+- **Deletes:**
+  - A note deleted for everyone already takes its memory row, facts and promises
+    (`Secretary.message_deleted`).
+  - `transcript_delete` by the sender now does the same, and removes the working copy too.
+  - A note deleted while it was being transcribed is never buffered or learned.
+- **Spoofing:** `voice_transcript` is Risi's own working-copy type. A member's MLS message that
+  claims this type is ignored (`Conversation.buffer_human`).
+- **Private and the Risi chat:** never (tests assert this). `Voice.decide` skips any non-Official
+  conversation before touching a blob. Memory and the secretary check Official again. In the Risi
+  chat a note stays a §37.8 request.
+
+**2. "Risi, …" spoken = @Risi: proposal, not implemented.** I checked PROTOCOL.md:
+- §25.0 says free text is "never parsed for intent by the server or by Risi". Its only exception,
+  from decision 083, is client-side.
+- The v1.42 clarification adds "the server still never parses free text".
+
+For a voice note only the server sees the transcript, so the decision-083 client exception can't
+cover it. Address detection on the transcript would be a server-side parse, which the contract
+forbids as written. The amendment is in `contract/proposals/2026-10-13-voice-address-risi.md`: a
+narrow §37.10 exception covering only the transcript's opening word and its variants, an `ask` with
+a UUIDv5 `request_id`, no new wire fields, and the `RISI_VOICE_ADDRESS` off/canary/on switch. Stopped
+there for Harsha and root.
+
+**3. Canary switches.** `RISI_VOICE_TRANSCRIBE` and `RISI_ACTION_ITEMS` now take `off` | `canary` |
+`on` and are read at runtime (`RisiMe.Agents.Flags.feature/1`). Resolution order: the
+`risi_agent_flags` row, then the OS env when it says `canary`, then the application env from
+`config/runtime.exs`. Defaults are unchanged (off), and `Flags.put` validates the value.
+- `canary` means on only for `RISI_DEV_USERS`:
+  - voice transcription: the sender of the note;
+  - voice action items: the sender of the note;
+  - call action items: any speaker in the call.
+- **`/auth/config` reports `off` under `canary`.** It is unauthenticated, and saying "on" would tell
+  every phone that Risi transcribes its notes (decision 048 honesty). So Harsha's phone doesn't
+  show the one-time Official note or the "From calls & voice notes" chip during the canary. Cards
+  and transcripts still render. A per-user value would need the server role to pass the caller to
+  `config_on?`.
+- Flip with no deploy (live within 5 s):
+  `ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_VOICE_TRANSCRIBE", "canary")'`
+  (and `"RISI_ACTION_ITEMS"`; `Flags.clear/1` returns to env).
+
+**4. Agent design (decision 084/085).**
+- **Owner:** the **Voice** agent (deep). It wraps `Voice`, `CallTranscribe`, `ActionItems` and
+  `Speech`. Its goal: every Official voice note and call becomes a faithful transcript plus
+  understanding (memory, promises, meetings, action items) in the speaker's language. Downstream it
+  uses the Ledger, Memory and Calendar agents as tools, through the same typed-message entry
+  points; it doesn't reimplement them.
+- **Why AOA (hybrid):**
+  - What a note means, who owns an item, and when it is due are judgement calls that must improve
+    with feedback, so they belong to the agent.
+  - Blob fetch, in-memory decryption, the speech service and storage stay infrastructure (SOA).
+    Exactness and privacy matter more there than judgement.
+- **Signals (learning):**
+  - L1 (per user): the language tally from each note (`risi_speech_langs`).
+  - Live outcome signals (`action_feedback`), which are also the L2 training signal (extraction
+    prompts and few-shot examples from accepted items):
+    - item confirm, edit, Not mine, claim and expiry;
+    - `transcript_delete`;
+    - ledger card outcomes for notes counted by the quiet rule.
+  - L3 (later): ASR fine-tunes on consented clips, in the GPU window and through the Coach.
+- **Index: Voice understanding (decision 085)** = 0.7 × Eval + 0.3 × Live.
+  - Eval: item F1 on golden calls and notes. Owner, kind and due must match, and an invented name,
+    amount or date scores 0 for that case.
+  - Live: items confirmed ÷ (confirmed + Not mine + edited) over 7 days. Below 20 live signals it is
+    shown as "Eval only (n)".
+  - Transcription en/si/ta keeps its own Index.
+- **Rollout:** shadow isn't needed (the pipelines are existing and measured). The path is canary
+  (Harsha first, via the flags above), then on. A drop in the Index rolls back under the promotion
+  rule.
+
 ## Speech language hints (decision 071 amendment d, 2026-10-13)
 
 **State:** green (`MIX_TEST_PARTITION=lh`). Server-only, no migration, no wire change: fast-lane eligible.

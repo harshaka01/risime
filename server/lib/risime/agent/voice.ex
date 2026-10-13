@@ -23,8 +23,14 @@ defmodule RisiMe.Agent.Voice do
   * **The post:** `voice_transcript` from Risi's leaf in the same conversation (silent,
     `notify: []`); a speaker who opted out of memory (§35) is transcribed but not remembered.
     The working copy is buffered sealed (24 h) under the note's id as a `voice_transcript`
-    envelope (never a `text`, so nothing else counts it), and `risi_voice_transcripts` maps the
-    note to the post (ids only) for the §37.6 delete rules.
+    envelope, and `risi_voice_transcripts` maps the note to the post (ids only) for the §37.6
+    delete rules.
+  * **Understanding** (PART 9): an `ok` Official transcript then goes through the typed-message
+    entry points (`Memory.put_message/2`, `Secretary.on_message/2`) with the note's id as the
+    source, so memory, the Ledger, the calendar offers, summaries and answers see it like a typed
+    message; §38 makes its action items. Deleting the transcript deletes what was learned from it.
+  * **Switch modes:** `RISI_VOICE_TRANSCRIBE` = `off` | `canary` | `on` at runtime
+    (`RisiMe.Agents.Flags.feature/1`); `canary` transcribes only `RISI_DEV_USERS`' notes.
   * **Risi chat** (§37.8): the note is a request: after the transcript the text is handled as a
     §24.11 `ask` with the note's `request_id` (buffered as a `risi_request` with
     `"via": "voice"` and `lang`, so the answer is in the transcript's language); `unclear` or
@@ -53,12 +59,32 @@ defmodule RisiMe.Agent.Voice do
 
   ## Switches
 
-  @doc "True while `RISI_VOICE_TRANSCRIBE=on`."
-  def enabled?, do: Application.get_env(:risime, :risi_voice_transcribe, false) == true
+  # PART 9: `RISI_VOICE_TRANSCRIBE` = off | canary | on, read at runtime (`RisiMe.Agents.Flags`).
+  @flag "RISI_VOICE_TRANSCRIBE"
 
-  @doc "`/auth/config` `voice_transcribe` (§37.1): the switch, Risi up, the speech service healthy."
+  @doc "`:off | :canary | :on` (`canary` = on only for `RISI_DEV_USERS`)."
+  def mode, do: RisiMe.Agents.Flags.feature(@flag)
+
+  @doc "True while `RISI_VOICE_TRANSCRIBE=on` (for everyone; `canary` is not)."
+  def enabled?, do: mode() == :on
+
+  @doc "True when the switch is on for `user` (on, or canary and `user` is a dev user)."
+  def enabled_for?(user), do: RisiMe.Agents.Flags.feature_for(@flag, user)
+
+  @doc """
+  `/auth/config` `voice_transcribe` (§37.1): the switch on, Risi up, the speech service healthy.
+  Under `canary` the (unauthenticated) reply says off: Risi doesn't transcribe everyone's notes,
+  so no phone is told it does (decision 048 honesty).
+  """
   def config_on? do
     enabled?() and Risi.enabled?() and Out.ready?() and Speech.healthy?()
+  rescue
+    _ -> false
+  end
+
+  # §37.6 "voice_transcribe is on" for this sender (the canary-aware `config_on?/0`).
+  defp listening_for?(user) do
+    enabled_for?(user) and Risi.enabled?() and Out.ready?() and Speech.healthy?()
   rescue
     _ -> false
   end
@@ -182,7 +208,7 @@ defmodule RisiMe.Agent.Voice do
     cond do
       not RisiMe.Agent.official?(conv) -> :skip
       RisiMe.Groups.Tabs.risi_chat?(conv) -> decide_risi_chat(conv, sender, env, note)
-      not config_on?() -> :skip
+      not listening_for?(sender) -> :skip
       Map.has_key?(env, "forwarded") -> :skip
       note.duration_ms > @max_transcribe_ms -> :skip
       not Secretary.active_human?(conv, sender) -> :skip
@@ -202,7 +228,7 @@ defmodule RisiMe.Agent.Voice do
       Map.has_key?(env, "forwarded") -> :skip
       not Secretary.active_human?(conv, sender) -> :skip
       not (Risi.enabled?() and Out.ready?()) -> :skip
-      not enabled?() -> {:reply, :off}
+      not enabled_for?(sender) -> {:reply, :off}
       note.duration_ms > @max_transcribe_ms -> {:reply, :too_long}
       true -> {:ok, :risi_chat}
     end
@@ -408,9 +434,10 @@ defmodule RisiMe.Agent.Voice do
 
   defp post(conv, note_id, sender, note, t) do
     {body, risi} = envelope(conv, note_id, sender, note, t)
-    memory? = RisiMe.Agent.Memory.learning_enabled?(sender, conv)
 
-    case send_post(conv, body, risi, memory: memory?) do
+    # PART 9: the note joins memory as the speaker's own message under the note's id
+    # (`buffer/7`, the typed-message path), so Risi's transcript post is not remembered twice.
+    case send_post(conv, body, risi, memory: false) do
       {:ok, %{message_id: mid}} ->
         Repo.insert_all(
           "risi_voice_transcripts",
@@ -475,9 +502,16 @@ defmodule RisiMe.Agent.Voice do
       "duration_ms" => duration_ms
     }
 
-    put_buffer(conv, note_id, sender, env)
-    # v1.42 §38.2: the action items of the note (a job; ids only).
-    RisiMe.Agent.ActionItems.voice_transcribed(conv, note_id, sender, t.status, duration_ms)
+    # The note may have been deleted for everyone while it was being transcribed: then nothing
+    # of it is kept or learned.
+    unless note_gone?(note_id) do
+      m = put_buffer(conv, note_id, sender, env)
+      understood(conv, m)
+      # v1.42 §38.2: the action items of the note (a job; ids only).
+      RisiMe.Agent.ActionItems.voice_transcribed(conv, note_id, sender, t.status, duration_ms)
+    end
+
+    :ok
   end
 
   defp buffer(conv, note_id, sender, %{status: "ok"} = t, :risi_chat, rid, _duration_ms) do
@@ -497,12 +531,30 @@ defmodule RisiMe.Agent.Voice do
   defp buffer(_conv, _note_id, _sender, _t, :risi_chat, _rid, _duration_ms), do: :ok
 
   defp put_buffer(conv, note_id, sender, env) do
-    Transcript.put(conv, %{
+    m = %{
       message_id: note_id,
       sender_id: sender,
       sender_device: nil,
       plaintext: Jason.encode!(env)
-    })
+    }
+
+    Transcript.put(conv, m)
+    m
+  end
+
+  # PART 9 (Harsha 2026-10-13): an Official voice note, once transcribed, is handled exactly
+  # like a typed Official message, through the same entry points `Agent.Conversation` uses for
+  # a `text` (the note's id is the source): long-term memory (§35.1, opt-outs respected) and the
+  # secretary (the Ledger's quiet rule / the v1.24 extraction, and through them the calendar
+  # offers; a future Policy agent hooks in there too). A note that §38 extracts (its sender's
+  # action items on) is left to §38 by the secretary, so no promise is offered twice. Only an
+  # `ok` transcript counts; never Private (Official only, checked again downstream) and never
+  # the Risi chat (there the note is a request, §37.8).
+  defp understood(conv, m) do
+    RisiMe.Agent.Memory.put_message(conv, m)
+    Secretary.on_message(conv, m)
+  rescue
+    e -> Logger.warning("Risi voice: note not understood in #{conv}: #{inspect(e.__struct__)}")
   end
 
   # §37.8: the request goes through the §24.11 path (limits, queue, the §25 loop).
@@ -662,7 +714,19 @@ defmodule RisiMe.Agent.Voice do
               v.speaker == type(^user, Ecto.UUID)
       )
 
-    if owner?, do: delete_transcripts(conv, [String.downcase(note_id)]), else: :ok
+    if owner? do
+      note = String.downcase(note_id)
+
+      with :ok <- delete_transcripts(conv, [note]) do
+        # PART 9: what Risi learned from the note goes with its transcript (memory, facts and
+        # promises derived only from it), and its working copy.
+        Secretary.message_deleted(conv, [note])
+        Transcript.delete(conv, [note])
+        :ok
+      end
+    else
+      :ok
+    end
   end
 
   def transcript_delete(_conv, _user, _note_id), do: :ok

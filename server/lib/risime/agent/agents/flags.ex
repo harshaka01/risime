@@ -17,12 +17,25 @@ defmodule RisiMe.Agents.Flags do
 
   Tests may set `config :risime, :risi_agent_flags, %{"RISI_AGENT_ROUTER" => "on"}`, which wins
   over everything (and skips the table).
+
+  **Feature switches with a canary** (PART 9, Harsha 2026-10-13): `RISI_VOICE_TRANSCRIBE` and
+  `RISI_ACTION_ITEMS` take `off` | `canary` | `on` (`feature/1`, `feature_for/2`). `canary` = on
+  only for `RISI_DEV_USERS` (Harsha first). They resolve as: the table row **>** the OS
+  environment when it says `canary` **>** the application env set by `config/runtime.exs` from
+  the same variable (`true` = on; tests set it directly). Defaults stay `off`.
+
+      ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_VOICE_TRANSCRIBE", "canary")'
   """
   import Ecto.Query
 
   alias RisiMe.Repo
 
   @modes ~w(off shadow canary on)
+  @feature_modes ~w(off canary on)
+  @features %{
+    "RISI_VOICE_TRANSCRIBE" => :risi_voice_transcribe,
+    "RISI_ACTION_ITEMS" => :risi_action_items
+  }
   @masters ~w(on legacy)
   @ttl_ms 5_000
   @ets :risime_agent_flags
@@ -67,6 +80,46 @@ defmodule RisiMe.Agents.Flags do
     case mode(name) do
       :canary -> if dev_user?(user), do: :on, else: :shadow
       m -> m
+    end
+  end
+
+  @doc "The feature switches that take `off | canary | on`."
+  def features, do: Map.keys(@features)
+
+  @doc """
+  The mode of a feature switch (`"RISI_VOICE_TRANSCRIBE"`, `"RISI_ACTION_ITEMS"`):
+  `:off | :canary | :on`, read at runtime (table > env `canary` > application env).
+  """
+  def feature(name) when is_map_key(@features, name) do
+    v =
+      case Application.get_env(:risime, :risi_agent_flags) do
+        %{} = forced when is_map_key(forced, name) -> forced[name]
+        _ -> Map.get(table(), name) || if(env(name) == "canary", do: "canary")
+      end
+
+    case v do
+      v when v in @feature_modes -> String.to_existing_atom(v)
+      nil -> app_feature(@features[name])
+      _ -> :off
+    end
+  end
+
+  @doc "True when feature `name` is on for any of `users` (`canary`: a dev user among them)."
+  def feature_for(name, users) when is_list(users) do
+    case feature(name) do
+      :on -> true
+      :canary -> Enum.any?(users, &dev_user?/1)
+      :off -> false
+    end
+  end
+
+  def feature_for(name, user), do: feature_for(name, [user])
+
+  defp app_feature(key) do
+    case Application.get_env(:risime, key, false) do
+      v when v in [true, :on, "on"] -> :on
+      v when v in [:canary, "canary"] -> :canary
+      _ -> :off
     end
   end
 
@@ -120,16 +173,24 @@ defmodule RisiMe.Agents.Flags do
       [
         "RISI_AGENTS",
         "RISI_ROUTER_MODEL" | Enum.map(RisiMe.Agents.names(), &RisiMe.Agents.Agent.flag_name/1)
-      ]
+      ] ++ Enum.sort(Map.keys(@features))
 
     t = table()
 
     for n <- names do
       {value, from} =
         cond do
-          Map.has_key?(t, n) -> {t[n], "table"}
-          env(n) -> {env(n), "env"}
-          true -> {Map.get(@defaults, n, "off"), "default"}
+          Map.has_key?(t, n) ->
+            {t[n], "table"}
+
+          is_map_key(@features, n) ->
+            {Atom.to_string(feature(n)), if(env(n), do: "env", else: "default")}
+
+          env(n) ->
+            {env(n), "env"}
+
+          true ->
+            {Map.get(@defaults, n, "off"), "default"}
         end
 
       %{name: n, value: value, from: from}
@@ -158,6 +219,8 @@ defmodule RisiMe.Agents.Flags do
   defp validate("RISI_AGENTS", v) when v in @masters, do: :ok
 
   defp validate("RISI_AGENT_" <> _, v) when v in @modes, do: :ok
+
+  defp validate(name, v) when is_map_key(@features, name) and v in @feature_modes, do: :ok
 
   # The router's model alias (`off` = rules only), e.g. `risi-l1`, later `risi-l2`.
   defp validate("RISI_ROUTER_MODEL", v),

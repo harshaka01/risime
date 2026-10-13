@@ -50,7 +50,8 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
         :ok
 
       # v1.42 §38: with RISI_ACTION_ITEMS on, the extraction makes the action-items cards.
-      RisiMe.Agent.ActionItems.on?() ->
+      # PART 9: `canary` = a dev user among the call's speakers.
+      RisiMe.Agent.ActionItems.on_for?(Map.keys(by_speaker)) ->
         case RisiMe.Agent.ActionItems.from_call(conv, s, rows) do
           :ok ->
             drop(conv, ids)

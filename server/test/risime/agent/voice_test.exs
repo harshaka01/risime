@@ -28,6 +28,10 @@ defmodule RisiMe.Agent.VoiceTest do
   setup do
     keys = [
       :risi_voice_transcribe,
+      :risi_action_items,
+      :risi_ledger,
+      :risi_dev_users,
+      :risi_agent_flags,
       :risi_speech,
       :fake_speech_healthy,
       :risi_test_pid,
@@ -249,8 +253,11 @@ defmodule RisiMe.Agent.VoiceTest do
 
       refute row.plaintext =~ Base.encode64(key)
       refute row.plaintext =~ env["blob"]["blob_id"]
-      # Never `text` (nothing else counts it), never a request.
-      assert Secretary.text_messages(w.og) == []
+      # PART 9: counted as the speaker's message under the note's id (never a request).
+      assert [%{message_id: ^id, text: ^text, voice: true, duration_ms: 12_400} = m] =
+               Secretary.text_messages(w.og)
+
+      assert m.sender_id == w.a.user.id
 
       # One learning-log row: no text, no audio.
       [log] =
@@ -672,6 +679,211 @@ defmodule RisiMe.Agent.VoiceTest do
                build_conn() |> get("/api/v1/auth/config") |> json_response(200),
                "voice_transcribe"
              )
+    end
+  end
+
+  describe "PART 9: an Official voice note is understood like a typed message" do
+    # The memory rows of `conv` (ids only).
+    defp memory_rows(conv) do
+      RisiMe.Repo.all(
+        from m in RisiMe.Agent.Memory.Message,
+          where: m.conversation_id == ^conv,
+          select: %{message_id: m.message_id, sender_id: m.sender_id, from_risi: m.from_risi}
+      )
+    end
+
+    defp transcribe!(w, user, audio, conv \\ nil) do
+      conv = conv || w.og
+      {env, _, _} = note!(user.id, conv, audio)
+      {id, s} = receive_note(conv, user, env)
+      assert {:started, _} = s
+      _ = await_post(conv, "voice_transcript", &(&1["message_id"] == id))
+      await_done(s)
+      id
+    end
+
+    defp jobs(kind, conv),
+      do: all_enqueued(worker: Job, args: %{"kind" => kind, "conv" => conv})
+
+    test "memory: the speaker's message under the note's id; the transcript post isn't remembered",
+         w do
+      id = transcribe!(w, w.a.user, "en:I will send the quotation tomorrow")
+      a = w.a.user.id
+
+      assert [%{message_id: ^id, sender_id: ^a, from_risi: false}] =
+               eventually(fn -> memory_rows(w.og) |> then(&(&1 != [] && &1)) end)
+
+      # A speaker who opted out of memory is transcribed but not remembered (§35).
+      :ok = RisiMe.Agent.Memory.set_learning(w.b.user.id, w.og, false)
+      _ = transcribe!(w, w.b.user, "en:I will call the bank")
+      assert [%{message_id: ^id}] = memory_rows(w.og)
+
+      # An unclear note teaches nothing.
+      {env, _, _} = note!(a, w.og, "en:")
+      {_, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", &(&1["status"] == "unclear"))
+      await_done(s)
+      assert [%{message_id: ^id}] = memory_rows(w.og)
+    end
+
+    test "the Ledger: ledger off = the v1.24 extraction; on = the quiet rule counts the note",
+         w do
+      id = transcribe!(w, w.a.user, "en:I will send the quotation tomorrow")
+      assert [_] = jobs("extract", w.og)
+
+      Application.put_env(:risime, :risi_ledger, true)
+      id2 = transcribe!(w, w.a.user, "en:Kamal will book the van")
+      assert [_] = jobs("discussion_quiet", w.og)
+      ids = RisiMe.Agent.Ledger.counted(w.og, nil) |> Enum.map(& &1.message_id)
+      assert id in ids and id2 in ids
+      # §38 off: no voice-note extraction.
+      assert jobs("voice_actions", w.og) == []
+    end
+
+    test "§38 on: the note's promises come from its action items only (never offered twice)", w do
+      Application.put_env(:risime, :risi_ledger, true)
+      Application.put_env(:risime, :risi_action_items, true)
+      id = transcribe!(w, w.a.user, "en:I will send the quotation tomorrow")
+
+      assert [%{args: %{"message_id" => ^id}}] = jobs("voice_actions", w.og)
+      assert jobs("discussion_quiet", w.og) == []
+      assert RisiMe.Agent.Ledger.counted(w.og, nil) == []
+      # Still in memory and in the chat's context (summaries, answers).
+      assert [%{message_id: ^id}] = Secretary.text_messages(w.og)
+
+      assert [%{message_id: ^id}] =
+               eventually(fn -> memory_rows(w.og) |> then(&(&1 != [] && &1)) end)
+
+      # A sender with action items off: the quiet rule counts the note instead.
+      {:ok, _} = Voice.put_setting(w.b.user.id, %{"transcribe" => true, "action_items" => false})
+      id2 = transcribe!(w, w.b.user, "en:I will call the bank")
+      assert [_] = jobs("discussion_quiet", w.og)
+      assert [%{message_id: ^id2}] = RisiMe.Agent.Ledger.counted(w.og, nil)
+    end
+
+    test "transcript_delete takes what Risi learned from the note", w do
+      id = transcribe!(w, w.a.user, "en:I will send the quotation tomorrow")
+      assert [_] = eventually(fn -> memory_rows(w.og) |> then(&(&1 != [] && &1)) end)
+      action = %{example("envelope_risi_action_transcript_delete.json") | "target" => id}
+      act!(w.og, w.a.user, action)
+      assert memory_rows(w.og) == []
+      assert Secretary.text_messages(w.og) == []
+    end
+
+    test "never Private, never the Risi chat", w do
+      Application.put_env(:risime, :risi_test_pid, self())
+      private = private_group!([w.a.user.id, w.b.user.id])
+      dm = RisiMe.Messaging.conversation_id(w.a.user.id, w.b.user.id)
+
+      # Even a transcript-shaped message handed to the typed-message entry points does nothing.
+      pt =
+        Jason.encode!(%{
+          "v" => 1,
+          "type" => "voice_transcript",
+          "status" => "ok",
+          "text" => "private words",
+          "duration_ms" => 12_400
+        })
+
+      for conv <- [private, dm] do
+        {env, _, _} = note!(w.a.user.id, w.og, "en:private words")
+        assert {_, :skip} = receive_note(conv, w.a.user, env)
+        m = %{message_id: TimeUUID.generate(), sender_id: w.a.user.id, plaintext: pt}
+        assert :ok = RisiMe.Agent.Memory.put_message(conv, m)
+        assert :ok = Secretary.on_message(conv, m)
+        assert memory_rows(conv) == []
+        assert all_enqueued(worker: Job) |> Enum.filter(&(&1.args["conv"] == conv)) == []
+      end
+
+      refute_received {:fake_speech, _, _}
+
+      # The Risi chat: the note is a request (§37.8), never memory or the Ledger.
+      rc = RisiMe.RisiHelpers.own_risi_chat!(w.a.user)
+      intervals!(rc, [w.a.user.id])
+      rid = Ecto.UUID.generate()
+      {env, _, _} = note!(w.a.user.id, rc, "en:what is on tomorrow", %{"request_id" => rid})
+      {_, s} = receive_note(rc, w.a.user, env)
+      _ = await_post(rc, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert memory_rows(rc) == []
+      assert jobs("extract", rc) == [] and jobs("discussion_quiet", rc) == []
+    end
+  end
+
+  describe "PART 9: canary switches (RISI_VOICE_TRANSCRIBE, RISI_ACTION_ITEMS)" do
+    test "canary transcribes only RISI_DEV_USERS' notes; /auth/config says off", w do
+      Application.put_env(:risime, :risi_test_pid, self())
+      Application.put_env(:risime, :risi_voice_transcribe, :canary)
+      Application.put_env(:risime, :risi_dev_users, [String.downcase(w.a.user.id)])
+
+      assert Voice.mode() == :canary
+      refute Voice.enabled?()
+      assert Voice.enabled_for?(w.a.user.id) and not Voice.enabled_for?(w.b.user.id)
+
+      {env, _, _} = note!(w.b.user.id, w.og, "en:from kamal")
+      assert {_, :skip} = receive_note(w.og, w.b.user, env)
+      {env, _, _} = note!(w.a.user.id, w.og, "en:from harsha")
+      assert {_, {:started, _} = s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert_received {:fake_speech, :transcribe, "en:from harsha"}
+      refute_received {:fake_speech, :transcribe, "en:from kamal"}
+
+      refute Map.has_key?(
+               build_conn() |> get("/api/v1/auth/config") |> json_response(200),
+               "voice_transcribe"
+             )
+
+      # The Risi chat of a non-dev user gets the "can't listen" answer (never silent).
+      rc = RisiMe.RisiHelpers.own_risi_chat!(w.b.user)
+      intervals!(rc, [w.b.user.id])
+      {env, _, _} = note!(w.b.user.id, rc, "en:hi", %{"request_id" => Ecto.UUID.generate()})
+      assert {_, {:replied, _}} = receive_note(rc, w.b.user, env)
+    end
+
+    test "a runtime flag (table or forced) wins over the application env; values validated", w do
+      on_exit(fn -> RisiMe.Agents.Flags.refresh() end)
+      alias RisiMe.Agents.Flags
+
+      Application.put_env(:risime, :risi_agent_flags, %{"RISI_VOICE_TRANSCRIBE" => "off"})
+      assert Voice.mode() == :off
+      {env, _, _} = note!(w.a.user.id, w.og, "en:hello")
+      assert {_, :skip} = receive_note(w.og, w.a.user, env)
+      Application.delete_env(:risime, :risi_agent_flags)
+
+      assert :ok = Flags.put("RISI_VOICE_TRANSCRIBE", "canary")
+      assert :ok = Flags.put("RISI_ACTION_ITEMS", "on")
+      assert {:error, :invalid_flag} = Flags.put("RISI_ACTION_ITEMS", "shadow")
+      assert Voice.mode() == :canary
+      assert RisiMe.Agent.ActionItems.mode() == :on
+
+      assert %{value: "canary", from: "table"} =
+               Enum.find(Flags.all(), &(&1.name == "RISI_VOICE_TRANSCRIBE"))
+
+      :ok = Flags.clear("RISI_VOICE_TRANSCRIBE")
+      :ok = Flags.clear("RISI_ACTION_ITEMS")
+      # Back to the application env (`true` here; the default is off).
+      assert Voice.mode() == :on
+      assert RisiMe.Agent.ActionItems.mode() == :off
+    end
+
+    test "RISI_ACTION_ITEMS=canary: a dev user's voice notes only", w do
+      Application.put_env(:risime, :risi_ledger, true)
+      Application.put_env(:risime, :risi_action_items, "canary")
+      Application.put_env(:risime, :risi_dev_users, [String.downcase(w.a.user.id)])
+      alias RisiMe.Agent.ActionItems
+
+      refute ActionItems.on?() or ActionItems.config_on?()
+      assert ActionItems.on_for?([w.b.user.id, w.a.user.id])
+      refute ActionItems.on_for?([w.b.user.id])
+
+      a = TimeUUID.generate()
+      b = TimeUUID.generate()
+      :ok = ActionItems.voice_transcribed(w.og, a, w.a.user.id, "ok", 12_400)
+      :ok = ActionItems.voice_transcribed(w.og, b, w.b.user.id, "ok", 12_400)
+
+      assert [%{args: %{"message_id" => ^a}}] =
+               all_enqueued(worker: Job, args: %{"kind" => "voice_actions"})
     end
   end
 

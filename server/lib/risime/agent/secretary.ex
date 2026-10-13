@@ -38,10 +38,22 @@ defmodule RisiMe.Agent.Secretary do
     if RisiMe.Agent.official?(conv) do
       case Jason.decode(pt) do
         # v1.25 §25.2: a plain `text` in a Risi chat is never a request and never extracted.
-        {:ok, %{"type" => "text"}} -> unless risi_chat?(conv), do: counted(conv, id)
-        {:ok, %{"type" => "risi_request"} = env} -> request(conv, id, user, env)
-        {:ok, %{"type" => "risi_action"}} -> action(conv, id, user)
-        _ -> :ok
+        {:ok, %{"type" => "text"}} ->
+          unless risi_chat?(conv), do: counted(conv, id)
+
+        # PART 9: a member's transcribed Official voice note counts like a typed message, unless
+        # §38 makes its action items (then its promises come from there, never twice).
+        {:ok, %{"type" => "voice_transcript", "status" => "ok"} = env} ->
+          voice(conv, id, user, env)
+
+        {:ok, %{"type" => "risi_request"} = env} ->
+          request(conv, id, user, env)
+
+        {:ok, %{"type" => "risi_action"}} ->
+          action(conv, id, user)
+
+        _ ->
+          :ok
       end
     else
       :ok
@@ -54,6 +66,14 @@ defmodule RisiMe.Agent.Secretary do
   end
 
   defp risi_chat?(conv), do: RisiMe.Groups.Tabs.risi_chat?(conv)
+
+  defp voice(conv, id, user, env) do
+    unless risi_chat?(conv) or
+             RisiMe.Agent.ActionItems.handles_voice?(conv, user, env["duration_ms"]),
+           do: counted(conv, id)
+
+    :ok
+  end
 
   # v1.27 §27.2: with RISI_LEDGER=on a text is a counted message of the quiet rule (the
   # discussion summary replaces the per-message v1.24 extraction); off, v1.26 behaviour.
@@ -229,18 +249,34 @@ defmodule RisiMe.Agent.Secretary do
 
   @doc """
   The buffered `text` messages of `conv` (oldest first), optionally only from `since` on:
-  `[%{message_id, sender_id, text}]`. Other envelope types (requests, actions, media) are left
-  out.
+  `[%{message_id, sender_id, text}]`. PART 9: a member's transcribed voice note is one of them
+  (its id is the note's, `text` its `ok` transcript, plus `voice: true` and `duration_ms`). Other
+  envelope types (requests, actions, media, unclear notes) are left out.
   """
   def text_messages(conv, since \\ nil, limit \\ 2_000) do
     after_id = if since, do: TimeUUID.at(DateTime.add(since, -1, :millisecond)), else: nil
 
     for row <- Transcript.list(conv, after_id, limit),
-        {:ok, %{"type" => "text", "body" => body}} <- [Jason.decode(row.plaintext)],
-        is_binary(body) and body != "" do
-      %{message_id: row.message_id, sender_id: row.sender_id, text: body}
-    end
+        {:ok, env} <- [Jason.decode(row.plaintext)],
+        m = said(env, row),
+        m != nil,
+        do: m
   end
+
+  defp said(%{"type" => "text", "body" => body}, row) when is_binary(body) and body != "",
+    do: %{message_id: row.message_id, sender_id: row.sender_id, text: body}
+
+  defp said(%{"type" => "voice_transcript", "status" => "ok", "text" => t} = env, row)
+       when is_binary(t) and t != "",
+       do: %{
+         message_id: row.message_id,
+         sender_id: row.sender_id,
+         text: t,
+         voice: true,
+         duration_ms: env["duration_ms"]
+       }
+
+  defp said(_env, _row), do: nil
 
   @doc "Active human members of `conv` with names, in join order: `[%{user_id, name}]`."
   def members(conv) do

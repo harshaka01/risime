@@ -81,12 +81,15 @@ defmodule RisiMe.Agent.Memory do
 
   @doc """
   Stores one decrypted Official message of an active human member (§35.1): a `text` envelope's
-  body, unless the sender opted out. `:ok` (stored or skipped).
+  body, or (PART 9) the `ok` transcript of the member's voice note (Risi's buffered
+  `voice_transcript` working copy, under the note's id), unless the sender opted out. `:ok`
+  (stored or skipped).
   """
   def put_message(conv, %{message_id: id, sender_id: sender, plaintext: pt}) do
     with true <- on?(),
          true <- memory_chat?(conv),
-         {:ok, %{"type" => "text", "body" => body}} when is_binary(body) <- Jason.decode(pt),
+         {:ok, env} <- Jason.decode(pt),
+         body when is_binary(body) <- said(env),
          true <- String.trim(body) != "",
          true <- learning_enabled?(sender, conv),
          {:ok, _} <- store(conv, id, sender, nil, false, at(id), body) do
@@ -100,6 +103,15 @@ defmodule RisiMe.Agent.Memory do
       Logger.warning("Risi memory skipped a message: #{inspect(e.__struct__)}")
       :ok
   end
+
+  # What a member said: a typed `text`, or the transcript of their voice note.
+  defp said(%{"type" => "text", "body" => body}) when is_binary(body), do: body
+
+  defp said(%{"type" => "voice_transcript", "status" => "ok", "text" => text})
+       when is_binary(text),
+       do: text
+
+  defp said(_), do: nil
 
   @doc "Stores Risi's own post in an Official chat (§35.1); never in a Risi chat."
   def put_risi_post(conv, message_id, body, risi) do

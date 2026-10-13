@@ -64,13 +64,40 @@ defmodule RisiMe.Agent.ActionItems do
 
   ## Switch
 
-  @doc "True while `RISI_ACTION_ITEMS=on`."
-  def enabled?, do: Application.get_env(:risime, :risi_action_items, false) == true
+  # PART 9: `RISI_ACTION_ITEMS` = off | canary | on, read at runtime (`RisiMe.Agents.Flags`).
+  @flag "RISI_ACTION_ITEMS"
+
+  @doc "`:off | :canary | :on` (`canary` = on only for `RISI_DEV_USERS`)."
+  def mode, do: RisiMe.Agents.Flags.feature(@flag)
+
+  @doc "True while `RISI_ACTION_ITEMS=on` (for everyone; `canary` is not)."
+  def enabled?, do: mode() == :on
 
   @doc "On: the switch and the Commitment Ledger (§38.1)."
   def on?, do: enabled?() and RisiMe.Risi.ledger_on?()
 
-  @doc "`/auth/config` `risi_action_items` (§38.1): on, and Risi can post."
+  @doc """
+  On for a source whose speakers are `users`: the switch on (or `canary` with a dev user among
+  them) and the Commitment Ledger on.
+  """
+  def on_for?(users),
+    do: RisiMe.Agents.Flags.feature_for(@flag, users) and RisiMe.Risi.ledger_on?()
+
+  @doc """
+  PART 9: true when §38 makes the action items of this Official voice note (an `ok` transcript of
+  `sender`, `duration_ms` long), so the secretary leaves its promises to §38 (no double offer).
+  """
+  def handles_voice?(conv, sender, duration_ms) do
+    on_for?([sender]) and is_integer(duration_ms) and duration_ms >= @voice_min_ms and
+      not RisiMe.Groups.Tabs.risi_chat?(conv) and speaker_ok?(sender, conv)
+  rescue
+    _ -> false
+  end
+
+  @doc """
+  `/auth/config` `risi_action_items` (§38.1): on, and Risi can post. Under `canary` the
+  (unauthenticated) reply says off.
+  """
   def config_on? do
     on?() and Out.ready?()
   rescue
@@ -96,7 +123,7 @@ defmodule RisiMe.Agent.ActionItems do
   allows it.
   """
   def voice_transcribed(conv, note_id, sender, status, duration_ms) do
-    if on?() and status in ["ok", "unclear"] and is_integer(duration_ms) and
+    if on_for?([sender]) and status in ["ok", "unclear"] and is_integer(duration_ms) and
          duration_ms >= @voice_min_ms and not RisiMe.Groups.Tabs.risi_chat?(conv) and
          speaker_ok?(sender, conv) do
       %{"kind" => "voice_actions", "conv" => conv, "message_id" => note_id}
