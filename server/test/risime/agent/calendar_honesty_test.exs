@@ -164,5 +164,31 @@ defmodule RisiMe.Agent.CalendarHonestyTest do
       assert out =~ "Checked: Risi Calendar."
       assert out =~ "Not checked: Phone calendar (sync is off)"
     end
+
+    # Fix 2026-10-13: a §34.1 forced read adds Risi's items; without Risi Calendar the phone's
+    # sync-off sentence still shows (the ui-batch google step, as before nightly.48-srv1).
+    test "with only Risi's items read: the sync-off sentence and the Not checked line" do
+      items = %{
+        "source" => "risi_items",
+        "calendars" => [%{"name" => "Risi's items", "account_type" => "risime", "events" => 0}],
+        "read_ok" => true,
+        "reason" => nil
+      }
+
+      check = ok([], [items, phone([@work], false, "sync_off"), @google_api])
+
+      sentence =
+        "I couldn't read your calendar on this phone (sync is off, so it may be out of date)."
+
+      for answer <- ["", @clear] do
+        out = H.enforce(answer, [check], @tz)
+        assert out =~ sentence
+        assert out =~ "Checked: Risi's items. Not checked: Phone calendar (sync is off)."
+        refute out =~ "clear"
+      end
+
+      assert {_, true} = H.enforce_made(@clear, [check], @tz)
+      assert {_, false} = H.enforce_made("", [check], @tz)
+    end
   end
 end

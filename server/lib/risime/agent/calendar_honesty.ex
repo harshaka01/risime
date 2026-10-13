@@ -174,6 +174,17 @@ defmodule RisiMe.Agent.CalendarHonesty do
       google_read? = Enum.any?(read, &(&1["source"] == "google_api"))
 
       cond do
+        # v1.32 §29.7: only Risi's items read (no Risi Calendar) and the phone's sync is off: the
+        # sync-off sentence, as for a phone-only check (fix 2026-10-13: the §34.1 forced read adds
+        # the risi_items source, which hid it).
+        phone_sync_off_only?(read, missed) ->
+          body =
+            if claims?,
+              do: cant_read(@sync_off_why),
+              else: add_line(answer, cant_read(@sync_off_why))
+
+          {add_line(body, v129_line(read, missed)), claims?}
+
         claims? and busy != [] ->
           {add_line(busy_text(busy, tz, google_read?), v129_line(read, missed)), true}
 
@@ -185,6 +196,11 @@ defmodule RisiMe.Agent.CalendarHonesty do
           {add_line(answer, v129_line(read, missed)), false}
       end
     end
+  end
+
+  defp phone_sync_off_only?(read, missed) do
+    Enum.all?(read, &(&1["source"] == "risi_items")) and
+      Enum.any?(missed, &(&1["source"] == "phone_provider" and &1["reason"] == "sync_off"))
   end
 
   defp unread_text(read, [g | _]) do
