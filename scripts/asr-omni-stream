@@ -4,12 +4,13 @@
 # Waits while a release gate runs or host MemAvailable is under NEED_MB, runs, and resumes (the
 # results file is appended per finished group) until every clip is done. 2026-10-14.
 #   scripts/asr-omni-stream <model alias> <results.jsonl> [stream_eval args, e.g. --sets omni-si]
-#   NEED_MB (default 9000): MemAvailable needed to start (resident part + the 4 GB floor + margin)
+#   NEED_MB (default 11000): MemAvailable needed to start. Measured: a streamed run costs ~5.6 GB
+#   (CUDA ~2.6-2.9 GB + ~2 GB host-side torch/CUDA runtime + staging), plus the 4 GB floor + margin.
 # Audio stays in ~/risime-eval-data; the container has no network.
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 model="$1"; out="$2"; shift 2
-need="${NEED_MB:-9000}"
+need="${NEED_MB:-11000}"
 image="${OMNI_IMAGE:-risime/omniasr:fs2-0.6.0-oa-0.2.0}"
 data="$HOME/risime-eval-data"
 outdir="$(cd "$(dirname "$out")" && pwd)"
