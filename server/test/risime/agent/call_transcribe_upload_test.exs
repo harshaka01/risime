@@ -72,6 +72,21 @@ defmodule RisiMe.Agent.CallTranscribeUploadTest do
       assert ended["reason"] == "ended"
     end
 
+    test "the ended session's row keeps its final posts and speech counts", w do
+      sid = start_on!(w)
+      _ = await_post(w.og, "call_transcribe")
+      say!(w, :a, sid, 0, 0, "en:first line")
+      say!(w, :b, sid, 0, 12, "en:second line")
+      say!(w, :a, sid, 1, 24, "en:third line")
+      tpush!(w, :a, "stop", %{"session_id" => sid, "reason" => "ended"})
+      for _ <- 1..3, do: await_post(w.og, "call_transcript")
+      _ = await_post(w.og, "call_transcribe", &(&1["state"] == "ended"))
+
+      s = eventually(fn -> (s = session!(sid)).posts == 3 && s end)
+      assert s.chunks == 3
+      assert s.speech_ms == 36_000
+    end
+
     test "a chunk with no speech posts nothing", w do
       sid = start_on!(w)
       say!(w, :a, sid, 0, 0, "silence")

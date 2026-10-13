@@ -465,6 +465,23 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     %{st | session: s}
   end
 
+  # The drained session's final counters: `finalize/5` saves the row before the in-flight
+  # chunks and the open turn are done, so `posts` (and the speech of the last chunks) would stay
+  # at their values of that moment. Row only; the clients' session signal has no counters.
+  defp save_counts(%Session{} = s) do
+    Repo.update_all(
+      from(x in Session, where: x.session_id == ^s.session_id),
+      set: [
+        posts: s.posts,
+        chunks: s.chunks,
+        speech_ms: s.speech_ms,
+        updated_at: Clock.usec(DateTime.utc_now())
+      ]
+    )
+  rescue
+    e -> Logger.warning("call transcribe: session counts not saved: #{inspect(e.__struct__)}")
+  end
+
   ## Chunks (§36.4)
 
   defp take_chunk(user, device, m, audio, st) do
@@ -835,7 +852,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
         if idle? do
           {st, rt} = close_turn(st, rt)
-          s = %{s | posts: rt.posts}
+          s = %{s | posts: rt.posts, chunks: rt.chunks, speech_ms: rt.speech_ms}
+          save_counts(s)
           st = %{st | draining: Map.delete(st.draining, sid)}
           enqueue_post(st, {:finish, s, Map.drop(rt, [:parts, :turn])})
         else
