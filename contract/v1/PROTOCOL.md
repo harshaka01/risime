@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.45 (Release 0.3)
+# RisiMe Wire Protocol — v1.46 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -1331,13 +1331,19 @@ leaves were never removed from groups.
 - **While waiting** the chat shows "Setting up encryption on this phone…" and, when the rejoin
   reply has a candidate but none has committed, "Waiting for <name> to open RisiMe" (DM) or
   "Waiting for a group member to open RisiMe" (group). Sends stay pending in the outbox and go out
-  after the Welcome is applied (§10.6.5): never a failed send, never a reset line.
+  after the Welcome is applied (§10.6.5): never a failed send, never a reset line. (v1.46) A **1:1
+  Official** `grp:` (`chat_id` a `dm:`) is worded as the DM: "Waiting for <name> to open RisiMe",
+  never "a group member"; every waiting strip carries **Try again** (§12.12.9).
 - **Automatic reset, the last resort only:**
   - **DM:** the rejoin reply has `candidates: 0` (nobody can ever re-add this device, e.g. both
     users reinstalled), or `exhausted: true` (the peer's devices were asked and couldn't commit).
   - **Group, admin devices only:** `exhausted: true`, or `candidates: 0` for **24 h** after the
     op's `created_at` (members may still update and open the §12.4a gate). Non-admins never reset
     (unchanged); they wait and keep calling `rejoin`.
+  - **(v1.46) Official group (`tab: "official"`, a Risi chat included), admin devices only:**
+    `exhausted: true`, or **`candidates: 0` at once** (no 24 h wait): in Official Risi's device is a
+    candidate whenever it can commit the op (§12.12.9), so `0` means nobody can ever re-add this
+    device.
 - **Manual reset:** an admin may pick "Reset encryption" in group info after a confirmation
   ("Members who haven't opened RisiMe recently may lose messages they haven't received yet.
   Reset?"). The server guard below still applies.
@@ -1345,7 +1351,8 @@ leaves were never removed from groups.
   answers **`409 rejoin_pending`** `{"op_id", "candidates"}` (`error_rejoin_pending.json`) when a
   pending `devices` op adds the **calling device** (whether or not an old leaf of it is still in the
   group) and that op is not exhausted and either has `candidates ≥ 1` or, for a group, was created
-  less than 24 h ago. Checked after the existing `404`/`403`/`400` checks and before
+  less than 24 h ago. (v1.46) Never for an Official group whose op has `candidates: 0` (§12.12.9),
+  as already for a Risi chat (§25.2). Checked after the existing `404`/`403`/`400` checks and before
   `generation_conflict` and the rate limit. A device that isn't waiting to be added (its own leaf
   is fine) is not guarded. This also protects against apps up to v1.20, which reset the only
   admin's groups and DMs after 2 minutes: they get the `409` and are re-added by the op the server
@@ -1444,6 +1451,52 @@ a real run (`dry_run: false`) names. Idempotent. Logs and returns counts only: `
   the stale threshold (`STALE_LEAF_HOURS` lowered on the dev server). A DM whose peer stays
   offline for 10 minutes after the other side reinstalls: no reset; queued messages arrive once
   the peer opens the app.
+
+#### 12.12.9 Official never waits for a human (v1.46)
+Incident 2026-10-13 (`docs/status/incident-2026-10-13-official.md`), decision 088. Official groups only
+(`groups.tab = 'official'`, a Risi chat included). **Private groups, the Private `grp:` of a group chat and
+`dm:` conversations are unchanged: Risi never commits there** (§24.0, §24.5).
+- **Risi re-adds devices.** Risi's device (§24.11) is a committer candidate for a pending `devices` op of an
+  Official group when: Risi's device is in the group, the op is **member-committable** (§12.4a: it adds
+  devices of one active human member who still has a leaf, and removes only devices it re-adds), the
+  §12.4a gate is open, and Risi is available (§24.15). It is the **first** candidate (always online: the
+  agent runs in the server) and is named like any device (§12.4: 60 s, `tried`, strikes and exhaustion of
+  §12.12.4). It commits through the ordinary commit path (`op_id` required, `added`/`removed` exactly the
+  op's, §12.4a server authorisation; the core's §12.4a/§24.1 rules are unchanged: a non-admin, non-agent
+  target, a user with a leaf, a removal only with its re-add). The added device's key package is the one the
+  server holds for that exact device (§12.5, attestation verified by the core, §10.1). Risi never commits an
+  `add`, `remove`, `role` or `rebuild` op, a cleanup op (§12.12.6), a `group_meta` change, or anything in a
+  Private group or DM.
+- **Candidates in Official** (`candidates`, §12.12.2) leave out devices that can never commit: a device whose
+  row is gone, or that wasn't seen for 30 days, unless it is online now (as `added` is pruned, §12.12.5).
+  With Risi counted, `candidates: 0` in Official means nobody can ever re-add the device: the admin device
+  may reset at once (§12.12.3) and the server guard allows it.
+- **Creation hand-over (§24.2).** `POST …/official` on an Official group that is still `creating` and was
+  created **more than 60 s ago** by another user makes the **caller** its creator (`created_by`, under the
+  group lock): the reply is `200` with that group, and the caller builds epoch 0. The previous creator's
+  epoch-0 commit then gets `404 not_found` (the §12.3 rule for non-creators) and its app re-POSTs. A client
+  builds epoch 0 **only when `created_by` is its own user**; otherwise it waits for the Welcome and re-POSTs.
+- **Client watchdog ("Starting Official…").** While a chat's Official isn't readable after `POST …/official`,
+  the app re-kicks it every 20 s (the `POST`, and `rejoin` when the group is `active`). After **60 s** it
+  shows why (offline; "Waiting for <name> to open RisiMe"; or "Official isn't ready on this phone yet.") and
+  **Try again** (an immediate re-kick). It never spins forever. Nothing local is deleted (hard rule 9).
+- **Health agent (server, decision 088).** Every 5 minutes the server finds Official conversations stuck
+  more than 5 minutes (`creating`, a `devices` op adding a live device, a `rebuild` op not done) and repairs
+  what is safe: it names Risi again for a re-add it can commit; it expires a stale `creating` group; and,
+  when no candidate can ever commit, it resets the group (§12.8) with the waiting admin device as the
+  rebuilder. What it can't repair, and any stuck Private group or DM (never touched), is reported to the
+  operators' Risi chats as an `ops_alert` (§32, `state: "alert"`, `check: "conversation_stuck"`; counts and
+  short ids only). Flag `RISI_AGENT_HEALTH` (decision 084).
+- **Wire:** no new fields, events or errors. `PendingOp.committer` may now name Risi's device for an Official
+  `devices` op (only Risi receives that `group_op`); `candidates` may count Risi's device; `created_by` of a
+  `creating` Official may change.
+- **Tests.** Server: Risi is the first candidate only in Official and only for member-committable ops; Risi's
+  commit is accepted with the op and refused without it, for a cleanup op, in a Private group and in a DM; the
+  guard allows an Official reset at `candidates: 0` and still refuses a Private group's within 24 h; the
+  hand-over after 60 s and not before; concurrent `POST …/official` calls give one group; the Health sweep
+  (repairs, alert, score). Android (JVM): the watchdog texts and Try again after 60 s; epoch 0 only when
+  `created_by` is me; the 1:1 Official waiting text; Official resets at `candidates: 0`; Private/DM/group
+  decisions unchanged. Device: `scripts/official-start-test` (`OSTEST OK`).
 
 ## 13. History after a reinstall (v1.10)
 Decision 043. Reviewed by server and android (`proposals/reviews/2026-10-06-history-v1.10-*.md`).
@@ -5554,6 +5607,9 @@ Lazy for 1:1s and migrated chats; immediate for new groups.
   `official_created` (`event_chat_official_created.json`).
   - A `creating` Official group not completed within 10 minutes is deleted (§12.3); the chat goes
     back to `none`.
+  - (v1.46) After 60 s without epoch 0 another member's `POST …/official` takes the creation over
+    (§12.12.9). A client builds epoch 0 only when the group's `created_by` is its own user; otherwise it
+    waits for the Welcome, re-POSTs, and shows the §12.12.9 watchdog.
 - **When it is created (client):**
   - **New 1:1:** opens on Private; Official is created on the first tap of the Official tab.
   - **New group:** `POST /groups` (Private, §12.3), then `POST …/official` straight away once the
@@ -11162,6 +11218,14 @@ under 1.5 % of one core and 5–10 MiB per participant, so **spark2's 31 Mbit/s 
   with video (frames decoded from every remote). `GCTEST OK`.
 
 ## Changelog
+- **v1.46** (2026-10-13, P0 hotfix, decision 088): Official never waits for a human (§12.12.9). Risi's device
+  commits the re-add of an existing member's new device in Official groups (member-committable `devices` ops
+  only; never Private, never DMs); Official candidates leave out devices that can never commit and an Official
+  admin device may reset at `candidates: 0` at once (§12.12.3 client rule and server guard); a `creating`
+  Official not built within 60 s is handed to the next caller of `POST …/official` (§24.2), and a client builds
+  epoch 0 only as `created_by`; the "Starting Official…" watchdog (re-kick, reason and Try again after 60 s);
+  the 1:1 Official waiting text names the other person; the server Health agent (repairs, `ops_alert`
+  `conversation_stuck`). No new fields, events or errors.
 - **v1.45** (2026-10-13): adding people to a call (§40, decision 086). A 1:1 call moves into a new group chat of
   everyone in it (Private or Official as the call) and continues as a §20 call: capability `add_to_call`,
   `features` `add`, the envelope `call_escalate` (`move` / `failed`), make-before-break with one audio switch,
