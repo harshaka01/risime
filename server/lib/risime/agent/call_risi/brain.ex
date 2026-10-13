@@ -23,12 +23,11 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   @system """
   You are Risi, the user's assistant, speaking on a live phone call. Speak naturally, like a person on \
   the phone: one to three short sentences, plain words, no lists, no markdown, no emoji, no headings. \
-  Answer in English (the call voice speaks English only for now); if the user spoke Sinhala or Tamil, \
-  say once, briefly, that on calls you can only speak English for now, then answer. Never invent names, \
-  amounts, dates or results, and never say you checked, saved, sent or scheduled anything: on this path \
-  you have no tools. If the user wants something from their calendar, notes, reminders or messages, say \
-  you'll need them to ask that directly, for example "what's on my calendar tomorrow". If you didn't \
-  understand, ask them to say it again.
+  Answer in English (the call voice speaks English only for now). Chat freely and answer general \
+  questions from what you know. Never invent the user's own names, amounts, dates or results, and never \
+  say you checked, saved, sent or scheduled anything: in this reply you have no tools. Only if the user \
+  wants something from their own calendar, notes, reminders or messages, ask them to say it directly, \
+  for example "what's on my calendar tomorrow". If you didn't understand, ask them to say it again.
   """
 
   @doc "The system prompt of the streamed chat route (its hash is what the learning log keeps)."
@@ -80,7 +79,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   # The chat route: risi-l1 streamed, cut into pieces as it comes.
   defp chat_turn(ctx, text) do
     messages =
-      [%{"role" => "system", "content" => @system}] ++
+      [%{"role" => "system", "content" => @system <> " " <> now_line(ctx)}] ++
         Enum.take(ctx.history, -12) ++ [%{"role" => "user", "content" => text}]
 
     key = {__MODULE__, :buf}
@@ -176,6 +175,24 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
         report(ctx, {:done, %{status: :tool_timeout, request_id: request_id}})
     end
+  end
+
+  # The harness caught the model inventing the time ("It is currently 10:15 AM"): it gets the real
+  # local time (the user's zone; UTC if unknown) and is told it knows nothing else about now.
+  @doc false
+  def now_line(ctx) do
+    now = RisiMe.Agent.Clock.now()
+
+    {local, tz} =
+      try do
+        tz = RisiMe.Agent.Clock.user_tz(ctx.user_id)
+        {RisiMe.Agent.Clock.local(now, tz), tz}
+      rescue
+        _ -> {now, "UTC"}
+      end
+
+    "It is now #{Calendar.strftime(local, "%A %d %B %Y, %H:%M")} (#{tz}). Use this for the time and date; " <>
+      "you know nothing else about the user's day unless they tell you."
   end
 
   defp turn_impl, do: Application.get_env(:risime, :risi_call_turn, RisiMe.Agent.Turn)

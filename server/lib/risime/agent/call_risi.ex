@@ -9,7 +9,7 @@ defmodule RisiMe.Agent.CallRisi do
     5 s; `canary` = `RISI_DEV_USERS`, Harsha first). Default `off`: nothing changes for any call.
   * **Start:** `RisiMe.Calls.Rooms` calls `check/3` before it creates the room and `start/1` after.
   * At most `RISI_CALL_RISI_MAX` (default 2) calls at once, each at most 30 minutes.
-  * The transcript goes to the Risi chat at the end (`call_transcript`); timings go to
+  * The transcript goes to the Risi chat at the end (`risi_call_transcript`); timings go to
     `risi_agent_runs` (agent `voice_call`) and the scoreboard; text and audio are never logged.
   """
   require Logger
@@ -162,7 +162,7 @@ defmodule RisiMe.Agent.CallRisi do
   end
 
   @doc """
-  Posts the call's transcript (`call_transcript`, proposal §41.5) in the Risi chat; nothing for a call
+  Posts the call's transcript (`risi_call_transcript`, proposal §41.5) in the Risi chat; nothing for a call
   without a user line. Runs in its own task (the session may stop at once).
   """
   def post_transcript(args, lines, started_at, reason) do
@@ -185,7 +185,7 @@ defmodule RisiMe.Agent.CallRisi do
 
     risi =
       %{
-        "kind" => "call_transcript",
+        "kind" => "risi_call_transcript",
         "call_id" => args.call_id,
         "started_at" => iso(started_at),
         "ended_at" => iso(ended),

@@ -4,7 +4,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   worker (`RisiMe.Agent.CallRisi.Media`), runs each turn in a `RisiMe.Agent.CallRisi.Brain` task,
   forwards the brain's pieces to the worker to be spoken, handles barge-in (the worker stops the audio
   at once; the session kills the turn), keeps the call's transcript in memory, posts it to the Risi
-  chat when the call ends (`call_transcript`, proposal §41.5), and records one `risi_agent_runs` row
+  chat when the call ends (`risi_call_transcript`, proposal §41.5), and records one `risi_agent_runs` row
   per turn (agent `voice_call`: timings only, never text or audio).
 
   Ends on: the caller leaving, Risi not joining in 10 s or the caller not arriving in 45 s, 30 min,
@@ -45,7 +45,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
           "caller" => args.user_id <> "/",
           "tts_url" => Keyword.get(cfg, :tts_url, "http://127.0.0.1:8230"),
           "tts_key" => Keyword.get(cfg, :tts_key),
-          "eot_ms" => Keyword.get(cfg, :eot_ms, 450),
+          "eot_ms" => Keyword.get(cfg, :eot_ms, 350),
           "barge_ms" => Keyword.get(cfg, :barge_ms, 300)
         })
 

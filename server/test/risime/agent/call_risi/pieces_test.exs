@@ -90,7 +90,7 @@ defmodule RisiMe.Agent.CallRisi.PiecesTest do
       args = %{call_id: "c1", user_id: "u1", conv: "grp:x"}
       {risi, body} = CallRisi.transcript(args, lines, start, ended, :hangup)
 
-      assert risi["kind"] == "call_transcript"
+      assert risi["kind"] == "risi_call_transcript"
       assert risi["call_id"] == "c1"
       assert risi["duration_s"] == 192
       assert risi["reason"] == "hangup"

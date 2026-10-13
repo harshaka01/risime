@@ -210,7 +210,7 @@ defmodule RisiMe.Agent.CallRisi.SessionTest do
     ev(pid, %{"ev" => "caller_left"})
     assert_receive {:media_cmd, %{"cmd" => "leave", "reason" => "hangup"}}
     assert_receive {:posted, "grp:risi-chat", body, risi}
-    assert risi["kind"] == "call_transcript"
+    assert risi["kind"] == "risi_call_transcript"
     assert risi["call_id"] == args.call_id
     assert risi["reason"] == "hangup"
     assert risi["e2ee"] == false
