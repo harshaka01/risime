@@ -194,4 +194,64 @@ class TranscribeConsentTest {
         assertTrue(out.isEmpty())
         assertNull(m.view().prompt)
     }
+
+    // ---- v1.45 §40.9 Official group calls ----
+
+    private val joiner = "3c1d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
+
+    private fun groupMachine(alone: Boolean = false) = TranscribeConsentMachine(me).also {
+        it.setAvailable(true, true)
+        it.onCall(TranscribeCall(callId, peer, true, grp, true, group = true, alone = alone))
+    }
+
+    private fun paused(mineConsent: String = CallTranscribeConsent.ALLOWED) = session(CallTranscribeStates.ON, mine = CallTranscribeConsent.ALLOWED, theirs = CallTranscribeConsent.ALLOWED).copy(
+        state = CallTranscribeStates.PAUSED,
+        participants = listOf(CallTranscribeConsent(me, mineConsent), CallTranscribeConsent(peer, CallTranscribeConsent.ALLOWED), CallTranscribeConsent(joiner, CallTranscribeConsent.PENDING)),
+    )
+
+    @Test
+    fun aJoinerPausesTheGroupSessionTheBarStaysAndNothingIsRecorded() {
+        val m = groupMachine()
+        m.onSession(session(CallTranscribeStates.ON, mine = CallTranscribeConsent.ALLOWED, theirs = CallTranscribeConsent.ALLOWED))
+        assertEquals(false, m.recordTarget()!!.paused)
+        m.onSession(paused())
+        val v = m.view()
+        assertTrue("the bar fails toward showing", v.bar)
+        assertEquals(listOf(joiner), v.pausedFor)
+        assertNull("I allowed already: no prompt for me", v.prompt)
+        assertFalse(v.button)
+        assertEquals("paused keeps the recorder (seq) but records nothing", true, m.recordTarget()!!.paused)
+        // Back on: recording again, the same session.
+        m.onSession(session(CallTranscribeStates.ON, mine = CallTranscribeConsent.ALLOWED, theirs = CallTranscribeConsent.ALLOWED))
+        assertEquals(false, m.recordTarget()!!.paused)
+        assertTrue(m.view().pausedFor.isEmpty())
+    }
+
+    @Test
+    fun theJoinerIsPromptedWhilePausedAndAllowGoesOut() {
+        val m = TranscribeConsentMachine(joiner).also {
+            it.setAvailable(true, true)
+            it.onCall(TranscribeCall(callId, peer, true, grp, true, group = true, alone = false))
+        }
+        m.onSession(paused().copy(participants = listOf(CallTranscribeConsent(me, CallTranscribeConsent.ALLOWED), CallTranscribeConsent(peer, CallTranscribeConsent.ALLOWED), CallTranscribeConsent(joiner, CallTranscribeConsent.PENDING))))
+        assertNotNull(m.view().prompt)
+        assertEquals(CallTranscribeActions.ALLOW, m.allow()!!.action)
+        assertNull("not recorded before my allow lands", m.recordTarget()?.takeIf { !it.paused })
+    }
+
+    @Test
+    fun leavingAGroupCallStopsNothingWhileOthersRemain() {
+        val m = groupMachine(alone = false)
+        m.onSession(session(CallTranscribeStates.ON, mine = CallTranscribeConsent.ALLOWED, theirs = CallTranscribeConsent.ALLOWED))
+        assertTrue(m.onHangUp().isEmpty())
+        val last = groupMachine(alone = true)
+        last.onSession(session(CallTranscribeStates.ON, mine = CallTranscribeConsent.ALLOWED, theirs = CallTranscribeConsent.ALLOWED))
+        assertEquals(CallTranscribeStates.REASON_ENDED, last.onHangUp().single().reason)
+    }
+
+    @Test
+    fun pausedLineNamesWhoIsPending() {
+        assertEquals("Paused until Sunil allows", pausedLine(listOf("Sunil")))
+        assertEquals("Paused until Sunil and Ruwan allow", pausedLine(listOf("Sunil", "Ruwan")))
+    }
 }

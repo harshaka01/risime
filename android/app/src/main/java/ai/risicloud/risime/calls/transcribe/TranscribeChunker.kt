@@ -89,6 +89,23 @@ class TranscribeChunker(
         onChunk(chunk)
     }
 
+    /** v1.45 §40.9 paused: the partial chunk is dropped and zeroed (it may not be sent). */
+    fun dropPartial() {
+        buf.fill(0)
+        fill = 0
+    }
+
+    /**
+     * v1.45 §40.9 back `on` after a pause: the next chunk starts at [offsetMs] after `started_at` (the
+     * `seq` goes on, so the server's "strictly increasing" holds); [fedMs] is the silence filler's clock.
+     */
+    fun resumeAt(offsetMs: Long, fedMs: Long) {
+        dropPartial()
+        baseOffsetMs = (offsetMs - cutSamples * 1000 / rate).coerceAtLeast(0)
+        fedSamples = fedMs.coerceAtLeast(0) * rate / 1000
+        started = true
+    }
+
     /** Stop: the partial chunk is dropped and zeroed (after a final state there is nothing to send). */
     fun clear() {
         buf.fill(0)

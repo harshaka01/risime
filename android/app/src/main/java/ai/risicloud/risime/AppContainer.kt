@@ -254,6 +254,8 @@ class AppContainer(
                 override suspend fun me(): String? = sessionStore.current()?.user?.id
                 override fun available() = callTranscribeSwitch.serverOn.value to callTranscribeSwitch.on.value
                 override fun officialConversationOf(dm: String): String? = ai.risicloud.risime.data.tabs.officialConversationOf(dm, chatTabs.rows.value)
+                // v1.45 §40.9: a group chat's Official conversation (never a 1:1's Official, whose calls are P2P on the dm:).
+                override fun isOfficialGroup(conv: String): Boolean = chatTabs.rows.value?.get(conv)?.official == true && chatTabs.dmChatForCall(conv) == null
                 override suspend fun push(payload: kotlinx.serialization.json.JsonObject) = realtime.callTranscribe(payload)
                 override suspend fun fetch(callId: String) = api.callTranscribe(callId)
                 override suspend fun upload(callId: String, chunk: ai.risicloud.risime.calls.transcribe.EncodedChunk): ai.risicloud.risime.calls.transcribe.UploadResult =

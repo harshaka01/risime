@@ -513,7 +513,7 @@ class GroupCallMachine(
             return locked(c) { finish(it, CallNotice.CANT_CONNECT) }
         }
         val session = try {
-            sfu.connect(SfuConnect(reply.url, reply.token, servers, c.video), listener(c))
+            sfu.connect(SfuConnect(reply.url, reply.token, servers, c.video, prewarmAudio = c.hold == null), listener(c))
         } catch (e: Exception) {
             log("group call ${c.id}: connect failed: ${e.javaClass.simpleName}: ${e.message}")
             return locked(c) { finish(it, CallNotice.CANT_CONNECT) }

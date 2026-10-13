@@ -68,7 +68,7 @@ fun transcribePromptText(name: String, compare: Boolean): String =
  * Shown from the `on` signal until a final state; it fails toward showing.
  */
 @Composable
-fun TranscribeBar(view: TranscribeView, onStop: (discard: Boolean) -> Unit, modifier: Modifier = Modifier) {
+fun TranscribeBar(view: TranscribeView, onStop: (discard: Boolean) -> Unit, modifier: Modifier = Modifier, name: (String) -> String = { "Someone" }) {
     if (!view.bar) return
     var menu by remember { mutableStateOf(false) }
     Surface(color = TranscribeRed, contentColor = Color.White, shape = RoundedCornerShape(12.dp), modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).testTag("transcribe_bar")) {
@@ -77,6 +77,10 @@ fun TranscribeBar(view: TranscribeView, onStop: (discard: Boolean) -> Unit, modi
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }) {
                 Text("Risi transcribing" + if (view.compare) " · comparing models" else "", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                // v1.45 §40.9: a joiner hasn't allowed yet: nothing is recorded or sent meanwhile.
+                if (view.pausedFor.isNotEmpty()) {
+                    Text(pausedLine(view.pausedFor.map(name)), style = MaterialTheme.typography.labelSmall, color = Color.White, modifier = Modifier.testTag("transcribe_paused"))
+                }
                 Text(TRANSCRIBE_HONEST_LINE, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.9f))
             }
             Box {
@@ -89,6 +93,10 @@ fun TranscribeBar(view: TranscribeView, onStop: (discard: Boolean) -> Unit, modi
         }
     }
 }
+
+/** v1.45 §40.9 "Paused until Sunil allows" / "Paused until Sunil and Ruwan allow". */
+fun pausedLine(names: List<String>): String =
+    "Paused until " + ai.risicloud.risime.calls.CallMover.joinNames(names) + if (names.size == 1) " allows" else " allow"
 
 /** [Transcribe] (Official calls only), "Asking <name>…" with Cancel, and the last notice. */
 @Composable

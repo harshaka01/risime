@@ -92,7 +92,18 @@ class LiveKitSfu(
                     simulcastLayers = listOf(CustomVideoPreset(VideoCaptureParameter(320, 180, 15), VideoEncoding(150_000, 15))),
                 ),
             ),
-            LiveKitOverrides(audioOptions = AudioOptions(audioHandler = NoAudioHandler())),
+            LiveKitOverrides(
+                audioOptions = AudioOptions(
+                    audioHandler = NoAudioHandler(),
+                    // v1.45 §40.9: this phone's own microphone for Official group-call transcription (§36.6: the
+                    // capture tap, never a remote track); the tap is empty unless a session records.
+                    javaAudioDeviceModuleCustomizer = { b ->
+                        b.setSamplesReadyCallback { s -> ai.risicloud.risime.calls.transcribe.CallMicTap.onMicrophone(s.data, s.sampleRate, s.channelCount) }
+                    },
+                    // v1.45 §40.3: a held room (the move of a 1:1 call) never opens the microphone before the switch.
+                    disableAudioPrewarming = !p.prewarmAudio,
+                ),
+            ),
         )
         val session = LiveKitSession(room, keyProvider, listener, p.video, debug && fakeCamera())
         try {

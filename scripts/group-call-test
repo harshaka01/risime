@@ -1,0 +1,351 @@
+#!/usr/bin/env bash
+# Group-call device gate (contract v1.45 §40, decision 086): adding people to a call, on spark2 with
+# three redroid containers (native arm64 Android 14), the REAL app, LiveKit and frame E2EE:
+#   scripts/group-call-test [--apk app-debug.apk] [--keep]
+#
+#  1. A throwaway LiveKit (the pilot's image, its own config) on the redroids' Docker bridge:
+#     signalling published on 127.0.0.1:$GCTEST_LK_PORT only (the phones reach it through `adb reverse`),
+#     media UDP on the container's bridge address (never a public address; the live LiveKit and coturn
+#     are not touched). A temp server from THIS checkout on 127.0.0.1:$GCTEST_PORT with that LiveKit.
+#  2. Three phones A, B, C sign in through the real login UI; A–B and A–C are friends (B and C are not:
+#     the group is A's). A's DM with B upgrades to e2ee.
+#  3. Voice: A calls B (1:1, peer to peer), B answers; A taps "Add participant", picks C, confirms. The
+#     call moves into a new group chat (make before break): A and B log the switch, C rings and answers.
+#     Every phone decrypts BOTH others' audio (the debug `calls: group stats <identity> cryptor=OK …
+#     jb_emitted=N` with N rising: frames past the cryptor; redroid's microphone is silent, so audio
+#     energy can't prove sound). A's DM line reads "Voice call · m:ss · continued as a group call".
+#     B leaves: A and C go on decrypting each other. Everyone leaves.
+#  4. Video: the same with a 1:1 video call (camera on, redroid's test pattern), C answers and turns the
+#     camera on: every phone decodes video frames from both others (`video_frames` rising), audio too.
+#     B leaves, A and C go on.
+# Prints "GCTEST PASS|FAIL <step>" lines and "GCTEST OK" at the end (or "GCTEST FAIL <reason>").
+# The APK must be built with -Prisime.addToCall=true (the feature flag, default off until this is green):
+#   (cd android && ./gradlew assembleDebug -Prisime.addToCall=true)
+# Never touches :4000, the pilot's LiveKit (7880) or coturn.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
+PKG=ai.risicloud.risime.debug
+CLS=ai.risicloud.risime
+SUF="${GCTEST_INSTANCE:-}"; PORT="${GCTEST_PORT:-4430}"; LKPORT="${GCTEST_LK_PORT:-17890}"
+APK=""; KEEP=0
+while [ $# -gt 0 ]; do case "$1" in --apk) APK="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown arg $1"; exit 2;; esac; done
+APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
+[ -f "$APK" ] || { echo "GCTEST FAIL no APK at $APK"; exit 2; }
+PATH="$("$REPO/scripts/android-target" adb):$PATH"
+IA="${GCTEST_REDROID_A:--gc1}"; PA="${GCTEST_REDROID_A_PORT:-5760}"
+IB="${GCTEST_REDROID_B:--gc2}"; PB="${GCTEST_REDROID_B_PORT:-5761}"
+IC="${GCTEST_REDROID_C:--gc3}"; PC="${GCTEST_REDROID_C_PORT:-5762}"
+LK="risime-livekit-gctest$SUF"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/risime-gctest.XXXXXX")"
+LOGS="$HOME/risime-logs/gctest$SUF"; mkdir -p "$LOGS"
+export RISIME_DEV_DB="risime_gctest$SUF" RISIME_DEV_KEYSPACE="risime_gctest$SUF" ERL_EPMD_ADDRESS=127.0.0.1
+export MIX_BUILD_PATH="$REPO/server/_build/gctest$SUF" RISIME_CODE_RELOADER=false
+FAILED=0
+pass() { echo "GCTEST PASS $*"; }
+fail() { echo "GCTEST FAIL $*"; FAILED=1; diag; exit 1; }
+diag() {
+  for d in A B C; do
+    local s; s="$(ser $d)"
+    [ -n "$s" ] || continue
+    adb -s "$s" exec-out screencap -p > "$LOGS/$d-screen.png" 2>/dev/null || true
+    adb -s "$s" logcat -d > "$LOGS/$d-logcat.txt" 2>/dev/null || true
+  done
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  docker logs "$LK" > "$LOGS/livekit.log" 2>&1 || true
+  echo "    diagnostics in $LOGS"
+}
+cleanup() {
+  cp "$WORK/server.log" "$LOGS/server.log" 2>/dev/null || true
+  tmux kill-session -t "risime-gctest$SUF" 2>/dev/null || true
+  docker rm -f "$LK" >/dev/null 2>&1 || true
+  if [ "$KEEP" = 0 ]; then
+    for x in "$IA:$PA" "$IB:$PB" "$IC:$PC"; do
+      REDROID_INSTANCE="${x%%:*}" REDROID_PORT="${x##*:}" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
+    done
+  fi
+  rm -rf -- "${WORK:?}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+for p in "$PORT" "$LKPORT"; do ss -ltnH "sport = :$p" | grep -q . && { echo "GCTEST FAIL port $p busy"; exit 1; }; done
+
+# ---------------------------------------------------------------- LiveKit (throwaway, bridge network)
+echo "==> throwaway LiveKit $LK (signalling 127.0.0.1:$LKPORT, media on its bridge address)"
+LIVEKIT_API_KEY="APIgc$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+LIVEKIT_API_SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+TURN_SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '/+=')"
+export LIVEKIT_API_KEY LIVEKIT_API_SECRET TURN_SECRET
+cat > "$WORK/livekit.yaml" <<'YAML'
+# group-call-test only: the pilot's room and media settings, rebound to the container's bridge address.
+port: 7880
+bind_addresses:
+  - 0.0.0.0
+rtc:
+  port_range_start: 42000
+  port_range_end: 42199
+  tcp_port: 0
+  use_external_ip: false
+  enable_loopback_candidate: false
+turn:
+  enabled: false
+key_file: /tmp/livekit/keys.yaml
+room:
+  auto_create: false
+  empty_timeout: 60
+  departure_timeout: 20
+  max_participants: 32
+logging:
+  json: true
+  level: info
+  pion_level: error
+YAML
+chmod 644 "$WORK/livekit.yaml"
+docker rm -f "$LK" >/dev/null 2>&1 || true
+# Published on loopback only (rule 6); UDP stays on the bridge (the redroids are on the same bridge).
+docker run -d --name "$LK" -p "127.0.0.1:$LKPORT:7880" --user 65534:65534 \
+  -e LIVEKIT_API_KEY -e LIVEKIT_API_SECRET -e TURN_SECRET \
+  -v "$WORK/livekit.yaml:/etc/livekit/livekit.yaml:ro" -v "$REPO/infra/livekit/entrypoint.sh:/risime-entrypoint.sh:ro" \
+  --read-only --tmpfs /tmp:size=4m,mode=1777 --cap-drop ALL --security-opt no-new-privileges:true \
+  --ulimit nofile=65536 --entrypoint /risime-entrypoint.sh livekit/livekit-server:v1.13.9 >/dev/null
+for _ in $(seq 1 30); do [ "$(curl -s --max-time 1 "http://127.0.0.1:$LKPORT/" || true)" = OK ] && break; sleep 1; done
+[ "$(curl -s --max-time 2 "http://127.0.0.1:$LKPORT/" || true)" = OK ] || { docker logs "$LK" 2>&1 | tail -5; echo "GCTEST FAIL LiveKit didn't start"; exit 1; }
+docker logs "$LK" 2>&1 | grep -qF "$LIVEKIT_API_SECRET" && { echo "GCTEST FAIL the API secret is in LiveKit's log"; exit 1; }
+LKIP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$LK")"
+echo "    LiveKit up on the bridge at $LKIP (UDP 42000-42199, not published)"
+
+# ---------------------------------------------------------------- server
+cat > "$WORK/fixtures.exs" <<'EXS'
+alias RisiMe.{Accounts, Repo}
+alias RisiMe.Accounts.User
+[mode | _] = System.argv()
+ph = %{"a" => "+94770000981", "b" => "+94770000982", "c" => "+94770000983"}
+u = fn k -> Repo.get_by!(User, phone: ph[k]) end
+case mode do
+  "setup" ->
+    for {k, name} <- [{"a", "ZZ GC A"}, {"b", "ZZ GC B"}, {"c", "ZZ GC C"}] do
+      {:ok, _} = Accounts.allow(%{phone: ph[k], email: "gctest8#{k}@example.com", display_name: name, company: "Risi"})
+    end
+    IO.puts("gctest: setup ok")
+  "friends" ->
+    RisiMe.Social.make_friends!(u.("a").id, u.("b").id)
+    RisiMe.Social.make_friends!(u.("a").id, u.("c").id)
+    IO.puts("gctest: friends ok")
+  "e2ee" ->
+    conv = RisiMe.Messaging.conversation_id(u.("a").id, u.("b").id)
+    IO.puts("gctest: e2ee=#{RisiMe.MLS.group(conv) != nil}")
+  "ids" ->
+    IO.puts("gctest: ids #{u.("a").id} #{u.("b").id} #{u.("c").id}")
+end
+EXS
+fx() { (cd server && $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^gctest:' || true); }
+echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, E2EE on, LiveKit $LKPORT)"
+(cd server && { $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true; } && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
+  || { echo "GCTEST FAIL could not create/migrate the gctest store"; exit 1; }
+(cd server && $M mix risime.attestation.gen "$WORK/attest.jwk" >/dev/null 2>&1) || true
+[ -f "$WORK/attest.jwk" ] || { echo "GCTEST FAIL no attestation key"; exit 1; }
+(cd server && $M mix compile >/dev/null 2>&1) || { echo "GCTEST FAIL server compile"; exit 1; }
+umask 077
+{ echo "LIVEKIT_URL=ws://127.0.0.1:$LKPORT"; echo "LIVEKIT_API_URL=http://127.0.0.1:$LKPORT"
+  echo "LIVEKIT_API_KEY=$LIVEKIT_API_KEY"; echo "LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET"; } > "$WORK/lk.env"
+umask 022
+tmux new -d -s "risime-gctest$SUF" "cd '$REPO/server' && set -a && . '$WORK/lk.env' && set +a && MIX_BUILD_PATH='$MIX_BUILD_PATH' RISIME_CODE_RELOADER=false RISIME_DEV_DB=$RISIME_DEV_DB RISIME_DEV_KEYSPACE=$RISIME_DEV_KEYSPACE ERL_EPMD_ADDRESS=127.0.0.1 \
+  PORT=$PORT DEV_LOCAL_AUTH=true OIDC_ENABLED=false OTP_DEV_LOG=true PHONE_VERIFICATION=off FCM_ENABLED=false LOG_FORMAT=text \
+  ATTESTATION_KEY_FILE='$WORK/attest.jwk' RISIME_AUTH_LOG='$WORK/auth.log' $M mix phx.server > '$WORK/server.log' 2>&1"
+for _ in $(seq 1 120); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 1; done
+curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" || { tail -20 "$WORK/server.log"; echo "GCTEST FAIL server didn't start"; exit 1; }
+[ "$(fx setup)" = "gctest: setup ok" ] || { echo "GCTEST FAIL fixture setup"; exit 1; }
+read -r _ _ UA UB UC <<<"$(fx ids)"
+otp() { grep -a "\[DEV OTP\] $1:" "$WORK/server.log" | tail -1 | grep -oE '[0-9]{6}' | tail -1 || true; }
+
+# ---------------------------------------------------------------- devices
+echo "==> three redroid containers ($IA:$PA, $IB:$PB, $IC:$PC)"
+SA="$(REDROID_INSTANCE="$IA" REDROID_PORT="$PA" "$REPO/scripts/android-target" start)"
+SB="$(REDROID_INSTANCE="$IB" REDROID_PORT="$PB" "$REPO/scripts/android-target" start)"
+SC="$(REDROID_INSTANCE="$IC" REDROID_PORT="$PC" "$REPO/scripts/android-target" start)"
+ser() { case "$1" in A) echo "${SA:-}";; B) echo "${SB:-}";; C) echo "${SC:-}";; esac; }
+DEV=""
+A() { adb -s "$(ser "$DEV")" "$@"; }
+for DEV in A B C; do
+  A uninstall "$PKG" >/dev/null 2>&1 || true
+  A install "$APK" >/dev/null
+  for perm in POST_NOTIFICATIONS RECORD_AUDIO CAMERA; do A shell pm grant "$PKG" "android.permission.$perm" 2>/dev/null || true; done
+  A shell appops set "$PKG" USE_FULL_SCREEN_INTENT allow 2>/dev/null || true
+  A reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
+  A reverse "tcp:$LKPORT" "tcp:$LKPORT" >/dev/null
+  A logcat -c || true
+done
+
+# ---- UI helpers (as scripts/call-device-test)
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui-$DEV.xml" 2>/dev/null || : > "$WORK/ui-$DEV.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui-$DEV.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    [$DEV] timeout waiting for: $1"; return 1; }
+tap() {
+  dump
+  local b; b="$(python3 -I - "$WORK/ui-$DEV.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+for n in ET.parse(sys.argv[1]).iter('node'):
+    if n.get('text') == want or n.get('content-desc') == want or (want.endswith('*') and ((n.get('text') or '').startswith(want[:-1]) or (n.get('content-desc') or '').startswith(want[:-1]))):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+        print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+)"
+  [ -n "$b" ] || { echo "    [$DEV] no UI node: $1"; return 1; }
+  A shell input tap $b
+}
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; A shell input text "$(printf '%s' "$2" | sed 's/ /%s/g')"; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }; true; }
+sign_in() {  # $1 phone, $2 email
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+  wait_for "Server:" 40 || return 1
+  tap "Server:*" || return 1; sleep 1
+  tap "Server URL" || tap "http://*" || tap "https://*" || return 1; sleep 0.5
+  clear_field; A shell input text "http://127.0.0.1:$PORT"; sleep 0.5; hide_keyboard
+  if ! tap "Use this server"; then tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; fi
+  sleep 2
+  wait_for "Phone number" 30 || return 1
+  type_into "Phone number" "$1"; type_into "Work email" "$2"; hide_keyboard; tap "Send code" || return 1
+  wait_for "6-digit code" 30 || return 1
+  local code=""; for _ in $(seq 1 20); do code="$(otp "$1")"; [ -n "$code" ] && break; sleep 1; done
+  [ -n "$code" ] || return 1
+  type_into "6-digit code" "$code"; sleep 1; has "Verify" && tap "Verify" || true
+  wait_for "Add friend" 40 || return 1
+  dismiss_prompts
+}
+on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui-$DEV.xml"; }
+open_chat() {
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1; dismiss_prompts
+  for _ in 1 2 3; do on_list && break; A shell input keyevent KEYCODE_BACK; sleep 1; done
+  wait_for "$1" 40 || return 1; tap "$1"; sleep 2
+}
+answer_intent() {
+  A shell cmd statusbar expand-notifications >/dev/null 2>&1 || true
+  wait_for "Answer" 10 || return 1
+  tap "Answer" || return 1
+  sleep 1
+  A shell cmd statusbar collapse >/dev/null 2>&1 || true
+}
+ringing() { local out; out="$(A shell dumpsys notification --noredact 2>/dev/null || true)"; grep -q "pkg=$PKG .*channel=calls " <<<"$out"; }
+wait_ring() { for _ in $(seq 1 "${1:-30}"); do ringing && return 0; sleep 1; done; return 1; }
+logcat_ok() {
+  local d out
+  for d in A B C; do
+    DEV=$d; out="$(A logcat -d 2>/dev/null || true)"
+    printf '%s\n' "$out" | "$REPO/scripts/logcat-gate" "$1 $d" || fail "$1: $d crashed or touched the database on the main thread"
+  done
+}
+media_ok() { A logcat -d 2>/dev/null | grep -E "call stats: pair=(host|prflx)/(host|prflx) .*dtls=connected srtp=[A-Z_0-9]+" | tail -1 || true; }
+
+# §20 debug evidence: "calls: group stats <identity> cryptor=OK audio_packets=N … jb_emitted=M … video_frames=V WxH" (every 5 s).
+gstat() {  # $1 user id → "<cryptor> <jb_emitted> <video_frames>" of the latest line on $DEV for that user
+  A logcat -d 2>/dev/null | grep -F "calls: group stats $1/" | tail -1 | sed -nE 's/.*cryptor=([A-Z_]+) .* jb_emitted=([0-9]+) video_frames=([0-9]+).*/\1 \2 \3/p'
+}
+# hears <label> <dev> <user…>: on <dev>, every named user's frames decrypt (cryptor OK) and keep coming
+# (jb_emitted rising over two stats lines); with VIDEO=1 their video frames rise too.
+hears() {
+  local label="$1" d="$2"; shift 2
+  DEV="$d"
+  local u s1 s2
+  for u in "$@"; do
+    s1=""; for _ in $(seq 1 30); do s1="$(gstat "$u")"; [ -n "$s1" ] && [ "${s1%% *}" = OK ] && break; sleep 1; done
+    [ "${s1%% *}" = OK ] || fail "$label: $d never decrypts ${u:0:8} (last: ${s1:-no stats line})"
+    sleep 11
+    s2="$(gstat "$u")"
+    read -r _ j1 v1 <<<"$s1"; read -r c2 j2 v2 <<<"$s2"
+    [ "$c2" = OK ] && [ "${j2:-0}" -gt "${j1:-0}" ] || fail "$label: $d's decrypted audio from ${u:0:8} stopped (jb_emitted $j1→${j2:-?}, cryptor ${c2:-?})"
+    if [ "${VIDEO:-0}" = 1 ]; then
+      [ "${v2:-0}" -gt "${v1:-0}" ] || fail "$label: $d decodes no video from ${u:0:8} (video_frames $v1→${v2:-?})"
+    fi
+    if [ "${VIDEO:-0}" = 1 ]; then echo "    [$d] ← ${u:0:8}: cryptor OK, jb_emitted $j1→$j2, video_frames $v1→$v2"; else echo "    [$d] ← ${u:0:8}: cryptor OK, jb_emitted $j1→$j2"; fi
+  done
+}
+
+for DEV in A B C; do
+  case $DEV in A) sign_in "+94770000981" "gctest8a@example.com";; B) sign_in "+94770000982" "gctest8b@example.com";; C) sign_in "+94770000983" "gctest8c@example.com";; esac || fail "sign-in $DEV"
+done
+pass "three phones signed in through the real login UI"
+for DEV in A B C; do A shell run-as "$PKG" touch files/debug_keep_call_controls || fail "$DEV: debug_keep_call_controls"; done
+[ "$(fx friends)" = "gctest: friends ok" ] || fail "fixture: friends"
+for DEV in A B C; do A shell am force-stop "$PKG"; done
+DEV=B; open_chat "ZZ GC A" || fail "B: chat with A not listed"
+DEV=C; open_chat "ZZ GC A" || fail "C: chat with A not listed"
+DEV=A; open_chat "ZZ GC B" || fail "A: chat with B not listed"
+for _ in $(seq 1 60); do [ "$(fx e2ee)" = "gctest: e2ee=true" ] && break; sleep 2; done
+[ "$(fx e2ee)" = "gctest: e2ee=true" ] || fail "the A–B DM never became e2ee"
+pass "A–B DM is e2ee; A–C and A–B are friends, B and C are not"
+
+# ---------------------------------------------------------------- one round: 1:1 → add C → all hear all → B leaves
+round() {  # $1 voice|video
+  local kind="$1" btn="Voice call"; [ "$kind" = video ] && btn="Video call"
+  local V=0; [ "$kind" = video ] && V=1
+  logcat_ok "before $kind"
+  for DEV in A B C; do A logcat -c; A shell cmd notification cancel_all >/dev/null 2>&1 || true; done
+  DEV=C; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 1
+  DEV=A; open_chat "ZZ GC B" || fail "$kind: A can't open the DM"
+  local ok=""; for _ in $(seq 1 20); do tap "$btn" && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || fail "$kind: A has no \"$btn\" button"
+  DEV=B; wait_ring 30 || fail "$kind: B never rang for the 1:1 call"
+  if [ "$kind" = video ]; then
+    open_chat "ZZ GC A" || true
+    tap "Incoming call — tap to answer" || answer_intent || fail "$kind: B can't open the incoming call"
+    wait_for "Answer" 10 && tap "Answer" || fail "$kind: B has no in-screen Answer"
+  else
+    answer_intent || fail "$kind: B has no Answer action"
+  fi
+  local m=""; for _ in $(seq 1 30); do DEV=A; m="$(media_ok)"; [ -n "$m" ] && { DEV=B; [ -n "$(media_ok)" ] && break; }; m=""; sleep 1; done
+  [ -n "$m" ] || fail "$kind: the 1:1 media never connected"
+  pass "$kind: A–B 1:1 call connected peer to peer (${m##*call stats: })"
+  # Add participant (enabled: both devices listed `add`), pick C, Add, confirm.
+  DEV=A; local en=""; for _ in $(seq 1 15); do has 'content-desc="Add participant"' && { en=1; break; }; sleep 1; done
+  [ -n "$en" ] || { dump; grep -o 'content-desc="Add participant[^"]*"' "$WORK/ui-A.xml" | head -2; fail "$kind: A's Add participant is not enabled"; }
+  tap "Add participant" || fail "$kind: A can't tap Add participant"
+  wait_for "ZZ GC C" 10 || fail "$kind: the picker doesn't list C"
+  tap "ZZ GC C" || fail "$kind: can't pick C"; sleep 0.5
+  tap "Add" || fail "$kind: no Add in the picker"
+  wait_for "A group chat with" 10 || fail "$kind: no confirmation"
+  tap "Add" || fail "$kind: no Add in the confirmation"
+  pass "$kind: A added C from the call screen"
+  DEV=C; wait_ring 60 || fail "$kind: C never rang for the group call"
+  if [ "$kind" = video ]; then
+    answer_intent || fail "$kind: C has no Answer action"
+  else
+    answer_intent || fail "$kind: C has no Answer action"
+  fi
+  pass "$kind: C rang and answered"
+  # The switch on A and B (make before break), and the 1:1 line.
+  for d in A B; do
+    DEV=$d; local sw=""; for _ in $(seq 1 30); do A logcat -d 2>/dev/null | grep -qE 'calls: move .*(switched to|followed into)' && { sw=1; break; }; sleep 1; done
+    [ -n "$sw" ] || fail "$kind: $d never switched to the group call"
+  done
+  pass "$kind: A and B switched from the 1:1 call to the room (no drop: P2P closed only after both were in the room)"
+  [ "$V" = 1 ] && { DEV=C; sleep 2; tap "Turn camera on" || tap "Video" || true; }
+  VIDEO=$V hears "$kind 3-way" A "$UB" "$UC"
+  VIDEO=$V hears "$kind 3-way" B "$UA" "$UC"
+  VIDEO=$V hears "$kind 3-way" C "$UA" "$UB"
+  local what="audio"; [ "$V" = 1 ] && what="audio and video"
+  pass "$kind: all three decrypt each other's $what (frame E2EE from the new group's MLS)"
+  logcat_ok "$kind 3-way"
+  # B leaves; A and C go on.
+  DEV=B; tap "End call" || fail "$kind: B can't leave"
+  sleep 6
+  VIDEO=$V hears "$kind after B left" A "$UC"
+  VIDEO=$V hears "$kind after B left" C "$UA"
+  DEV=A; has "End call" || fail "$kind: A's call ended when B left"
+  pass "$kind: B left; A and C go on"
+  DEV=A; tap "End call" || fail "$kind: A can't leave"
+  DEV=C; for _ in $(seq 1 30); do has "End call" || break; sleep 1; done
+  has "End call" && { tap "End call" || true; }
+  sleep 3
+  DEV=A; open_chat "ZZ GC B" || fail "$kind: A can't reopen the DM"
+  local call="Voice call"; [ "$kind" = video ] && call="Video call"
+  wait_for "continued as a group call" 20 || fail "$kind: A's DM has no \"$call · m:ss · continued as a group call\" line"
+  pass "$kind: A's DM line: $(grep -oE "$call · [0-9:]+ · continued as a group call" "$WORK/ui-A.xml" | tail -1)"
+  logcat_ok "$kind end"
+}
+round voice
+round video
+echo "GCTEST OK"

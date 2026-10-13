@@ -6,9 +6,10 @@ import ai.risicloud.risime.net.CallTranscribePush
 import ai.risicloud.risime.net.CallTranscribeSession
 import ai.risicloud.risime.net.CallTranscribeStates
 
-/** The 1:1 call this phone holds, as §36 sees it. */
+/** The call this phone holds, as §36 sees it (v1.45 §40.9: also a group call on an Official `grp:`). */
 data class TranscribeCall(
     val callId: String,
+    /** The 1:1 peer; for a group call its starter. */
     val peer: String,
     /** §36.1: the call's offer said `"tab": "official"` (or this phone placed it from the Official tab). */
     val official: Boolean,
@@ -17,6 +18,10 @@ data class TranscribeCall(
     /** Connected (ACTIVE or RECONNECTING): the only time [Transcribe] shows and audio is recorded. */
     val live: Boolean,
     val muted: Boolean = false,
+    /** v1.45 §40.9 a §20 group call (participants come from the room on the server). */
+    val group: Boolean = false,
+    /** v1.45 §40.9 nobody else is in the room (a group hang-up sends `stop ended` only then). */
+    val alone: Boolean = true,
 )
 
 /** The peer's request on screen: "<name> wants Risi to transcribe this call." */
@@ -35,10 +40,12 @@ data class TranscribeView(
     val bar: Boolean = false,
     val compare: Boolean = false,
     val notice: TranscribeNotice? = null,
+    /** v1.45 §40.9 the session is `paused`: "Paused until <names> allow" (user ids still pending). */
+    val pausedFor: List<String> = emptyList(),
 )
 
-/** What the recorder does now. */
-data class RecordTarget(val sessionId: String, val callId: String, val startedAt: String?, val conversationId: String)
+/** What the recorder does now ([paused]: v1.45 §40.9, record nothing but keep the session's `seq`). */
+data class RecordTarget(val sessionId: String, val callId: String, val startedAt: String?, val conversationId: String, val paused: Boolean = false)
 
 /**
  * §36.2/§36.6 the phone's side of the consent state machine. Pure; every input returns the pushes to send.
@@ -99,6 +106,8 @@ class TranscribeConsentMachine(private val me: String) {
     private fun hangUpPush(c: TranscribeCall): CallTranscribePush? {
         val s = session ?: return null
         if (!c.official || s.callId != c.callId || s.final || s.sessionId in finals) return null
+        // v1.45 §40.9: leaving a group call stops nothing while others are still in it.
+        if (c.group && !c.alone) return null
         val conv = c.officialConversation ?: s.conversationId
         return CallTranscribePush.stop(c.callId, conv, s.sessionId, CallTranscribeStates.REASON_ENDED, discard = false)
     }
@@ -137,6 +146,8 @@ class TranscribeConsentMachine(private val me: String) {
                 barSession = s.sessionId
                 notice = null
             }
+            // v1.45 §40.9: a joiner paused it: the bar stays (fails toward showing).
+            s.state == CallTranscribeStates.PAUSED -> if (barSession == null) barSession = s.sessionId
             s.final -> {
                 finals += s.sessionId
                 if (barSession == s.sessionId || barSession == null) barSession = null
@@ -187,7 +198,7 @@ class TranscribeConsentMachine(private val me: String) {
     private inline fun promptPush(make: (TranscribeCall, CallTranscribeSession) -> CallTranscribePush): CallTranscribePush? {
         val c = call ?: return null
         val s = session ?: return null
-        if (!c.official || s.state != CallTranscribeStates.REQUESTED || s.consentOf(me) != CallTranscribeConsent.PENDING) return null
+        if (!c.official || (s.state != CallTranscribeStates.REQUESTED && s.state != CallTranscribeStates.PAUSED) || s.consentOf(me) != CallTranscribeConsent.PENDING) return null
         return make(c, s)
     }
 
@@ -207,10 +218,11 @@ class TranscribeConsentMachine(private val me: String) {
         val c = call ?: return TranscribeView()
         if (!c.official) return TranscribeView() // §36.0: a Private call shows nothing at all
         val s = session
-        val live = s != null && !s.final && s.sessionId !in finals && (s.state == CallTranscribeStates.REQUESTED || s.state == CallTranscribeStates.ON)
+        val live = s != null && !s.final && s.sessionId !in finals && (s.state == CallTranscribeStates.REQUESTED || s.state == CallTranscribeStates.ON || s.state == CallTranscribeStates.PAUSED)
         val button = switchOn && capable && c.live && c.officialConversation != null && !live && !requesting && barSession == null
         val asking = (requesting && s?.state != CallTranscribeStates.ON) || (s != null && live && s.state == CallTranscribeStates.REQUESTED && meIs(s.requestedBy))
-        val prompt = s?.takeIf { live && it.state == CallTranscribeStates.REQUESTED && !meIs(it.requestedBy) && it.consentOf(me) == CallTranscribeConsent.PENDING }
+        // v1.45 §40.9: a joiner of a group call is asked while the session is `paused` (or still `requested`).
+        val prompt = s?.takeIf { live && (it.state == CallTranscribeStates.REQUESTED || it.state == CallTranscribeStates.PAUSED) && !meIs(it.requestedBy) && it.consentOf(me) == CallTranscribeConsent.PENDING }
             ?.let { TranscribePrompt(it.sessionId, it.requestedBy ?: c.peer, it.compare, it.expiresAt) }
         return TranscribeView(
             button = button,
@@ -219,6 +231,7 @@ class TranscribeConsentMachine(private val me: String) {
             bar = barSession != null,
             compare = s?.compare == true,
             notice = notice,
+            pausedFor = s?.takeIf { live && it.state == CallTranscribeStates.PAUSED }?.participants?.filter { it.consent == CallTranscribeConsent.PENDING }?.map { it.userId }.orEmpty(),
         )
     }
 
@@ -227,7 +240,10 @@ class TranscribeConsentMachine(private val me: String) {
         val c = call ?: return null
         val s = session ?: return null
         if (!c.official || !c.live) return null
-        if (s.state != CallTranscribeStates.ON || s.sessionId in finals || barSession != s.sessionId) return null
+        if (s.sessionId in finals || barSession != s.sessionId) return null
+        // v1.45 §40.9: `paused` keeps the recorder (its `seq` goes on) but records and sends nothing.
+        if (s.state == CallTranscribeStates.PAUSED) return RecordTarget(s.sessionId, c.callId, s.startedAt, s.conversationId, paused = true)
+        if (s.state != CallTranscribeStates.ON) return null
         return RecordTarget(s.sessionId, c.callId, s.startedAt, s.conversationId)
     }
 

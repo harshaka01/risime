@@ -27,7 +27,11 @@ class GroupCallUiTest {
         assertEquals(listOf<Int>(), gridRows(0))
         assertEquals(listOf(1), gridRows(1))
         assertEquals(listOf(1, 1), gridRows(2))
-        assertEquals(listOf(2, 1), gridRows(3))
+        assertEquals(listOf(1, 2), gridRows(3)) // v1.45 §40.7: the active speaker large on top
+        assertEquals(listOf(1, 2, 2), gridRows(5))
+        val ms = listOf(GroupMember("me/1", "me", local = true, member = true), GroupMember("b/1", "b", false, true), GroupMember("c/1", "c", false, true, speaking = true, verified = true), GroupMember("x/1", "x", false, false))
+        assertEquals(listOf("c/1", "me/1", "b/1"), tileOrder(ms, null).map { it.identity })
+        assertEquals(listOf("b/1", "me/1"), tileOrder(ms.map { it.copy(speaking = false) }.filter { it.userId != "c" }, "b/1").map { it.identity })
         assertEquals(listOf(2, 2, 2, 2), gridRows(8))
         assertEquals(listOf(2, 2, 2, 2), gridRows(12)) // §20.9 cap
     }

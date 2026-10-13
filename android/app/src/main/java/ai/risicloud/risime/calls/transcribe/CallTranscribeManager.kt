@@ -36,6 +36,9 @@ interface TranscribePort {
     /** The chat's Official `grp:` for a 1:1 call's `dm:` (null: none on this phone). */
     fun officialConversationOf(dm: String): String?
 
+    /** v1.45 §40.9: [conv] is a group chat's Official conversation on this phone (from MLS-backed tab state). */
+    fun isOfficialGroup(conv: String): Boolean = false
+
     suspend fun push(payload: JsonObject): PushResult<JsonObject>
     suspend fun fetch(callId: String): ApiResult<CallTranscribeReply>
     suspend fun upload(callId: String, chunk: EncodedChunk): UploadResult
@@ -87,8 +90,14 @@ class CallTranscribeManager(
     }
 
     private fun toCall(s: CallSnapshot): TranscribeCall? {
-        if (s.group || s.phase == CallPhase.ENDED) return null
+        if (s.phase == CallPhase.ENDED) return null
         val live = s.phase == CallPhase.ACTIVE || s.phase == CallPhase.RECONNECTING
+        if (s.group) {
+            // v1.45 §40.9: a §20 call on an Official grp: (a Private group's call never has a code path).
+            val official = runCatching { port.isOfficialGroup(s.conversationId) }.getOrDefault(false)
+            val alone = s.members.none { !it.local }
+            return TranscribeCall(s.callId, s.peerUserId, official, if (official) s.conversationId else null, live, s.muted, group = true, alone = alone)
+        }
         return TranscribeCall(s.callId, s.peerUserId, s.official, if (s.official) port.officialConversationOf(s.conversationId) else null, live, s.muted)
     }
 
@@ -203,6 +212,8 @@ class CallTranscribeManager(
             }
             target != null && rec == null -> startRecorder(target)
         }
+        // v1.45 §40.9: paused records nothing; back `on`, the next chunk starts at the right offset.
+        recorder?.setPaused(target?.paused == true)
         recorder?.muted = m?.call?.muted == true
         scheduleExpiry(m)
     }
@@ -250,6 +261,7 @@ class CallTranscribeManager(
     /** One session's recording: tap → chunker → encoder → uploader. */
     private inner class Recorder(val target: RecordTarget, baseOffsetMs: Long) {
         @Volatile var muted = false
+        @Volatile private var paused = false
         private val lock = Any()
         private val startedLocal = nowMs()
         private val baseFed = baseOffsetMs
@@ -266,10 +278,21 @@ class CallTranscribeManager(
             chunker.start(baseFed)
         }
 
+        /** v1.45 §40.9: while paused nothing is recorded or sent; on resume the partial chunk is dropped and offsets jump to now. */
+        fun setPaused(p: Boolean) {
+            synchronized(lock) {
+                if (p == paused) return
+                paused = p
+                if (!p) chunker.resumeAt(baseFed + (nowMs() - startedLocal), nowMs() - startedLocal)
+                else chunker.dropPartial()
+            }
+            log("transcribe: recording ${if (p) "paused" else "resumed"} (session ${target.sessionId})")
+        }
+
         fun start() {
             CallMicTap.sink = CallMicTap.Sink { data, len, rate, ch ->
                 val mono = Pcm.toMono16k(data, len, rate, ch)
-                synchronized(lock) { chunker.feed(mono, mono.size, muted) }
+                synchronized(lock) { if (!paused) chunker.feed(mono, mono.size, muted) }
                 mono.fill(0)
             }
             // The keep-alive: when the microphone delivers nothing (or too little), silence fills the gap.
@@ -277,6 +300,7 @@ class CallTranscribeManager(
                 while (isActive) {
                     delay(1_000)
                     synchronized(lock) {
+                        if (paused) return@synchronized
                         val due = nowMs() - startedLocal
                         val gap = due - chunker.fedMs
                         if (gap > 1_500) chunker.padSilence(gap)

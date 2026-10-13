@@ -154,7 +154,7 @@ class CallActivity : ComponentActivity() {
                 // v1.39 §36: the Official-call transcription (button, prompt, red bar); nothing on a Private call.
                 val tx by transcribe.view.collectAsStateWithLifecycle()
                 var txNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-                val txIds = listOfNotNull(tx.prompt?.requestedBy, tx.notice?.by).toSet()
+                val txIds = (listOfNotNull(tx.prompt?.requestedBy, tx.notice?.by) + tx.pausedFor).toSet()
                 LaunchedEffect(txIds) { txNames = txIds.associateWith { calls.nameOf(it) } }
                 var name by remember { mutableStateOf("") }
                 var tick by remember { mutableLongStateOf(0L) }
@@ -214,8 +214,9 @@ class CallActivity : ComponentActivity() {
                             },
                             local = if (snap.group) null else wm?.let { m -> { mod -> LiveLocalVideo(m, mod) } },
                             allowAutoHide = !keepControls,
-                            statusBar = if (snap.group) null else ({ ai.risicloud.risime.calls.transcribe.TranscribeBar(tx, onStop = transcribe::stop) }),
-                            extraBanners = if (snap.group) null else ({
+                            // v1.45 §40.9: Official group calls too (the manager shows nothing for a Private call).
+                            statusBar = { ai.risicloud.risime.calls.transcribe.TranscribeBar(tx, onStop = transcribe::stop, name = { txNames[it] ?: "Someone" }) },
+                            extraBanners = ({
                                 ai.risicloud.risime.calls.transcribe.TranscribeControls(
                                     tx, title, name = { txNames[it] ?: title },
                                     onTranscribe = transcribe::request,
@@ -223,7 +224,7 @@ class CallActivity : ComponentActivity() {
                                     onNoticeShown = transcribe::dismissNotice,
                                 )
                             }),
-                            overlay = if (snap.group) null else ({
+                            overlay = ({
                                 ai.risicloud.risime.calls.transcribe.TranscribePrompt(
                                     tx, name = { txNames[it] ?: title }, serverNow = { (application as RisiMeApp).container.serverClock.serverNow() },
                                     onAllow = transcribe::allow, onDecline = transcribe::decline,

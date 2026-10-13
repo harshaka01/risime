@@ -35,12 +35,27 @@ import livekit.org.webrtc.RendererCommon
 /** §20.9: at most 8 tiles (the video room's cap). */
 const val MAX_VIDEO_TILES = 8
 
-/** Tiles per row for [n] tiles: one per row up to 2, then two per row (8 tiles = 4 rows of 2). */
+/**
+ * Tiles per row for [n] tiles: one per row up to 2, then two per row (8 tiles = 4 rows of 2); with an
+ * odd count the first row holds one large tile (v1.45 §40.7: the active speaker's).
+ */
 fun gridRows(n: Int): List<Int> {
     val k = n.coerceIn(0, MAX_VIDEO_TILES)
     if (k <= 2) return List(k) { 1 }
     val cols = 2
+    if (k % 2 == 1) return listOf(1) + List((k - 1) / 2) { cols }
     return (0 until k step cols).map { minOf(cols, k - it) }
+}
+
+/**
+ * v1.45 §40.7 the tile order: the active speaker (a member whose frames decrypt, last seen speaking)
+ * first, so it takes the large tile; then the others in the room's order. [lastSpeaker] keeps the
+ * large tile on whoever spoke last while nobody speaks (no flapping).
+ */
+fun tileOrder(members: List<GroupMember>, lastSpeaker: String?): List<GroupMember> {
+    val tiles = members.filter { it.member }
+    val speaker = tiles.firstOrNull { it.speaking && !it.local && it.verified }?.identity ?: lastSpeaker?.takeIf { id -> tiles.any { it.identity == id } }
+    return (tiles.filter { it.identity == speaker } + tiles.filter { it.identity != speaker }).take(MAX_VIDEO_TILES)
 }
 
 /**
@@ -51,7 +66,10 @@ fun gridRows(n: Int): List<Int> {
 @Composable
 fun GroupVideoGrid(session: SfuSession, snap: CallSnapshot, names: Map<String, String>) {
     val room = (session as? LiveKitRoomHolder)?.room() ?: return
-    val tiles = snap.members.filter { it.member }.take(MAX_VIDEO_TILES)
+    var lastSpeaker by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val tiles = tileOrder(snap.members, lastSpeaker)
+    val speakingNow = snap.members.firstOrNull { it.speaking && !it.local && it.verified }?.identity
+    androidx.compose.runtime.SideEffect { if (speakingNow != null && speakingNow != lastSpeaker) lastSpeaker = speakingNow }
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(top = 124.dp, bottom = 296.dp, start = Spacing.xs, end = Spacing.xs), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         var i = 0
         for (cols in gridRows(tiles.size)) {

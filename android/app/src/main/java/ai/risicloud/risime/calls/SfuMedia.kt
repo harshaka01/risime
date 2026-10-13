@@ -21,6 +21,11 @@ data class SfuConnect(
     val token: String,
     val iceServers: List<IceServer>,
     val video: Boolean,
+    /**
+     * v1.45 §40.3: false for a held call (a move): LiveKit must not open the microphone at connect
+     * (its audio prewarming) while the 1:1 call still captures it.
+     */
+    val prewarmAudio: Boolean = true,
 ) {
     override fun toString() = "SfuConnect($url, ${iceServers.size} ICE servers, video=$video)" // never the token
 }
