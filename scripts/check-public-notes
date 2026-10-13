@@ -7,7 +7,9 @@ The file is plain Markdown with exactly these sections:
   ## New       3–8 "- " bullets, everyday words
   ## Fixed     3–8 "- " bullets
   ## Coming soon   (optional) 0–5 bullets, for features that are built but still switched off
-Nothing else is allowed. There are no commit prefixes, file or script names, protocol or contract versions,
+Nothing else is allowed. A release with fewer real user-visible changes (everything else still switched off) may
+title itself "# RisiMe <ver> (small update)": then New needs 1–8 bullets and Fixed 0–8 (may be left out), so the
+notes never invent changes to reach three. There are no commit prefixes, file or script names, protocol or contract versions,
 decision numbers, server settings, IPs, ports, env names or internal tooling words. Exits 1 and prints
 every violation, so the publish is blocked.
 """
@@ -65,6 +67,8 @@ def main(path, min_b=MIN_B):
             sections.setdefault(cur, [])
             continue
         if line.startswith("# "):
+            if re.search(r"\(small update\)\s*$", line):  # fewer real changes: never pad the lists
+                SECTIONS["New"], SECTIONS["Fixed"] = (1, MAX_B), (0, MAX_B)
             continue  # an optional title line
         b = re.match(r"^- (.+)$", line)
         if not b or cur is None:
@@ -80,6 +84,8 @@ def main(path, min_b=MIN_B):
                 errs.append(f"line {n}: {why}: '{hit.group(0)}'")
     for name, (lo, hi) in SECTIONS.items():
         got = len(sections.get(name, []))
+        if name not in sections and lo == 0:
+            continue
         if name != "Coming soon" and name not in sections and lo > 0:
             errs.append(f"missing section '## {name}'")
         elif not lo <= got <= hi:
