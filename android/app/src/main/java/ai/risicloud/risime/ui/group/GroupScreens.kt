@@ -350,11 +350,22 @@ fun GroupChatScreen(
             // Bug D: the Risi chat is one pane; while this phone (re)builds its encryption it says so plainly, never
             // "Setting up encryption on this phone…" (decision 048: no lock is shown until it is encrypted).
             (if (risiChat) e2eeStrip?.let { ai.risicloud.risime.data.tabs.RISI_CHAT_RECONNECTING } else e2eeStrip)?.let { strip ->
-                Text(
-                    strip,
+                androidx.compose.foundation.layout.Row(
                     Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = Spacing.lg, vertical = Spacing.xs),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text(
+                        strip,
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // v1.46 §12.12.3: a waiting strip always offers Try again (never a wait with no way out).
+                    if (e2eeStripHasTryAgain(e2eeStrip)) {
+                        androidx.compose.material3.TextButton(onClick = vm::retryRejoin, modifier = Modifier.testTag("e2ee_try_again")) {
+                            Text(ai.risicloud.risime.ui.tabs.TRY_AGAIN_LABEL)
+                        }
+                    }
+                }
             }
             // PART 4: "What can Risi do?" at the top of an empty Risi chat; a tap fills the composer, never sends.
             if (risiChat && !readOnly && ai.risicloud.risime.data.tabs.RisiTalk.emptyRisiChat(messages)) {

@@ -58,6 +58,13 @@ interface GroupApi {
  * "chat_id": <its own id>, "agents": [risi], "chat_kind": "risi"}` ("" is `null` over the FFI).
  */
 /** §25.2 the server lists [g] as the caller's Risi chat (`chat_kind: "risi"`, Official, `chat_id` = its own id). */
+/** v1.46 §12.12.9: a `creating` Official's epoch 0 is built only by its `created_by` user (null: an older server, as before). */
+fun officialEpoch0Mine(g: Group, myId: String): Boolean = g.createdBy == null || g.createdBy.equals(myId, true)
+
+/** v1.46 §12.12.9: the retry reason and delay while another member builds a `creating` Official. */
+const val CREATOR_BUILDING = "creator_building"
+const val CREATOR_BUILDING_RETRY_MS = 15_000L
+
 fun serverRisiChat(g: Group): Boolean = ai.risicloud.risime.data.tabs.serverSaysRisiChat(g.id, g.tab, g.chatId, g.chatKind)
 
 fun risiChatEpoch0Meta(conversationId: String, group: Group, myId: String): GroupMeta {
@@ -313,6 +320,7 @@ class GroupOpsExecutor(
         val decision = ai.risicloud.risime.data.mls.RejoinRules.group(
             admin, reply.candidates, reply.exhausted, ai.risicloud.risime.data.mls.RejoinRules.epochMs(reply.op?.createdAt), clock(),
             risiChat = serverRisiChat(reply.group),
+            official = reply.group.tab == ai.risicloud.risime.data.db.ChatTabEntity.TAB_OFFICIAL,
         )
         if (decision == ai.risicloud.risime.data.mls.RejoinDecision.WAIT) return OpOutcome.Done
         log("group $conv: nobody can re-add this device (candidates ${reply.candidates}, exhausted ${reply.exhausted}): last-resort reset")
@@ -440,6 +448,11 @@ class GroupOpsExecutor(
         if (group.state != Group.STATE_CREATING) {
             if (mls.group(conv) == null) store.queueLocal(conv, GroupOpType.REJOIN)
             return OpOutcome.Done
+        }
+        // v1.46 §12.12.9: only the creator builds epoch 0; another member's POST takes it over after 60 s.
+        if (!officialEpoch0Mine(group, myId)) {
+            log("official $conv: another member is building epoch 0: waiting, then asking again")
+            return OpOutcome.Retry(CREATOR_BUILDING, CREATOR_BUILDING_RETRY_MS)
         }
         return gate.withCommit(conv, mls) {
             val claimed = when (val r = api.claim((group.members.map { it.userId } + myId).distinct(), conv)) {

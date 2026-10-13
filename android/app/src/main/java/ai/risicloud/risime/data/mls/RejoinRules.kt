@@ -39,12 +39,15 @@ object RejoinRules {
      * [risiChat] (§25.2, P0 2026-10-12): the user's Risi chat, whose only human is this user (its only admin)
      * and whose other member, Risi, never commits: with no candidate nobody can ever re-add this device (a
      * reinstall of the only phone), so it resets at once, as a DM does (the server allows it).
+     *
+     * [official] (v1.46 §12.12.9): an Official group, where Risi's device is a candidate whenever it can commit
+     * the re-add; `candidates: 0` there means nobody can ever re-add this device, so an admin resets at once.
      */
-    fun group(iAmAdmin: Boolean, candidates: Int?, exhausted: Boolean, opCreatedAtMs: Long?, now: Long, risiChat: Boolean = false): RejoinDecision = when {
+    fun group(iAmAdmin: Boolean, candidates: Int?, exhausted: Boolean, opCreatedAtMs: Long?, now: Long, risiChat: Boolean = false, official: Boolean = false): RejoinDecision = when {
         !iAmAdmin -> RejoinDecision.WAIT
         candidates == null -> RejoinDecision.WAIT
         exhausted && candidates >= 1 -> RejoinDecision.RESET
-        risiChat && candidates == 0 -> RejoinDecision.RESET
+        (risiChat || official) && candidates == 0 -> RejoinDecision.RESET
         candidates == 0 && opCreatedAtMs != null && now - opCreatedAtMs >= NO_CANDIDATE_RESET_MS -> RejoinDecision.RESET
         else -> RejoinDecision.WAIT
     }
@@ -62,6 +65,12 @@ object RejoinRules {
 
 /** §12.12.3 DM strip while the peer must open the app to re-add this phone. */
 fun dmWaitingText(name: String) = "$REPAIRING_TEXT Waiting for $name to open RisiMe"
+
+/**
+ * §12.12.3 the waiting strip of a group conversation: v1.46 a 1:1 Official ([oneToOnePeer] = the other
+ * person's name) is worded as the DM, never "a group member".
+ */
+fun groupWaitingText(oneToOnePeer: String?): String = oneToOnePeer?.takeIf { it.isNotBlank() }?.let(::dmWaitingText) ?: GROUP_WAITING_TEXT
 
 /** §12.12.3 group strip while a member must open the app to re-add this phone. */
 const val GROUP_WAITING_TEXT = "$REPAIRING_TEXT Waiting for a group member to open RisiMe"

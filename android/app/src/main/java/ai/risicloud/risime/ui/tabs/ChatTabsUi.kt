@@ -52,6 +52,11 @@ class ChatTabsViewModel(c: AppContainer, meId: String, chatId: String, initial: 
         canToggle = c.db.groups().observe(chatId).map { g ->
             canToggleOfficial(chatId, g?.myRole == ai.risicloud.risime.net.GroupMember.ROLE_ADMIN && g.readOnly.not(), null)
         },
+        kicker = { id -> c.rekickOfficial(id) },
+        online = c.networkOnline,
+        peerName = c.contacts.contacts.map { contacts ->
+            ai.risicloud.risime.net.dmPeer(chatId, meId)?.let { p -> contacts.firstOrNull { it.userId.equals(p, true) }?.displayName }
+        },
     )
 
     /** The chat's name: the peer's for a 1:1 (also its Official, whose name is empty, §24.1), else the Private group's. */
@@ -160,7 +165,13 @@ private fun TabLabel(text: String, unread: Int) {
 
 /** §24.2 the intro card of a chat without an Official conversation: [Start Official] creates it. */
 @Composable
-fun OfficialIntroCard(content: TabContent, onStart: () -> Unit, modifier: Modifier = Modifier) {
+fun OfficialIntroCard(
+    content: TabContent,
+    onStart: () -> Unit,
+    modifier: Modifier = Modifier,
+    starting: OfficialStartingView = OfficialStartingView(null, false),
+    onTryAgain: () -> Unit = {},
+) {
     Box(modifier.fillMaxWidth().padding(Spacing.lg), contentAlignment = Alignment.Center) {
         Surface(tonalElevation = 2.dp, shape = MaterialTheme.shapes.large) {
             Column(Modifier.padding(Spacing.lg), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
@@ -170,9 +181,16 @@ fun OfficialIntroCard(content: TabContent, onStart: () -> Unit, modifier: Modifi
                         content.error?.let { Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center, modifier = Modifier.testTag("official_error")) }
                         Button(onClick = onStart, enabled = !content.busy, modifier = Modifier.testTag("start_official")) { Text(START_OFFICIAL_LABEL) }
                     }
-                    else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        CircularProgressIndicator(Modifier.padding(2.dp))
-                        Text(OFFICIAL_STARTING_TEXT)
+                    else -> {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            CircularProgressIndicator(Modifier.padding(2.dp))
+                            Text(OFFICIAL_STARTING_TEXT, modifier = Modifier.testTag("official_starting"))
+                        }
+                        // v1.46 §12.12.9: after a minute, why and Try again (never a spinner with no way out).
+                        starting.reason?.let { Text(it, textAlign = TextAlign.Center, modifier = Modifier.testTag("official_starting_reason")) }
+                        if (starting.showTryAgain) {
+                            androidx.compose.material3.OutlinedButton(onClick = onTryAgain, modifier = Modifier.testTag("official_try_again")) { Text(TRY_AGAIN_LABEL) }
+                        }
                     }
                 }
             }
@@ -256,7 +274,8 @@ fun TabbedChatContent(
         ) { pad ->
             Column(Modifier.fillMaxSize().padding(pad)) {
                 tabBar()
-                OfficialIntroCard(c, controller::startOfficial, Modifier.weight(1f))
+                val startingView = controller.startingView.collectAsStateWithLifecycle().value
+                OfficialIntroCard(c, controller::startOfficial, Modifier.weight(1f), startingView, controller::tryAgain)
             }
         }
     }

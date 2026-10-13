@@ -5,11 +5,14 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ai.risicloud.risime.data.tabs.ChatTabs
 import ai.risicloud.risime.data.tabs.OfficialState
@@ -31,6 +34,27 @@ const val RISI_LISTENING = "Risi is listening"
 const val OFFICIAL_STARTING_TEXT = "Starting Official…"
 const val PRIVATE_TAB_LABEL = "🔒 Private"
 const val OFFICIAL_TAB_LABEL = "● Official"
+
+/** v1.46 §12.12.9 the "Starting Official…" watchdog. */
+const val OFFICIAL_WATCHDOG_MS = 60_000L
+const val OFFICIAL_REKICK_MS = 20_000L
+const val OFFICIAL_OFFLINE_TEXT = "You're offline. Try again when you're connected."
+const val OFFICIAL_NOT_READY_HERE_TEXT = "Official isn't ready on this phone yet."
+const val TRY_AGAIN_LABEL = "Try again"
+
+/** What "Starting Official…" shows besides the spinner: after [OFFICIAL_WATCHDOG_MS] why, and Try again. */
+data class OfficialStartingView(val reason: String?, val showTryAgain: Boolean)
+
+/**
+ * v1.46 §12.12.9: nothing extra for the first minute; then the reason (offline; in a 1:1 the other person by
+ * [peerName]; otherwise not ready here) and Try again. Never a spinner with no way out.
+ */
+fun officialStartingView(elapsedMs: Long, online: Boolean, peerName: String?): OfficialStartingView = when {
+    elapsedMs < OFFICIAL_WATCHDOG_MS -> OfficialStartingView(null, false)
+    !online -> OfficialStartingView(OFFICIAL_OFFLINE_TEXT, true)
+    !peerName.isNullOrBlank() -> OfficialStartingView("Waiting for $peerName to open RisiMe", true)
+    else -> OfficialStartingView(OFFICIAL_NOT_READY_HERE_TEXT, true)
+}
 
 /** §24.9 the Official banner, shown on the first open of a chat's Official tab. */
 const val OFFICIAL_BANNER_TEXT = "Risi listens in Official and helps with follow-ups."
@@ -100,6 +124,13 @@ class ChatTabsController(
     private val toggler: OfficialToggler? = null,
     /** §24.4 toggle rights: either person in a 1:1, admins in a group. */
     canToggle: Flow<Boolean> = flowOf(chatId.startsWith("dm:")),
+    /** v1.46 §12.12.9 the watchdog's re-kick (POST …/official again, rejoin when active; null: none, tests). */
+    private val kicker: OfficialStarter? = null,
+    /** The network is up (the watchdog's "offline" reason). */
+    online: Flow<Boolean> = flowOf(true),
+    /** A 1:1's other person, by name (null for a group). */
+    peerName: Flow<String?> = flowOf(null),
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val key = chatId.lowercase()
     private val selected = MutableStateFlow(initial)
@@ -140,6 +171,26 @@ class ChatTabsController(
         )
     }.stateIn(scope, SharingStarted.Eagerly, TabBarState(tab.value, true, TabUnread(0, 0), false))
 
+    private val startingSince = MutableStateFlow<Long?>(null)
+    private val now = MutableStateFlow(clock())
+
+    /** v1.46 §12.12.9 the watchdog's line under "Starting Official…" (nothing while not starting). */
+    val startingView: StateFlow<OfficialStartingView> = combine(startingSince, now, online, peerName) { since, t, on, peer ->
+        if (since == null) OfficialStartingView(null, false) else officialStartingView(t - since, on, peer)
+    }.stateIn(scope, SharingStarted.Eagerly, OfficialStartingView(null, false))
+
+    private fun kick() {
+        val k = kicker ?: return
+        scope.launch { runCatching { k.start(chatId) } }
+    }
+
+    /** Try again: re-kick now and give it another minute before the reason shows again. */
+    fun tryAgain() {
+        startingSince.value = clock()
+        now.value = clock()
+        kick()
+    }
+
     private val bannerShown = MutableStateFlow(false)
     private val bannerDismissed = MutableStateFlow(false)
 
@@ -156,6 +207,26 @@ class ChatTabsController(
     }
 
     init {
+        // v1.46 §12.12.9: while Starting, re-kick every 20 s and tick the clock; never spin forever.
+        scope.launch {
+            content.map { it is TabContent.Starting }.distinctUntilChanged().collectLatest { starting ->
+                if (!starting) {
+                    startingSince.value = null
+                    return@collectLatest
+                }
+                startingSince.value = clock()
+                now.value = clock()
+                var lastKick = clock()
+                while (true) {
+                    delay(WATCHDOG_TICK_MS)
+                    now.value = clock()
+                    if (now.value - lastKick >= OFFICIAL_REKICK_MS) {
+                        lastKick = now.value
+                        kick()
+                    }
+                }
+            }
+        }
         scope.launch {
             content.collect { c ->
                 if (c is TabContent.Official && !c.readOnly && key !in tabs.bannerSeen.value) {
@@ -223,5 +294,9 @@ class ChatTabsController(
                 }
             }
         }
+    }
+
+    private companion object {
+        const val WATCHDOG_TICK_MS = 5_000L
     }
 }

@@ -255,6 +255,24 @@ class GroupStore(
         return true
     }
 
+    /**
+     * v1.46 §12.12.9 the "Starting Official…" watchdog: the chat's queued `create_official` op runs now (its
+     * backoff reset), or a new one is queued when none is left (a failed one stays failed). Never deletes anything.
+     */
+    suspend fun kickOfficialCreate(chatId: String, conv: String?) {
+        val mine = ops.queued().filter { op ->
+            op.type == GroupOpType.CREATE_OFFICIAL &&
+                runCatching { ProtocolJson.decodeFromString(OfficialPayload.serializer(), op.payloadJson).chatId }.getOrNull().equals(chatId, true)
+        }
+        if (mine.isEmpty()) {
+            queueLocal(conv, GroupOpType.CREATE_OFFICIAL, ProtocolJson.encodeToString(OfficialPayload.serializer(), OfficialPayload(chatId)))
+            return
+        }
+        val now = clock()
+        mine.forEach { ops.update(it.copy(nextAt = now)) }
+        onOpQueued()
+    }
+
     /** @return true if the event changed anything visible. */
     suspend fun applyEvent(eventId: String, e: GroupEvent, me: String, restoredLocalTs: Long? = null, suppressLine: Boolean = false): Boolean {
         val conv = e.groupId

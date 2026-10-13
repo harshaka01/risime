@@ -871,6 +871,30 @@ class AppContainer(
     }
 
     /**
+     * v1.46 §12.12.9 the "Starting Official…" watchdog's re-kick (every 20 s, and Try again): `POST …/official`
+     * again (a `creating` group stalled for 60 s is handed to this user), then the epoch-0 op runs now while the
+     * group is `creating`, or a rejoin is asked for while it is `active` and this device holds no state for it.
+     */
+    suspend fun rekickOfficial(chatId: String): ApiResult<ai.risicloud.risime.net.Group> {
+        val r = api.createOfficial(chatId, sessionStore.deviceId())
+        if (r is ApiResult.Ok) {
+            val g = r.value.group
+            if (g.state == ai.risicloud.risime.net.Group.STATE_CREATING) {
+                groupStore.kickOfficialCreate(chatId, g.id)
+            } else {
+                val held = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { mlsEngine?.group(g.id) != null }.getOrDefault(true) }
+                if (!held) groupStore.requestRejoin(g.id)
+            }
+            kickGroupOps()
+        }
+        return when (r) {
+            is ApiResult.Ok -> ApiResult.Ok(r.value.group)
+            is ApiResult.Error -> r
+            is ApiResult.NetworkError -> r
+        }
+    }
+
+    /**
      * §24.2 a new group (its Private group is active): `POST …/official` straight away and open on
      * Official; `409 not_ready` (or any refusal) keeps it on Private with the reason shown in the chat.
      */

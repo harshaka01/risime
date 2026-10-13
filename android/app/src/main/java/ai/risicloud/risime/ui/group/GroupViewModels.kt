@@ -327,13 +327,26 @@ fun groupComposer(g: GroupEntity?, @Suppress("UNUSED_PARAMETER") encrypted: Bool
  * a group being created is "Not end-to-end encrypted yet: setting up…"; an active group this phone
  * is being re-added to says "Setting up encryption on this phone…", and names the wait once the
  * rejoin reply has a candidate that hasn't committed (§12.12.3). Never a failure, never a reset.
+ * v1.46: in a 1:1 Official ([oneToOnePeer] = the other person's name) the wait names that person, never
+ * "a group member".
  */
-fun groupE2eeStrip(g: GroupEntity?, encrypted: Boolean?, wait: ai.risicloud.risime.data.groups.RejoinWait?, now: Long): String? = when {
+fun groupE2eeStrip(g: GroupEntity?, encrypted: Boolean?, wait: ai.risicloud.risime.data.groups.RejoinWait?, now: Long, oneToOnePeer: String? = null): String? = when {
     g == null || g.readOnly || encrypted != false -> null
     g.state == GroupEntity.STATE_CREATING -> "${ai.risicloud.risime.data.mls.NOT_E2EE_PREFIX}: setting up end-to-end encryption…"
-    wait?.waitingForOthers(now) == true -> ai.risicloud.risime.data.mls.GROUP_WAITING_TEXT
+    wait?.waitingForOthers(now) == true -> ai.risicloud.risime.data.mls.groupWaitingText(oneToOnePeer)
     else -> ai.risicloud.risime.data.mls.REPAIRING_TEXT
 }
+
+/** v1.46 §12.12.3: the waiting strip (this phone is being re-added) carries Try again. */
+fun e2eeStripHasTryAgain(strip: String?): Boolean = strip?.startsWith(ai.risicloud.risime.data.mls.REPAIRING_TEXT) == true
+
+/**
+ * v1.46: the other person of a 1:1 Official `grp:` ([chatId] a `dm:`), by display name; null for a group chat
+ * or while the name is unknown.
+ */
+fun oneToOneOfficialPeer(chatId: String?, members: List<ai.risicloud.risime.data.db.GroupMemberEntity>, meId: String): String? =
+    if (chatId?.startsWith("dm:", ignoreCase = true) != true) null
+    else members.firstOrNull { !it.userId.equals(meId, true) && it.kind != "agent" && it.current }?.displayName?.takeIf { it.isNotBlank() }
 
 class GroupChatViewModel(private val c: AppContainer, private val meId: String, val conversationId: String) : ViewModel() {
     /** The app container (the §33 picker and file card read it). */
@@ -459,9 +472,19 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
     private val tick = MutableStateFlow(0L)
 
     /** §12.12.3 the waiting strip ([groupE2eeStrip]). */
-    val e2eeStrip: StateFlow<String?> = combine(group, _encrypted, c.groupStore.rejoinWaits, tick) { g, e, w, _ ->
-        groupE2eeStrip(g, e, w[conversationId], System.currentTimeMillis())
+    val e2eeStrip: StateFlow<String?> = combine(combine(group, _encrypted, ::Pair), c.groupStore.rejoinWaits, members, c.chatTabs.rows, tick) { (g, e), w, ms, _, _ ->
+        val peer = oneToOneOfficialPeer(c.chatTabs.chatIdOrNull(conversationId), ms, meId)
+        groupE2eeStrip(g, e, w[conversationId], System.currentTimeMillis(), peer)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** v1.46 §12.12.3 Try again on the waiting strip: ask to be re-added now (a user tap skips the kick floor). */
+    fun retryRejoin() {
+        c.scope.launch {
+            c.groupStore.requestRejoin(conversationId)
+            c.kickGroupOps()
+            tick.value += 1
+        }
+    }
 
     private val typingSender = TypingSender(viewModelScope, System::currentTimeMillis, { typing ->
         c.scope.launch { c.realtime.typing(conversationId, typing) }
