@@ -319,13 +319,17 @@ defmodule RisiMe.Agent.VoiceTest do
       await_done(s)
       assert_received {:speech_opts, [language_hint: ["si", "ta"]]}
 
-      # A sender with only English remembered, in an English chat: no hint.
+      # Nothing typed in si/ta remembered any more, but A's Sinhala note was transcribed in this
+      # chat: the chat's spoken language (the learning log) hints si for B's note too, and A's
+      # own speech tally now says si.
       {env, _, _} = note!(w.b.user.id, w.og, "en:hello")
       RisiMe.Repo.delete_all(RisiMe.Agent.Memory.Message)
       {_, s} = receive_note(w.og, w.b.user, env)
       _ = await_post(w.og, "voice_transcript", fn _ -> true end)
       await_done(s)
-      assert_received {:speech_opts, []}
+      assert_received {:speech_opts, [language_hint: ["si"]]}
+      assert RisiMe.Agent.Lang.speech_lang(w.a.user.id) == "si"
+      assert RisiMe.Agent.Lang.speech_lang(w.b.user.id) == "en"
     end
 
     test "a blob of another conversation, or a changed blob, is never used", w do

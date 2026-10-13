@@ -402,6 +402,7 @@ defmodule RisiMe.Agent.CallTranscribe do
   @doc false
   def finished(%Session{} = s, rt) do
     if not s.compare and rt.chunks > 0, do: log_session(s, rt)
+    if not s.discard, do: note_speech(s, rt)
 
     if not s.discard and s.state in ["ended", "stopped"] and rt.speech_ms > 0 do
       %{
@@ -414,6 +415,19 @@ defmodule RisiMe.Agent.CallTranscribe do
     end
 
     :ok
+  end
+
+  # Decision 071 amendment d: each speaker's languages (codes and ms) feed their next hint,
+  # unless they stopped Risi learning in this chat.
+  defp note_speech(s, rt) do
+    for {user, lang_ms} <- Map.get(rt, :spk_ms, %{}),
+        is_binary(user),
+        RisiMe.Agent.Memory.learning_enabled?(user, s.conversation_id),
+        do: RisiMe.Agent.Lang.note_speech(user, lang_ms)
+
+    :ok
+  rescue
+    e -> Logger.warning("call transcribe: speech languages not noted: #{inspect(e.__struct__)}")
   end
 
   # §36.8: one `transcribe` row per normal session (models, audio seconds per language, chunk

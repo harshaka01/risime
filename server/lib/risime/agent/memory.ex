@@ -382,6 +382,13 @@ defmodule RisiMe.Agent.Memory do
       ids = Enum.map(rows, &elem(&1, 0))
       drop_vectors(ids)
       Repo.delete_all(from m in Message, where: m.id in ^ids)
+
+      # Everything forgotten: the user's spoken-language tally goes too.
+      if conv == :all,
+        do:
+          Repo.delete_all(
+            from l in "risi_speech_langs", where: l.user_id == type(^user, Ecto.UUID)
+          )
     end)
 
     :ok

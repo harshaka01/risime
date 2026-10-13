@@ -238,6 +238,7 @@ defmodule RisiMe.Agent.Voice do
 
     t = classify(result, note)
     log(conv, t, note, latency)
+    note_speech(conv, sender, t, note)
     posted = post(conv, note_id, sender, note, t)
     buffer(conv, note_id, sender, t, mode, request_id, note.duration_ms)
     if mode == :risi_chat, do: risi_chat(conv, note_id, sender, t, request_id)
@@ -561,6 +562,18 @@ defmodule RisiMe.Agent.Voice do
 
   defp typing(sender, rid, conv) do
     RisiMe.Agent.Progress.send(sender, rid, conv, "working")
+  rescue
+    _ -> :ok
+  end
+
+  # Decision 071 amendment d: the note's language (a code and its ms) feeds the sender's next
+  # hint. A romanised Sinhala note still counts; silence or a low-confidence guess doesn't.
+  defp note_speech(conv, sender, t, note) do
+    if t.language in ~w(si ta en) and t.reason not in ["no_speech", "low_confidence"] and
+         is_integer(note.duration_ms) and RisiMe.Agent.Memory.learning_enabled?(sender, conv),
+       do: Lang.note_speech(sender, %{t.language => note.duration_ms})
+
+    :ok
   rescue
     _ -> :ok
   end

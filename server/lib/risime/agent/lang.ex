@@ -130,15 +130,150 @@ defmodule RisiMe.Agent.Lang do
 
   @doc """
   The speech service's `language_hint` (decision 071 amendment d, `WHISPER_HINT_MODE=prior`):
-  the Sinhala/Tamil languages among the `users`' own (`user_lang/1`) and the chat's
-  (`conv_lang/1`), in that order, without duplicates. `[]` when none is known: only si/ta steer
-  the service ("en" changes nothing there), so an all-English call sends no hint.
+  the Sinhala/Tamil languages the server knows for this call or note, in this order, without
+  duplicates:
+
+  1. each of the `users`: the script of their typed Official messages (`user_lang/1`), then the
+     language of their own earlier transcribed speech (`speech_lang/1`: calls and voice notes);
+  2. the Official chat: the script of its remembered messages (`conv_lang/1`), then the speech
+     languages of its earlier transcribed calls and notes (`chat_speech_lang/1`).
+
+  The speech signals matter most: people who type English or Singlish (Latin letters, "en") but
+  speak Sinhala leave no script trace (pilot 2026-10-13: every call participant's typed messages
+  were Latin script, so the hint was always empty). `[]` when none is known: only si/ta steer the
+  service ("en" changes nothing there), so an all-English call sends no hint.
   """
   def speech_hint(users, conv) do
-    (Enum.map(List.wrap(users), &user_lang/1) ++ [conv_lang(conv)])
+    per_user = Enum.flat_map(List.wrap(users), &[user_lang(&1), speech_lang(&1)])
+
+    (per_user ++ [conv_lang(conv), chat_speech_lang(chat_of(conv))])
     |> Enum.filter(&(&1 in ~w(si ta)))
     |> Enum.uniq()
   end
+
+  defp chat_of(conv) when is_binary(conv) do
+    RisiMe.Agent.Secretary.chat_id(conv)
+  rescue
+    _ -> conv
+  end
+
+  defp chat_of(_), do: nil
+
+  # A spoken language counts once it has at least 10 s and 10 % of the transcribed speech: the
+  # speech service rarely labels English speech as Sinhala or Tamil, but often labels Sinhala as
+  # English without a hint, and in `prior` mode a hinted si/ta leaves clear English unchanged.
+  @speech_min_ms 10_000
+  @speech_share 0.1
+  # A user's tally halves past 2 h of speech, so recent calls weigh more.
+  @speech_decay_ms 2 * 3_600_000
+
+  @doc """
+  A user's spoken language: "si" or "ta" when their transcribed call turns and voice notes
+  (`note_speech/2`) hold at least 10 s and 10 % of that language, else "en".
+  """
+  def speech_lang(user) when is_binary(user) do
+    case Ecto.UUID.dump(user) do
+      {:ok, uid} ->
+        %{rows: rows} =
+          RisiMe.Repo.query!(
+            "SELECT language, speech_ms FROM risi_speech_langs WHERE user_id = $1",
+            [uid]
+          )
+
+        rows |> Map.new(fn [l, ms] -> {l, ms} end) |> spoken()
+
+      :error ->
+        "en"
+    end
+  rescue
+    _ -> "en"
+  end
+
+  def speech_lang(_), do: "en"
+
+  @doc """
+  A chat's spoken language: the `audio_s` per language of the learning log's `transcribe` rows
+  (calls and voice notes) of `chat_id`, this month and last, with `speech_lang/1`'s rule.
+  """
+  def chat_speech_lang(chat_id) when is_binary(chat_id) do
+    month = Date.utc_today() |> Date.beginning_of_month()
+
+    [month, Date.add(month, -1)]
+    |> Enum.flat_map(
+      &RisiMe.Agent.LearningLog.list_by_chat(chat_id, Calendar.strftime(&1, "%Y-%m"), 500)
+    )
+    |> Enum.filter(&(&1[:task] == "transcribe"))
+    |> Enum.reduce(%{}, fn row, acc ->
+      Map.merge(acc, audio_ms(row[:meta]), fn _, a, b -> a + b end)
+    end)
+    |> spoken()
+  rescue
+    _ -> "en"
+  end
+
+  def chat_speech_lang(_), do: "en"
+
+  # A call row: `"audio_s" => %{lang => s}`; a voice-note row: `"language"` and `"audio_s" => s`.
+  defp audio_ms(meta) when is_binary(meta) do
+    case Jason.decode(meta) do
+      {:ok, m} -> audio_ms(m)
+      _ -> %{}
+    end
+  end
+
+  defp audio_ms(%{"audio_s" => %{} = by_lang}),
+    do: for({l, s} <- by_lang, is_number(s), into: %{}, do: {l, round(s * 1000)})
+
+  defp audio_ms(%{"audio_s" => s, "language" => l}) when is_number(s) and is_binary(l),
+    do: %{l => round(s * 1000)}
+
+  defp audio_ms(_), do: %{}
+
+  defp spoken(ms) do
+    total = ms |> Map.values() |> Enum.sum()
+    si = Map.get(ms, "si", 0)
+    ta = Map.get(ms, "ta", 0)
+    {lang, top} = if si >= ta, do: {"si", si}, else: {"ta", ta}
+
+    if total > 0 and top >= @speech_min_ms and top / total >= @speech_share,
+      do: lang,
+      else: "en"
+  end
+
+  @doc """
+  Adds `user`'s transcribed speech (`%{lang => ms}`; si/ta/en) to their tally in
+  `risi_speech_langs` (language codes and milliseconds, never text). Best effort: `:ok`.
+  """
+  def note_speech(user, lang_ms) when is_binary(user) and is_map(lang_ms) do
+    with {:ok, uid} <- Ecto.UUID.dump(user) do
+      now = DateTime.utc_now()
+
+      for {l, ms} <- lang_ms, l in ~w(si ta en), is_integer(ms), ms > 0 do
+        RisiMe.Repo.query!(
+          "INSERT INTO risi_speech_langs (user_id, language, speech_ms, updated_at) " <>
+            "VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, language) DO UPDATE SET " <>
+            "speech_ms = risi_speech_langs.speech_ms + EXCLUDED.speech_ms, " <>
+            "updated_at = EXCLUDED.updated_at",
+          [uid, l, ms, now]
+        )
+      end
+
+      RisiMe.Repo.query!(
+        "UPDATE risi_speech_langs SET speech_ms = speech_ms / 2 WHERE user_id = $1 AND " <>
+          "(SELECT sum(speech_ms) FROM risi_speech_langs WHERE user_id = $1) > $2",
+        [uid, @speech_decay_ms]
+      )
+    end
+
+    :ok
+  rescue
+    e ->
+      require Logger
+      Logger.warning("Risi speech languages not noted: #{inspect(e.__struct__)}")
+      :ok
+  end
+
+  def note_speech(_user, _lang_ms), do: :ok
 
   @doc "The language's name for a model prompt."
   def name("si"), do: "Sinhala (සිංහල script)"

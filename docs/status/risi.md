@@ -15,6 +15,22 @@ Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `script
 - App language: `contract/proposals/2026-10-13-app-language-hint.md` (for root/Harsha).
 - Rollback without deploy: `WHISPER_HINT_MODE=off` on the speech service.
 
+**Fix 2026-10-13 (empty hint on the pilot).** Pilot rpc (counts/codes only): every call participant's
+remembered Official messages are Latin script (Harsha 40/40 "en", no Singlish tokens either), his Risi-chat
+requests too, and call transcripts are stored as Risi posts (`from_risi`), so `user_lang`/`conv_lang` were
+always "en" and the hint `[]`. The speech service then labelled most Sinhala speech "en" (learning log: 216 s
+"en" for the 02:51 call). New speech signals in `Lang.speech_hint/2`:
+- `speech_lang/1`: each user's own transcribed speech per language (new table `risi_speech_langs`,
+  migration `20261105100000_risi_speech_langs`: codes + ms, no text), fed per speaker at the end of every
+  non-discarded call session and by every voice note (romanised Sinhala counts; silence and low-confidence
+  don't; learning opt-out respected; halves past 2 h; "Forget everything" deletes it).
+- `chat_speech_lang/1`: the learning log's `transcribe` rows of the chat (this + last month, `audio_s`).
+- si/ta when ≥ 10 s and ≥ 10 % of the speech (prior mode leaves clear English unchanged); English-only → `[]`.
+On today's data this gives `si` for Harsha's chat with fb81 (84 s si of 264 s) and `ta` for the chat with
+62ee (12 s of 96 s), but **still nothing for the 02:51 call's chat**, where the service never detected any
+Sinhala. For a Sinhala speaker who types English/Singlish and whose speech was never once detected as si/ta,
+the only reliable signal is the phone's app language (the proposal above). The tally starts empty on deploy.
+
 ## PART 6 steps 0–2: deep agents (decision 084)
 
 **State:** green on `main` (full server suite, `MIX_TEST_PARTITION=da`). Server-only, fast-lane eligible

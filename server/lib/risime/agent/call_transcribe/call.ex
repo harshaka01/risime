@@ -377,6 +377,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       discard: false,
       models: MapSet.new(),
       lang_ms: %{},
+      spk_ms: %{},
       hint: hint(s),
       chunks: 0,
       speech_ms: 0,
@@ -738,7 +739,15 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       rt
       | speech_ms: rt.speech_ms + meta.duration_ms,
         models: MapSet.put(rt.models, model),
-        lang_ms: Map.update(rt.lang_ms, lang, meta.duration_ms, &(&1 + meta.duration_ms))
+        lang_ms: Map.update(rt.lang_ms, lang, meta.duration_ms, &(&1 + meta.duration_ms)),
+        # Each speaker's languages, for their next calls' hint (`Lang.note_speech/2`).
+        spk_ms:
+          Map.update(
+            Map.get(rt, :spk_ms, %{}),
+            meta.speaker,
+            %{lang => meta.duration_ms},
+            &Map.update(&1, lang, meta.duration_ms, fn ms -> ms + meta.duration_ms end)
+          )
     }
   end
 
