@@ -928,6 +928,28 @@ srv friends; srv send 3
 DEV="$SERIAL"; open_chat "ZZ Upgrade B" || fail "chat with B not listed on the old app"
 for i in 1 2 3; do send_ui "upgrade-test A$i"; done
 sleep 3
+# Old app nightly.5+ (1d0e7c42, decision 048): a 1:1 message with no MLS group here is held ("Waiting for
+# encryption…") and goes in plaintext only on the user's explicit per-message "Send without encryption". B is a
+# device-less fixture user, so this DM never gets a group and A's replies would stay in the outbox forever. The seed
+# means 3 SENT replies, so send each one explicitly, as a user would. (Left held, they are outbox rows, which §22.5
+# keeps out of a backup by design: nightly.6's restore check counted them as "dm|text:7->4".) Every count check
+# below is unchanged.
+if wait_for "Waiting for encryption" 8 >/dev/null; then
+  echo "    the old app holds A's replies (\"Waiting for encryption…\": B has no device); sending each without encryption"
+  wait_for "Tap to send without encryption" 60 || fail "seeding: no \"Send without encryption\" offer on A's held replies after 30 s"
+  # Each message has its own 30-s wait before the offer: a later reply may not offer it yet (retry, bounded).
+  for _ in $(seq 1 30); do
+    has "Waiting for encryption" || break
+    tap "~Tap to send without encryption" >/dev/null || { sleep 3; continue; }
+    wait_for 'text="Send without encryption"' 10 >/dev/null || { A shell input keyevent KEYCODE_BACK; sleep 1; continue; }
+    sleep 1.5  # the sheet slides up: tap where it settled
+    tap "^Send without encryption" || true
+    sleep 3
+  done
+  for _ in $(seq 1 15); do has "Waiting for encryption" || break; sleep 1; done
+  ! has "Waiting for encryption" || fail "seeding: A's replies still wait for encryption after \"Send without encryption\""
+  echo "    A's replies sent without encryption (explicit, per message)"
+fi
 BEFORE="$(visible_msgs || true)"; n_before="$(grep -c . <<<"$BEFORE" || true)"
 echo "    before: $n_before messages visible"
 [ "${n_before:-0}" -ge 6 ] || fail "seeding: expected 6 messages on the old app, saw ${n_before:-0}"
