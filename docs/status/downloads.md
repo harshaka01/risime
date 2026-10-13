@@ -17,6 +17,9 @@ Rule (CLAUDE.md golden rule 10, Harsha 2026-10-10): a download over 2 GB needs H
 | 2026-10-12 17:00–17:04 | `OpenVoiceOS/omnilingual-asr-ctc-1b-onnx` (`model.int8.onnx` + tokens only, not the 3.9 GB fp32) | 1.03 GB | Hugging Face | ≤ 2 GB, allowed (same) | complete |
 
 All 2026-10-12 items: `curl --limit-rate 10M`, one at a time, log in `~/risime-eval-data/dl/downloads-2026-10-12.log`; total ~6.7 GB in 9 separate downloads, each ≤ 2 GB. The > 2 GB candidates were **not** downloaded; they are listed for Harsha's OK in docs/RISI-MODELS.md ("ASR eval 2026-10-12", download list). Also installed: `pyarrow` (pip, ~40 MB) in a throwaway venv in the session scratchpad, to read the parquet.
+| 2026-10-13 02:53– | (1) `TriLinSL/nemotron-3.5-asr-streaming-si-ta-en-210h` `best_model/model.nemo` → ~/risime-eval-models/nemotron-si-ta-en | 2.49 GB | Hugging Face | Harsha 2026-10-13 (items 1, 2, 9); **daytime exception, 50 MB/s cap, approved by Harsha 2026-10-13**. Measured line 2.3–3.9 MB/s (HF, GitHub, Ubuntu samples), so run at 2.5 MB/s (≈ 65–70 % of peak); pauses during release gates | in progress (scripts/dl-approved-2026-10-13; log ~/risime-eval-data/dl/downloads-2026-10-13.log) |
+| 2026-10-13 (queued) | (2) `facebook/omniASR-LLM-1B` `omniASR-LLM-1B.pt` → ~/risime-eval-models/omniASR-LLM-1B | 9.10 GB | Hugging Face | same | queued |
+| 2026-10-13 (queued) | (9) `Qwen/Qwen3-4B-Instruct-2507-FP8` (all files) → ~/risime-models/qwen3-4b-instruct-2507-fp8 | 5.21 GB | Hugging Face | same | queued |
 
 ## Verification of ~/risime-eval-models
 (shard count, sha256 and size of each file against the Hugging Face metadata; filled in by the model-eval run)

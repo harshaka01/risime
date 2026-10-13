@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Harsha-approved (2026-10-13) downloads 1, 2 and 9 (CLAUDE.md rule 10), resumable (curl -C -).
+#   1. TriLinSL/nemotron-3.5-asr-streaming-si-ta-en-210h best_model/model.nemo (2.49 GB)
+#   2. facebook/omniASR-LLM-1B omniASR-LLM-1B.pt (9.10 GB)
+#   9. Qwen/Qwen3-4B-Instruct-2507-FP8 (5.21 GB, all repo files)
+# Default: 10 MB/s, only 16:30–00:30 UTC (22:00–06:00 SLT). DL_DAYTIME=1 is Harsha's one-off daytime exception
+# (2026-10-13 08:16 SLT); DL_RATE sets the curl rate (Harsha capped it at 50 MB/s and ≤ ~70 % of the measured line).
+# Pauses (kills curl, resumes later) while a release gate runs (scripts/nightly-release) or DL_PAUSE_FILE exists.
+# Log: ~/risime-eval-data/dl/downloads-2026-10-13.log.
+set -u
+RATE="${DL_RATE:-10M}"; DAY="${DL_DAYTIME:-0}"; PAUSE_FILE="${DL_PAUSE_FILE:-$HOME/risime-eval-data/dl/PAUSE}"
+L="$HOME/risime-eval-data/dl/downloads-2026-10-13.log"; B="$HOME/risime-eval-models"
+mkdir -p "$(dirname "$L")"
+log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$L"; }
+in_window() { local h; h=$((10#$(date -u +%H%M))); [ "$DAY" = 1 ] || [ "$h" -ge 1630 ] || [ "$h" -lt 30 ]; }
+busy() { pgrep -f '^bash .*scripts/nightly-release' >/dev/null || [ -e "$PAUSE_FILE" ]; }
+get() { # repo file dest
+  mkdir -p "$(dirname "$3")"
+  log "start $1/$2 (rate $RATE)"
+  while :; do
+    in_window || { log "STOP: outside the night window, before $1/$2"; exit 1; }
+    while busy; do sleep 30; done
+    curl -fL --retry 5 --retry-delay 10 -C - --limit-rate "$RATE" -s -o "$3" "https://huggingface.co/$1/resolve/main/$2" &
+    local pid=$! paused=0
+    while kill -0 "$pid" 2>/dev/null; do
+      sleep 10
+      if busy; then kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; paused=1; log "paused $1/$2 (release gate or PAUSE file)"; break; fi
+    done
+    [ "$paused" = 1 ] && continue
+    if wait "$pid"; then log "done $1/$2 $(stat -c %s "$3") bytes"; return 0; fi
+    log "FAIL $1/$2"; return 1
+  done
+}
+get TriLinSL/nemotron-3.5-asr-streaming-si-ta-en-210h best_model/model.nemo "$B/nemotron-si-ta-en/model.nemo"
+get facebook/omniASR-LLM-1B omniASR-LLM-1B.pt "$B/omniASR-LLM-1B/omniASR-LLM-1B.pt"
+for f in $(curl -s https://huggingface.co/api/models/Qwen/Qwen3-4B-Instruct-2507-FP8 \
+  | python3 -c 'import json,sys;[print(s["rfilename"]) for s in json.load(sys.stdin)["siblings"]]'); do
+  get Qwen/Qwen3-4B-Instruct-2507-FP8 "$f" "$HOME/risime-models/qwen3-4b-instruct-2507-fp8/$f"
+done
+log "ALL FINISHED"
