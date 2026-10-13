@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.42 (Release 0.3)
+# RisiMe Wire Protocol — v1.43 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10752,7 +10752,89 @@ risi: {"v": 1, "kind": "action_confirm", "summary_id", "chat_id", "conversation_
   jump for both types, the card updates from `item_update`, the filter chip. Server-only changes ship via the
   Risi fast lane (rule 12); the app parts with the next APK.
 
+### 38.9 Ask, never guess (v1.43)
+Harsha 2026-10-13: "never guess names, amounts or dates; ask instead"; "confirmed items go to My promises and
+the calendar with reminders"; "on a failed language or script check, say 'I couldn't hear this clearly' and
+create NO items". From `contract/proposals/2026-10-13-action-items-gaps.md`. Server parts only while
+`risi_action_items` is `on` (§38.1). **Additive:** one `risi_action` value (`item_claim`), one `ActionItem`
+field (`claim`), one `action_confirm` field (`reminders_skill`), `owner` on `item_update`; v1.42 apps ignore
+the fields, never send `item_claim`, and keep working as before.
+
+**1. Unowned items: Risi asks who** (amends §38.3 "`owner`" and §38.4)
+- On the Official card a `promise`/`task`/`meeting` whose owner can't be resolved keeps `owner: null`,
+  `state: null` and gains **`"claim": true`** (absent = false; only on such items;
+  `envelope_risi_action_items_v143.json`). The card's `body` asks: one such item → ` Who's taking "Book the
+  van"? Tap "It's mine" on the card.`; more → ` 2 items have no owner yet: tap "It's mine" on yours.`
+- **`item_claim`** (`risi_action` in the **claimer's own Risi chat**, `target` = `item_id`, `edit: null`;
+  `envelope_risi_action_item_claim.json`). Accepted from any active human member of the Official conversation
+  with a `risi_ledger` device, while the item is unclaimed and before the extraction + 48 h (the card's post
+  + 48 h). **The first claim wins**; later claims and repeats are ignored.
+- **Effect:** the item becomes the claimer's ledger item in state **`proposed`** (expiring with the
+  extraction, §27.5); the claimer receives an `action_confirm` (§38.4) with that one item; and an
+  `item_update` `{"state": "proposed", "owner": claimer, "by": claimer}` goes to every member (point 4).
+  **Nothing is tracked until the claimer confirms** (§27.5). The claimer's [Not mine] → `declined`, as for
+  any owner (offered to nobody else). Learning log: `action_feedback` `action: "claim"` (§38.7).
+- **Phones:** under an item with `claim: true` whose live owner (the newest `item_update` `owner`) is still
+  null, a button **[It's mine]**, hidden after the card's `server_ts` + 48 h; the item then shows its owner.
+
+**2. Undated items: Risi asks when** (amends §38.4, reuses §28.6)
+- When an action item is confirmed (`item_confirm`, `item_remind`) while it has no `due` or a vague
+  `due_text` (§28.6 `needs_clarification`), Risi posts the §28.6 **`item_clarify`** to the owner (once per
+  item, whatever the Skills switch). [New date] sends `item_edit` with `due`; the §27.6 reminders start
+  from it. No date is ever guessed.
+- `item_remind` with no `due` and no `remind_at`: the item is confirmed, no reminder is set, and
+  `item_clarify` asks for the date.
+- `item_calendar` with no usable time and no `edit`: nothing is created and `item_clarify` asks for the date
+  (the phone normally opens the picker first and sends `edit`).
+
+**3. Calendar for all-day and undated items** (amends §38.4 "`add_calendar` only for …")
+- `add_calendar` is offered for a `meeting`, for an item with **no** `due` (the phone asks with its picker),
+  and for an item whose `due` is not in the past, **timed or all-day**.
+- `item_calendar` on an **all-day** `due` without `edit` creates an **all-day** Risi Calendar event on that
+  date (00:00 to 00:00 the next day in the owner's zone, §29.2). The phone shows "Add "…" to your Risi
+  Calendar on Fri 16 Oct (all day)?" and may send `edit` `{"start", "end", "all_day": true}` (§28.4 shapes).
+
+**4. Every member's Official card follows the items** (amends §38.4 "every participant of the source")
+- For §38 items the `item_update` goes to the Risi chat of **every active human member of the Official
+  conversation** with a `risi_ledger` device, not only the extraction's recipients.
+- **Members who are not recipients of the extraction get the state only:** `text`, `due` and `all_day` are
+  **`null`** (= unchanged: their card keeps what it showed; an owner's edit never leaks), and `body` names no
+  item ("Shenika confirmed an item from the call."). Recipients get the §27.5 `item_update` unchanged.
+- `item_update` gains **`"owner": uuid | null`** (the item's owner after the action;
+  `envelope_risi_item_update_v143.json`). Phones apply `state` and `owner` to the `action_items` item with the
+  same `item_id`, and show **no bubble** for an `item_update` whose `action_items` card is on the phone.
+
+**5. Remind me is always offered** (amends §38.4 "`remind` only when …")
+- `remind` is in the buttons of every `action_confirm` item. It sets the **§27.6 reminder in the owner's
+  Risi chat** (a Risi message with a push), which needs no skill; it **never** changes the §26 Reminders
+  skill and never sets a phone alarm.
+- `action_confirm` gains **`"reminders_skill": "off" | "ask" | "allowed"`** (the owner's §26.2 state when
+  posted; absent = unknown; `envelope_risi_action_confirm_v143.json`). When `"off"`, the phone says under the
+  buttons: "Reminders come here in your Risi chat. Phone reminders (the Reminders skill) stay off." Nothing
+  is turned on silently.
+
+**6. Wording: "I couldn't hear this clearly"** (amends §38.2, §38.3)
+- The `status: "unclear"` card's `body` is, for every `reason`, **"I couldn't hear this clearly."** in the
+  source's language (`lang`): si **"මට මෙය පැහැදිලිව ඇසුණේ නැහැ."**, ta **"இதை என்னால் தெளிவாகக் கேட்க
+  முடியவில்லை."** (`envelope_risi_action_items_unclear_v143.json`). Phones show the same text by the card's
+  `lang` (English for any other). Still no items, no model call.
+
+**Examples (v1.43):** `envelope_risi_action_items_v143.json`, `envelope_risi_action_item_claim.json`,
+`envelope_risi_action_confirm_v143.json`, `envelope_risi_item_update_v143.json`,
+`envelope_risi_action_items_unclear_v143.json`.
+**Gate:** server (`ExamplesV143Test`, action items tests): claim (first wins, members only, before expiry,
+then `action_confirm` + `item_update` to every member), `item_clarify` after an undated confirm, an all-day
+`item_calendar` → one all-day event, the state-only `item_update` for non-recipients, `remind` always offered
+with `reminders_skill`, the unclear wording; android: [It's mine], the live owner, the all-day calendar slot,
+the reminders note, the unclear text in en/si/ta, `PROTOCOL_VERSION` 1.43; device: `scripts/voice-actions-test`.
+
 ## Changelog
+- **v1.43** (2026-10-13): §38.9 ask, never guess. Unowned items carry `claim: true` and any member may send
+  `item_claim` ("It's mine"; first wins; nothing tracked until the claimer confirms); undated items get the §28.6
+  `item_clarify` on confirm; `add_calendar` also for all-day and undated items (all-day events); `item_update`s of
+  §38 items reach every member's Official card (state and `owner` only for non-recipients); `remind` always offered,
+  with `reminders_skill` on `action_confirm`; the unclear card reads "I couldn't hear this clearly" (en/si/ta).
+  An additive change.
 - **v1.42 clarification** (2026-10-12, decision 083): §24.11 — the sender's own app may turn typed `@Risi …` (and `Risi, …` in a 1:1 Official) into a `risi_request`; no wire change, the server still never parses free text.
 - **v1.42** (2026-10-12): Risi voice → action items (§38, decision 082). One extraction (§27.2) for Official
   calls (§36) and Official voice notes: the Official card `action_items` (items with `kind`

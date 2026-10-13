@@ -1,5 +1,14 @@
 # Android status — 0.2 nightlies
 
+## READY v1.43 §38.9 ask, never guess (13 Oct; next APK)
+`PROTOCOL_VERSION` 1.43. `ActionItem.claim`, `RisiActionCard.remindersSkill`, `RisiActions143.ITEM_CLAIM`. Official card:
+the live owner (`RisiActionItems.live`, from any `item_update` `owner`) and **[It's mine]** under an unowned
+promise/task/meeting for 48 h from the card (`canClaim`), sent as `item_claim` in the user's own Risi chat
+(`RisiHost.claimItem`). Owner's card: an all-day due → an all-day calendar slot ("Fri 16 Oct (all day)"); under [Remind me]
+"Reminders come here in your Risi chat. Phone reminders (the Reminders skill) stay off." when `reminders_skill` is off.
+Unclear card: "I couldn't hear this clearly." in the card's `lang` (en/si/ta). Tests: RisiActionItemsTest (claim, live
+owner, all-day slot, reminders note, unclear by language), ContractExamplesTest (every v1.43 example).
+
 ## READY v1.42 §38 Risi voice → action items (13 Oct; next APK; device gate: see below)
 **Wire** (`net/Protocol142.kt`): strict `RisiActionCard` (`action_items` / `action_confirm`: kind, source, status,
 reason, items, `for`, `expires_at`; an item of an unknown kind, an empty text or an `unclear` card's items are dropped,

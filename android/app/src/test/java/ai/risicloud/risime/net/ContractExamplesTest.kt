@@ -527,7 +527,61 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + mapOf(
+    /**
+     * v1.43 §38.9 ask, never guess: the claimable item and [It's mine] (`item_claim`, exactly what this app sends), the
+     * all-day calendar slot and the Reminders note on `action_confirm`, the state-only `item_update` (owner, no text), and
+     * "I couldn't hear this clearly" in the card's language.
+     */
+    private val actionItemsV143: Map<String, (String) -> Any> by lazy {
+        fun obj(s: String) = ProtocolJson.parseToJsonElement(s).jsonObject
+        fun card(s: String) = RisiActionCard.parse(obj(s)["risi"].toString())!!
+        val items = ai.risicloud.risime.data.tabs.RisiActionItems
+        mapOf(
+            "envelope_risi_action_items_v143.json" to { s ->
+                card(s).also { c ->
+                    require(c.kind == RisiKinds142.ACTION_ITEMS && c.items.size == 2)
+                    val t = c.items.single { it.claim }
+                    require(t.kind == RisiKinds142.TASK && t.owner == null && t.state == null && !t.ledger)
+                    require(c.items.single { !it.claim }.ledger)
+                    val posted = java.time.Instant.parse("2026-10-12T12:00:00Z").toEpochMilli()
+                    require(items.canClaim(t, emptyMap(), posted, posted + 1_000, emptySet(), readOnly = false))
+                    require(!items.canClaim(t, emptyMap(), posted, posted + items.CLAIM_WINDOW_MS, emptySet(), readOnly = false))
+                }
+            },
+            "envelope_risi_action_item_claim.json" to { s ->
+                obj(s).also { o ->
+                    require(ai.risicloud.risime.data.tabs.RisiControl.valid(o) && o["action"]!!.jsonPrimitive.content == RisiActions143.ITEM_CLAIM)
+                    require(ai.risicloud.risime.data.tabs.RisiControl.action(o["target"]!!.jsonPrimitive.content, RisiActions143.ITEM_CLAIM) == o)
+                }
+            },
+            "envelope_risi_action_confirm_v143.json" to { s ->
+                card(s).also { c ->
+                    require(c.kind == RisiKinds142.ACTION_CONFIRM && c.remindersSkill == RisiActions143.REMINDERS_OFF)
+                    val i = c.items.single()
+                    require(i.allDay && i.buttons == RisiKinds142.BUTTONS)
+                    val zone = java.time.ZoneId.of("Asia/Colombo")
+                    val slot = items.calendarSlot(i, java.time.Instant.parse("2026-10-12T12:40:00Z").toEpochMilli(), zone)!!
+                    require(slot.allDay && slot.endMs - slot.startMs == 86_400_000L)
+                    require(java.time.Instant.ofEpochMilli(slot.startMs).atZone(zone).toLocalDate() == java.time.LocalDate.of(2026, 10, 16))
+                    require(items.slotLabel(slot, zone) == "Fri 16 Oct (all day)")
+                    require(items.remindersNote(c, i.buttons) == items.REMINDERS_NOTE)
+                }
+            },
+            "envelope_risi_item_update_v143.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { e ->
+                    val r = e.risi!!
+                    require(r.kind == RisiKinds127.ITEM_UPDATE && r.owner != null && r.text == null && r.due == null && r.allDay == null)
+                }
+            },
+            "envelope_risi_action_items_unclear_v143.json" to { s ->
+                card(s).also { c ->
+                    require(c.unclear && c.items.isEmpty() && items.unclearText(c) == ProtocolJson.decodeFromString<RisiTextEnvelope>(s).body)
+                }
+            },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

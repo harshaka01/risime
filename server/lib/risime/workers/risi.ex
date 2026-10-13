@@ -220,7 +220,7 @@ defmodule RisiMe.Workers.Risi do
 
         # v1.27 §27.5: item actions (and done) on ledger items, in the actor's Risi chat.
         a
-        when a in ~w(item_confirm item_decline item_edit item_reopen item_calendar item_remind item_not_mine) ->
+        when a in ~w(item_confirm item_decline item_edit item_reopen item_calendar item_remind item_not_mine item_claim) ->
           LedgerActions.act(conv, user, env)
 
         # v1.41 §37.6: the note's sender deletes Risi's transcript (anyone else: ignored).

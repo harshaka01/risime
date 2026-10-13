@@ -41,6 +41,8 @@
 if [ "${BASH_SOURCE[0]}" != "$0" ] && [ -n "${VATEST_SCENARIO:-}" ]; then
 VASHOTS="$REPO/docs/status/screens"; mkdir -p "$VASHOTS"
 warn() { echo "CALLTEST WARN $*"; }
+# v1.43 §38.9: the unclear card reads "I couldn't hear this clearly." in the source's language (en/si/ta).
+UNCLEAR_RE="I couldn.t hear this clearly|මට මෙය පැහැදිලිව ඇසුණේ නැහැ|இதை என்னால் தெளிவாகக் கேட்க"
 vashot() { A exec-out screencap -p > "$VASHOTS/68-actions-$1.png" 2>/dev/null || true; }
 llm_actions() { grep -c '"name": *"action_items"' "$WORK/llm-requests.jsonl" 2>/dev/null || true; }
 slog_mark() { wc -l < "$WORK/server.log"; }
@@ -310,7 +312,7 @@ end_call
 sleep 20
 for DEV in A B; do
   dm_tab "ZZ Call $([ "$DEV" = A ] && echo B || echo A)" private >/dev/null || true
-  dump; [ "$(count_nodes 'Risi · Action items|^Action item: |couldn.t hear')" = 0 ] || fail "actions: a card in a Private chat on $DEV"
+  dump; [ "$(count_nodes "Risi · Action items|^Action item: |$UNCLEAR_RE")" = 0 ] || fail "actions: a card in a Private chat on $DEV"
 done
 [ "$(llm_actions)" = "$before" ] || fail "actions: the model was asked about a Private note or call"
 tail -n +"$(( mark + 1 ))" "$WORK/server.log" | grep -qE 'transcribe/chunks' && fail "actions: transcription chunks from a Private call"
@@ -414,13 +416,13 @@ pass "actions: Official call → the card on both phones; promise → A's Risi c
 DEV=B; dm_tab "ZZ Call A" official || fail "actions: B back to Official"
 arm si || fail "actions: B's seam didn't take the Sinhala clip"
 official_note_once || true
-before_unclear="$(count_nodes 'couldn.t hear')"
+before_unclear="$(count_nodes "$UNCLEAR_RE")"
 record 8 || fail "actions: B can't record the Sinhala note"
 ok=""; for _ in $(seq 1 120); do
   dump
   # B's own note: the promise is B's ("You"); B's earlier cards name A as its owner.
   [ "$(count_nodes '^Action item: (වාර්තාව|Send the report to Ashen · You)')" -gt 0 ] && { ok=items; break; }
-  [ "$(count_nodes 'couldn.t hear')" -gt "$before_unclear" ] && { ok=unclear; break; }
+  [ "$(count_nodes "$UNCLEAR_RE")" -gt "$before_unclear" ] && { ok=unclear; break; }
   sleep 2
 done
 vashot sinhala
@@ -436,7 +438,7 @@ arm silence || fail "actions: A's seam didn't take the silent clip"
 before="$(llm_actions)"
 record 7 || fail "actions: A can't record the silent note"
 DEV=B; dm_tab "ZZ Call A" official >/dev/null || true
-wait_node "^Risi couldn.t hear (any speech in )?this voice note" 240 || fail "actions: no \"couldn't hear clearly\" card on B"
+wait_node "^($UNCLEAR_RE)" 240 || fail "actions: no \"couldn't hear clearly\" card on B"
 vashot unclear
 [ "$(llm_actions)" = "$before" ] || fail "actions: the model was asked about an unclear note"
 pass "actions: a silent Official note → the \"couldn't hear clearly\" card, no items, no model call"
