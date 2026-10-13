@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Official start gate (P0 incident 2026-10-13, contract v1.46 §12.12.9, decision 088). BLOCKING in scripts/nightly-release.
 # Three redroid phones against a temp server from THIS checkout (TABS + Risi with the MLS NIF, fake-llm), fresh installs:
-#   scripts/official-start-test [--apk app-debug.apk] [--keep] [--soft]
+#   scripts/official-start-test [--apk app-debug.apk] [--keep] [--stop-on-fail]   (keep-going is the default: every step reports)
 #  0. A, B, C sign in through the real login UI; all three are friends (fixture); each 1:1 is opened on both sides
 #     until its Private conversation is e2ee (server).
 #  1. Race: A and B tap [Start Official] in their 1:1 at the same moment → both phones get a usable Official
@@ -28,10 +28,10 @@ CALLER_PWD="$PWD"
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 SUF="${OSTEST_INSTANCE:-_os}"; PORT="${OSTEST_PORT:-4188}"; LLM_PORT="${OSTEST_LLM_PORT:-8188}"
-APK=""; KEEP=0; SOFT=0; VERSION=""; COMMIT=""
+APK=""; KEEP=0; SOFT=1; VERSION=""; COMMIT=""
 while [ $# -gt 0 ]; do case "$1" in
   --apk) APK="$2"; shift 2;; --version) VERSION="$2"; shift 2;; --commit) COMMIT="$2"; shift 2;;
-  --keep) KEEP=1; shift;; --soft) SOFT=1; shift;;
+  --keep) KEEP=1; shift;; --soft|--keep-going) SOFT=1; shift;; --stop-on-fail) SOFT=0; shift;;
   *) echo "unknown arg $1"; exit 2;; esac; done
 APK="${APK:-$REPO/android/app/build/outputs/apk/debug/app-debug.apk}"
 case "$APK" in /*) ;; *) APK="$CALLER_PWD/$APK";; esac
@@ -84,7 +84,7 @@ cleanup() {
   # This run's server, model and fixture loop only: their tmux sessions (never a pattern kill).
   tmux kill-session -t "risime-ostest$SUF" 2>/dev/null || true
   tmux kill-session -t "risime-ostest-llm$SUF" 2>/dev/null || true
-  tmux kill-session -t "risime-ostest-young$SUF" 2>/dev/null || true
+  [ -n "${YOUNG_FLAG:-}" ] && rm -f "$YOUNG_FLAG"
   if [ "$KEEP" = 0 ]; then
     REDROID_INSTANCE="$I1" REDROID_PORT="$P1" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
     REDROID_INSTANCE="$I2" REDROID_PORT="$P2" "$REPO/scripts/android-target" stop >/dev/null 2>&1 || true
@@ -155,14 +155,20 @@ case mode do
     {:ok, kind, _} = RisiMe.Chats.insert_official(user!.(creator).id, chat)
     IO.puts("ostest: creating #{kind}")
   "keep_young" ->
-    # Keeps the `creating` group younger than the 60 s hand-over for <secs> (a creator still building).
-    [x, y, secs] = rest
-    n = div(String.to_integer(secs), 5)
-    for _ <- 1..n do
-      ids = Enum.map(officials.(x, y), & &1.id)
-      Repo.update_all(from(g in Group, where: g.id in ^ids and g.state == "creating"), set: [created_at: DateTime.utc_now()])
-      Process.sleep(5_000)
-    end
+    # Keeps the `creating` group younger than the 60 s hand-over (a creator still building) while <flag> exists
+    # (at most 300 s): every 2 s its created_at is set to now.
+    [x, y, flag] = rest
+    Enum.reduce_while(1..150, 0, fn _, n ->
+      if File.exists?(flag) do
+        ids = Enum.map(officials.(x, y), & &1.id)
+        {k, _} = Repo.update_all(from(g in Group, where: g.id in ^ids and g.state == "creating"), set: [created_at: DateTime.utc_now()])
+        if n == 0, do: IO.puts("ostest: young started=#{k}")
+        Process.sleep(2_000)
+        {:cont, n + 1}
+      else
+        {:halt, n}
+      end
+    end)
     IO.puts("ostest: young done")
   "age" ->
     # The `creating` group is now older than the hand-over threshold (60 s), well under the 5 min Health threshold.
@@ -188,7 +194,7 @@ case mode do
     IO.puts("ostest: risi_inbox_dm=#{Enum.count(evs, &String.starts_with?(to_string(&1.data["conversation_id"]), "dm:"))}")
 end
 EXS
-fx() { (cd server && set -a && . "$WORK/risi.env" && set +a && RISI_MLS_NIF=/nonexistent $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep '^ostest:' || true); }
+fx() { (cd server && set -a && . "$WORK/risi.env" && set +a && RISI_MLS_NIF=/nonexistent $M mix run "$WORK/fixtures.exs" "$@" 2>/dev/null | grep --line-buffered '^ostest:' || true); }
 fxn() { fx "$@" | sed -n 's/^ostest: [a-z_]*=\([0-9]*\).*/\1/p'; }
 echo "==> temp server on 127.0.0.1:$PORT ($RISIME_DEV_DB, TABS + Risi)"
 (cd server && { $M mix ecto.drop --quiet --force >/dev/null 2>&1 || true; } && $M mix ecto.create --quiet >/dev/null && $M mix ecto.migrate --quiet >/dev/null && $M mix risime.cql.migrate --quiet >/dev/null) \
@@ -368,124 +374,176 @@ for pair in "A B" "A C" "B C"; do
 done
 pass setup_e2ee_1to1s
 
+# Each step is a function: a failed check is recorded (bad) and the step returns, so later steps still run and
+# report (keep-going is the default; --stop-on-fail stops at the first failed check). Every step starts from the
+# chat list. A step's prerequisites failing is a failed check of that step, not an abort of the run.
+fresh() { local d; for d in "$@"; do DEV=$d; start_app; sleep 1; back_to_list || true; done; }
+
 # ---------------------------------------------------------------- 1. race: A and B start Official at the same moment
-DEV=A; open_chat "$(name B)" || fail "A: the 1:1 with B"; official_intro || fail "A: no [Start Official] in the A↔B Official tab"
-DEV=B; open_chat "$(name A)" || fail "B: the 1:1 with A"; official_intro || fail "B: no [Start Official] in the A↔B Official tab"
-DEV=A; xa="$(node_xy "Start Official")"; DEV=B; xb="$(node_xy "Start Official")"
-[ -n "$xa" ] && [ -n "$xb" ] || fail "race: [Start Official] not on both screens"
-# shellcheck disable=SC2086
-{ adb -s "$SA" shell input tap $xa & adb -s "$SB" shell input tap $xb & wait; }
-DEV=A; ta="$(official_usable 90)" || bad race_both_usable "A's Official isn't usable 90 s after the simultaneous start"
-DEV=B; tb="$(official_usable 90)" || bad race_both_usable "B's Official isn't usable 90 s after the simultaneous start"
-TIMINGS+=" race_a_s=${ta:-none} race_b_s=${tb:-none}"
-DEV=A; shot race-a; DEV=B; shot race-b
-pass race_both_usable
-o="$(fx officials A B)"
-case "$o" in "ostest: officials=1 active "*) pass "race_one_group($o)";; *) bad race_one_group "the A↔B chat should hold exactly one active Official group: $o";; esac
-DEV=A; send_official "os-race-a" || bad race_messages "A can't send in Official"
-DEV=B; wait_for "os-race-a" 60 || bad race_messages "B never decrypted A's Official message"
-send_official "os-race-b" || bad race_messages "B can't send in Official"
-DEV=A; wait_for "os-race-b" 60 || bad race_messages "A never decrypted B's Official message"
-pass race_messages_both_ways
+step_race() {
+  fresh A B
+  DEV=A; open_chat "$(name B)" || { bad race_both_usable "A: the 1:1 with B isn't listed"; return; }
+  official_intro || { bad race_both_usable "A: no [Start Official] in the A↔B Official tab"; return; }
+  DEV=B; open_chat "$(name A)" || { bad race_both_usable "B: the 1:1 with A isn't listed"; return; }
+  official_intro || { bad race_both_usable "B: no [Start Official] in the A↔B Official tab"; return; }
+  local xa xb ta tb o
+  DEV=A; xa="$(node_xy "Start Official")"; DEV=B; xb="$(node_xy "Start Official")"
+  [ -n "$xa" ] && [ -n "$xb" ] || { bad race_both_usable "[Start Official] not on both screens"; return; }
+  # shellcheck disable=SC2086
+  { adb -s "$SA" shell input tap $xa & adb -s "$SB" shell input tap $xb & wait; }
+  DEV=A; ta="$(official_usable 90)" || { bad race_both_usable "A's Official isn't usable 90 s after the simultaneous start"; return; }
+  DEV=B; tb="$(official_usable 90)" || { bad race_both_usable "B's Official isn't usable 90 s after the simultaneous start"; return; }
+  TIMINGS+=" race_a_s=${ta:-none} race_b_s=${tb:-none}"
+  DEV=A; shot race-a; DEV=B; shot race-b
+  pass race_both_usable
+  o="$(fx officials A B)"
+  case "$o" in "ostest: officials=1 active "*) pass "race_one_group($o)";; *) bad race_one_group "the A↔B chat should hold exactly one active Official group: $o";; esac
+  DEV=A; send_official "os-race-a" || { bad race_messages "A can't send in Official"; return; }
+  DEV=B; wait_for "os-race-a" 60 || { bad race_messages "B never decrypted A's Official message"; return; }
+  send_official "os-race-b" || { bad race_messages "B can't send in Official"; return; }
+  DEV=A; wait_for "os-race-b" 60 || { bad race_messages "A never decrypted B's Official message"; return; }
+  pass race_messages_both_ways
+}
 
 # ---------------------------------------------------------------- 2. offline: C is away while A starts Official with C
-DEV=C; back_to_list || true; stop_app; offline
-DEV=A; back_to_list || true
-open_chat "$(name C)" || fail "A: the 1:1 with C"; official_intro || fail "A: no [Start Official] in the A↔C Official tab"
-tap "Start Official" || fail "A: tap [Start Official] (A↔C)"
-t="$(official_usable 90)" || bad offline_creator_usable "A's Official with an offline C isn't usable within 90 s"
-TIMINGS+=" offline_a_s=${t:-none}"; shot offline-a
-pass offline_creator_usable
-send_official "os-offline-a" || bad offline_creator_usable "A can't send in Official (A↔C)"
-DEV=C; online; start_app; sleep 2; dismiss_prompts
-open_chat "$(name A)" || fail "C: the 1:1 with A after coming back"
-t="$(official_usable 120)" || bad offline_peer_back "C's Official isn't usable within 120 s after coming back"
-wait_for "os-offline-a" 60 || bad offline_peer_back "C never decrypted A's Official message"
-TIMINGS+=" offline_c_back_s=${t:-none}"; shot offline-c-back
-send_official "os-offline-c" || bad offline_peer_back "C can't send in Official"
-DEV=A; wait_for "os-offline-c" 60 || bad offline_peer_back "A never decrypted C's Official message"
-pass offline_peer_back
+step_offline() {
+  local t
+  DEV=C; back_to_list || true; stop_app; offline
+  fresh A
+  DEV=A; open_chat "$(name C)" || { DEV=C; online; bad offline_creator_usable "A: the 1:1 with C isn't listed"; return; }
+  official_intro || { DEV=C; online; bad offline_creator_usable "A: no [Start Official] in the A↔C Official tab"; return; }
+  tap "Start Official" || { DEV=C; online; bad offline_creator_usable "A: tap [Start Official] (A↔C)"; return; }
+  t="$(official_usable 90)" || { DEV=C; online; bad offline_creator_usable "A's Official with an offline C isn't usable within 90 s"; return; }
+  TIMINGS+=" offline_a_s=${t:-none}"; shot offline-a
+  send_official "os-offline-a" || { DEV=C; online; bad offline_creator_usable "A can't send in Official (A↔C)"; return; }
+  pass offline_creator_usable
+  DEV=C; online; start_app; sleep 2; dismiss_prompts
+  open_chat "$(name A)" || { bad offline_peer_back "C: the 1:1 with A isn't listed after coming back"; return; }
+  t="$(official_usable 120)" || { bad offline_peer_back "C's Official isn't usable within 120 s after coming back"; return; }
+  wait_for "os-offline-a" 60 || { bad offline_peer_back "C never decrypted A's Official message"; return; }
+  TIMINGS+=" offline_c_back_s=${t:-none}"; shot offline-c-back
+  send_official "os-offline-c" || { bad offline_peer_back "C can't send in Official"; return; }
+  DEV=A; wait_for "os-offline-c" 60 || { bad offline_peer_back "A never decrypted C's Official message"; return; }
+  pass offline_peer_back
+}
 
 # ---------------------------------------------------------------- 3. watchdog + hand-over: the creator never builds epoch 0
-DEV=C; back_to_list || true; stop_app
-case "$(fx creating C B)" in "ostest: creating created") ;; *) fail "fixture: a creating B↔C Official by C";; esac
-tmux new -d -s "risime-ostest-young$SUF" "cd '$REPO/server' && set -a && . '$WORK/risi.env' && set +a && RISI_MLS_NIF=/nonexistent $M mix run '$WORK/fixtures.exs' keep_young B C 150 > '$WORK/young.out' 2>&1"
-DEV=B; back_to_list || true
-open_chat "$(name C)" || fail "B: the 1:1 with C"
-# Official exists on the server (creating): the tab may show the intro or already "Starting Official…".
-for _ in $(seq 1 30); do dump; risi_intro_ok; grep -qF -e 'text="Start Official"' -e 'Starting Official' "$WORK/ui-$DEV.xml" && break
-  tap "● Official" >/dev/null || true; sleep 1; done
-grep -qF 'text="Start Official"' "$WORK/ui-$DEV.xml" && { tap "Start Official" || fail "B: tap [Start Official] (B↔C)"; }
-t0=$(date +%s)
-wait_for "Starting Official" 20 || bad watchdog_starting "B: no 'Starting Official…' after [Start Official] on a chat whose creator is away"
-shot watchdog-starting
-retry=""; reason=""
-for _ in $(seq 1 100); do
-  dump
-  if [ -n "$(node_xy "Try again" -)" ] || [ -n "$(node_xy "#official_try_again" -)" ]; then
-    retry=$(( $(date +%s) - t0 ))
-    { [ -n "$(node_xy "#official_starting_reason" -)" ] || [ -n "$(node_xy "~Waiting for" -)" ] || [ -n "$(node_xy "~ready on this phone" -)" ] \
-      || [ -n "$(node_xy "~offline" -)" ]; } && reason=1
-    break
+# C (the creator, fixture) is stopped and never builds epoch 0; a background fixture keeps the `creating` group younger
+# than the 60 s hand-over, so B's Official can't become readable: B must show a reason and [Try again] within 80 s.
+step_watchdog() {
+  local t0 retry="" reason="" t o
+  DEV=C; back_to_list || true; stop_app
+  case "$(fx creating C B)" in "ostest: creating created") ;; *) bad watchdog_try_again "fixture: a creating B↔C Official by C"; return;; esac
+  YOUNG_FLAG="$WORK/keep-young"; : > "$YOUNG_FLAG"; : > "$WORK/young.out"
+  # A background job of this script, NOT a tmux session: a tmux session gets the tmux server's environment (another
+  # store), so in nightly.6 the group aged and was handed over to B while "the creator was still building".
+  ( fx keep_young B C "$YOUNG_FLAG" > "$WORK/young.out" ) &
+  YOUNG_PID=$!
+  for _ in $(seq 1 90); do grep -q "young started=1" "$WORK/young.out" 2>/dev/null && break; sleep 1; done
+  grep -q "young started=1" "$WORK/young.out" || { rm -f "$YOUNG_FLAG"; bad watchdog_try_again "the keep-young fixture didn't start: $(cat "$WORK/young.out")"; return; }
+  fresh B
+  DEV=B; open_chat "$(name C)" || { rm -f "$YOUNG_FLAG"; bad watchdog_try_again "B: the 1:1 with C isn't listed"; return; }
+  # Official exists on the server (creating): the tab may show the intro or already "Starting Official…".
+  for _ in $(seq 1 30); do dump; risi_intro_ok; grep -qF -e 'text="Start Official"' -e 'Starting Official' "$WORK/ui-$DEV.xml" && break
+    tap "● Official" >/dev/null || true; sleep 1; done
+  grep -qF 'text="Start Official"' "$WORK/ui-$DEV.xml" && { tap "Start Official" || true; }
+  t0=$(date +%s)
+  wait_for "Starting Official" 20 || { rm -f "$YOUNG_FLAG"; bad watchdog_starting "B: no 'Starting Official…' after [Start Official] on a chat whose creator is away"; return; }
+  shot watchdog-starting
+  for _ in $(seq 1 100); do
+    dump
+    if [ -n "$(node_xy "Try again" -)" ] || [ -n "$(node_xy "#official_try_again" -)" ]; then
+      retry=$(( $(date +%s) - t0 ))
+      { [ -n "$(node_xy "#official_starting_reason" -)" ] || [ -n "$(node_xy "~Waiting for" -)" ] || [ -n "$(node_xy "~ready on this phone" -)" ] \
+        || [ -n "$(node_xy "~offline" -)" ]; } && reason=1
+      break
+    fi
+    if is_official && grep -qF 'class="android.widget.EditText"' "$WORK/ui-$DEV.xml" && ! grep -qF 'Starting Official' "$WORK/ui-$DEV.xml"; then
+      rm -f "$YOUNG_FLAG"; bad watchdog_try_again "B's Official became usable while the creator was still building (the fixture didn't hold; $(fx officials B C))"; return
+    fi
+    sleep 1
+  done
+  TIMINGS+=" watchdog_try_again_s=${retry:-none}"
+  shot watchdog-try-again
+  if [ -n "$retry" ] && [ "$retry" -le 80 ]; then
+    [ "$retry" -ge 45 ] || echo "    note: [Try again] showed after ${retry} s (< 60 s)"
+    pass "watchdog_try_again(${retry}s)"
+  else
+    bad watchdog_try_again "no [Try again] within 80 s of 'Starting Official…' (only a spinner)"
   fi
-  is_official && grep -qF 'class="android.widget.EditText"' "$WORK/ui-$DEV.xml" && ! grep -qF 'Starting Official' "$WORK/ui-$DEV.xml" \
-    && bad watchdog_try_again "B's Official became usable while the creator was still building (the fixture didn't hold)"
-  sleep 1
-done
-TIMINGS+=" watchdog_try_again_s=${retry:-none}"
-shot watchdog-try-again
-[ -n "$retry" ] && [ "$retry" -le 80 ] || bad watchdog_try_again "no [Try again] within 80 s of 'Starting Official…' (only a spinner)"
-[ "$retry" -ge 45 ] || echo "    note: [Try again] showed after ${retry} s (< 60 s)"
-[ -n "$reason" ] || bad watchdog_reason "[Try again] without a reason line (offline / Waiting for <name> / not ready on this phone)"
-pass "watchdog_try_again(${retry}s)"
-# Restore: the creator is gone for good; the group ages past the 60 s hand-over and B tries again.
-tmux kill-session -t "risime-ostest-young$SUF" 2>/dev/null || true
-case "$(fx age B C)" in "ostest: aged=1") ;; *) fail "fixture: age the creating B↔C Official";; esac
-tap "Try again" >/dev/null || tap "#official_try_again" || bad watchdog_recovers "B: no tappable [Try again]"
-t="$(official_usable 90)" || bad watchdog_recovers "B's Official isn't usable within 90 s after [Try again]"
-TIMINGS+=" handover_usable_s=${t:-none}"; shot watchdog-recovered
-o="$(fx officials B C)"
-case "$o" in "ostest: officials=1 active B") pass "handover_to_b($o)";; *) bad handover_to_b "the B↔C Official should be one active group created by B: $o";; esac
-send_official "os-handover-b" || bad watchdog_recovers "B can't send in Official (B↔C)"
-pass watchdog_recovers
+  [ -n "$reason" ] && pass watchdog_reason || bad watchdog_reason "[Try again] without a reason line (offline / Waiting for <name> / not ready on this phone)"
+  # The fixture held the whole time: still exactly one creating group by C.
+  o="$(fx officials B C)"; case "$o" in "ostest: officials=1 creating C") ;; *) echo "    note: during the wait: $o";; esac
+  # Restore: the creator is gone for good; the group ages past the 60 s hand-over and B tries again.
+  rm -f "$YOUNG_FLAG"; wait "$YOUNG_PID" 2>/dev/null || true
+  case "$(fx age B C)" in "ostest: aged=1") ;; *) bad watchdog_recovers "fixture: age the creating B↔C Official"; return;; esac
+  { tap "Try again" >/dev/null || tap "#official_try_again"; } || { bad watchdog_recovers "B: no tappable [Try again]"; return; }
+  t="$(official_usable 90)" || { bad watchdog_recovers "B's Official isn't usable within 90 s after [Try again]"; return; }
+  TIMINGS+=" handover_usable_s=${t:-none}"; shot watchdog-recovered
+  o="$(fx officials B C)"
+  case "$o" in "ostest: officials=1 active B") pass "handover_to_b($o)";; *) bad handover_to_b "the B↔C Official should be one active group created by B: $o";; esac
+  send_official "os-handover-b" || { bad watchdog_recovers "B can't send in Official (B↔C)"; return; }
+  pass watchdog_recovers
+}
 
 # ---------------------------------------------------------------- 4. reinstall: Risi re-adds B's new phone, A never opens
-DEV=A; back_to_list || true; stop_app
-rc0="$(fxn risi_commits A B)"; m0="$(fxn msgs A B A B official)"
-DEV=B; install_fresh
-sign_in "+94770000902" "ostestb@example.com" || { skip_restore; wait_list 30; } || fail "sign-in B after the reinstall"
-skip_restore; dismiss_prompts
-open_chat "$(name A)" || fail "B: the 1:1 with A after the reinstall"
-t="$(official_usable 120)" || bad reinstall_usable "B's Official isn't usable within 120 s of the reinstall while A's app stays closed"
-TIMINGS+=" reinstall_usable_s=${t:-none}"; shot reinstall-b
-pass reinstall_usable
-rc1="$(fxn risi_commits A B)"
-[ "${rc1:-0}" -gt "${rc0:-0}" ] && pass "reinstall_readded_by_risi($rc0→$rc1)" || bad reinstall_readded_by_risi "no accepted commit from Risi's device in the A↔B Official ($rc0→$rc1)"
-send_official "os-reinstall-b" || bad reinstall_usable "B can't send in Official after the reinstall"
-ok=""; for _ in $(seq 1 60); do [ "$(fxn msgs A B A B official)" -gt "${m0:-0}" ] && { ok=1; break; }; sleep 2; done
-[ -n "$ok" ] || bad reinstall_usable "B's Official message after the reinstall never reached A's inbox"
-DEV=A; start_app; sleep 2; dismiss_prompts
-open_chat "$(name B)" || fail "A: the 1:1 with B after B's reinstall"
-official_usable 90 >/dev/null || true
-wait_for "os-reinstall-b" 90 || bad reinstall_decrypts "A never decrypted B's message from the new phone"
-shot reinstall-a
-pass reinstall_decrypts
+# Needs the A↔B Official of step 1; if step 1 failed, it is started here first (so this step still reports).
+step_reinstall() {
+  local rc0 rc1 m0 t ok=""
+  case "$(fx officials A B)" in "ostest: officials=1 active "*) ;; *)
+    fresh A; DEV=A; open_chat "$(name B)" && official_intro && tap "Start Official" && official_usable 90 >/dev/null \
+      || { bad reinstall_usable "no active A↔B Official to start from: $(fx officials A B)"; return; };;
+  esac
+  DEV=A; back_to_list || true; stop_app
+  rc0="$(fxn risi_commits A B)"; m0="$(fxn msgs A B A B official)"
+  DEV=B; install_fresh
+  { sign_in "+94770000902" "ostestb@example.com" || { skip_restore; wait_list 30; }; } || { bad reinstall_usable "sign-in B after the reinstall"; return; }
+  skip_restore; dismiss_prompts
+  open_chat "$(name A)" || { bad reinstall_usable "B: the 1:1 with A isn't listed after the reinstall"; return; }
+  t="$(official_usable 120)" || { bad reinstall_usable "B's Official isn't usable within 120 s of the reinstall while A's app stays closed"; return; }
+  TIMINGS+=" reinstall_usable_s=${t:-none}"; shot reinstall-b
+  pass reinstall_usable
+  rc1="$(fxn risi_commits A B)"
+  if [ "${rc1:-0}" -gt "${rc0:-0}" ]; then pass "reinstall_readded_by_risi($rc0→$rc1)"
+  else bad reinstall_readded_by_risi "no accepted commit from Risi's device in the A↔B Official ($rc0→$rc1)"; fi
+  send_official "os-reinstall-b" || { bad reinstall_decrypts "B can't send in Official after the reinstall"; return; }
+  for _ in $(seq 1 60); do [ "$(fxn msgs A B A B official)" -gt "${m0:-0}" ] && { ok=1; break; }; sleep 2; done
+  [ -n "$ok" ] || { bad reinstall_decrypts "B's Official message after the reinstall never reached A's inbox"; return; }
+  DEV=A; start_app; sleep 2; dismiss_prompts
+  open_chat "$(name B)" || { bad reinstall_decrypts "A: the 1:1 with B isn't listed after B's reinstall"; return; }
+  official_usable 90 >/dev/null || true
+  wait_for "os-reinstall-b" 90 || { bad reinstall_decrypts "A never decrypted B's message from the new phone"; return; }
+  shot reinstall-a
+  pass reinstall_decrypts
+}
 
 # ---------------------------------------------------------------- 5. Private unchanged
-DEV=A; private_tab || fail "A: the A↔B Private tab"
-send_private "os-private-a" || bad private_unchanged "A can't send in Private"
-DEV=B; private_tab || fail "B: the A↔B Private tab"
-wait_for "os-private-a" 90 || bad private_unchanged "B never decrypted A's Private message"
-send_private "os-private-b" || bad private_unchanged "B can't send in Private"
-DEV=A; wait_for "os-private-b" 90 || bad private_unchanged "A never decrypted B's Private message"
-for DEV in A B; do dump; grep -qF -e 'Risi is listening' -e 'Search in Official' "$WORK/ui-$DEV.xml" && bad private_unchanged "$DEV's Private tab shows Risi"; done
-shot private
-[ "$(fx risi_inbox_dm)" = "ostest: risi_inbox_dm=0" ] || bad private_unchanged "Risi's inbox holds events of a dm: conversation: $(fx risi_inbox_dm)"
-pass private_unchanged
+step_private() {
+  fresh A B
+  DEV=A; open_chat "$(name B)" || { bad private_unchanged "A: the 1:1 with B isn't listed"; return; }
+  private_tab || { bad private_unchanged "A: the A↔B Private tab"; return; }
+  DEV=B; open_chat "$(name A)" || { bad private_unchanged "B: the 1:1 with A isn't listed"; return; }
+  private_tab || { bad private_unchanged "B: the A↔B Private tab"; return; }
+  DEV=A; send_private "os-private-a" || { bad private_unchanged "A can't send in Private"; return; }
+  DEV=B; wait_for "os-private-a" 90 || { bad private_unchanged "B never decrypted A's Private message"; return; }
+  send_private "os-private-b" || { bad private_unchanged "B can't send in Private"; return; }
+  DEV=A; wait_for "os-private-b" 90 || { bad private_unchanged "A never decrypted B's Private message"; return; }
+  for DEV in A B; do dump; grep -qF -e 'Risi is listening' -e 'Search in Official' "$WORK/ui-$DEV.xml" && { bad private_unchanged "$DEV's Private tab shows Risi"; return; }; done
+  shot private
+  [ "$(fx risi_inbox_dm)" = "ostest: risi_inbox_dm=0" ] || { bad private_unchanged "Risi's inbox holds events of a dm: conversation: $(fx risi_inbox_dm)"; return; }
+  pass private_unchanged
+}
+
+step_race
+step_offline
+step_watchdog
+step_reinstall
+step_private
 
 # ---------------------------------------------------------------- 6. crash / ANR
 logcat_ok "final"
-pass logcat_clean
+[[ " $FAILED " == *" logcat_clean "* ]] || pass logcat_clean
+echo "==> steps: passed:${CHECKS} ${FAILED:+| failed:$FAILED}"
 if [ -n "$FAILED" ]; then RESULT=FAIL; REASON="failed:$FAILED"; write_result; echo "OSTEST FAIL$FAILED"; exit 1; fi
 RESULT=PASS; REASON=ok; write_result
 echo "OSTEST OK"
