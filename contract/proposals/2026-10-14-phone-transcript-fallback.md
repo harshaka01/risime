@@ -1,6 +1,7 @@
 # Proposal: Risi uses the sender phone's transcript as a fallback (§37.10 amendment, 2026-10-14)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.48** (§37.10 "Server / Risi" amendment). The server
+**Status:** APPLIED as **v1.49 §37.10** (root, 2026-10-14, with the Google addendum and its sender-rule line; the post
+carries `engine` for every phone source, as the server does). Was: proposal for root/Harsha, to be applied as **v1.48** (§37.10 "Server / Risi" amendment). The server
 implements it **behind the runtime flag `RISI_VOICE_PHONE_FALLBACK`** (`off` | `canary` | `on`, default `off`), so
 nothing changes until root applies this text and flips the flag. No wire change: the field already exists (v1.47).
 

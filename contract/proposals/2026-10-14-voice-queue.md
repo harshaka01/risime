@@ -1,6 +1,7 @@
 # Proposal 2026-10-14: Risi-chat voice notes wait for a busy speech service (§37.8 amendment)
 
-Status: **implemented on the server (fast lane), awaiting root to apply to PROTOCOL.md.**
+Status: **APPLIED as v1.49 §37.8 and the §37.6 step 4 exception** (root, 2026-10-14; the backoff is written as the code
+does it: 15 s doubling, at most every 5 min). Was: implemented on the server (fast lane), awaiting root to apply to PROTOCOL.md.
 Origin: P1 hotfix from Harsha's phone, 2026-10-14 07:01 SLT. On 13 Oct 20:11 UTC Harsha's Risi chat
 answered two voice notes with "I can't listen to voice notes right now. Please type it." (the switch was
 `off` on the pilot). Harsha's rule: Risi never asks the user to type because its own speech service is

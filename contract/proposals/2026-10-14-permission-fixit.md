@@ -1,6 +1,6 @@
 # Proposal: "I need your calendar to do that." [Allow calendar] (2026-10-14, Harsha 10:55 / 10:57)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.49 §43** (with §42 send-for-me). Amends §26.2,
+**Status:** APPLIED as **v1.49 §43** (root, 2026-10-14; adds the example `device_put_risi_fixit.json`). Was: proposal for root/Harsha, to be applied as **v1.49 §43** (with §42 send-for-me). Amends §26.2,
 §26.5, §28.3. Nothing in PROTOCOL.md changes until root applies it. It is built behind flags: the server
 switch `RISI_PERMISSION_FIXIT` (`off | canary | on`, default `canary` = `RISI_DEV_USERS`) and the device
 capability `risi_fixit`. Phones without `risi_fixit` keep `skill_needed` (§26.5) exactly.

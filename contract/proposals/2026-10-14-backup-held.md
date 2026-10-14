@@ -1,6 +1,6 @@
 # Proposal: held ("Waiting for encryption") messages are in backups and are sent after a restore (2026-10-14, root worker)
 
-**Status:** proposal for root/Harsha, to be applied as a **§22.5/§22.6 amendment** in the next free version. Harsha
+**Status:** APPLIED as **v1.49 §22.5 / §22.6** (root, 2026-10-14). Was: proposal for root/Harsha, to be applied as a **§22.5/§22.6 amendment** in the next free version. Harsha
 2026-10-14 06:09 SLT, hard rule 9 ("an update never deletes local chats"). Android owns the bundle; it is implemented
 against this text. Additive: **the bundle `schema` stays 1 (or 2 with Official)**, no capability, no server change.
 

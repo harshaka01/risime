@@ -1,6 +1,7 @@
 # Proposal: a spoken "Risi, …" in an Official voice note counts as @Risi (2026-10-14, root worker)
 
-**Status:** proposal for root/Harsha, to be applied as the next free version (v1.49 if call-risi takes v1.48),
+**Status:** APPLIED as **v1.49 §37.11** (root, 2026-10-14; amendments §24.11, §25.0, §37.2, §37.6; the chip's unclear
+answer reads "Could you say it again?", as §37.8 and the server, never "type it"). Was: proposal for root/Harsha, to be applied as the next free version (v1.49 if call-risi takes v1.48),
 as a new **§37.11** plus one-line amendments to §24.11, §25.0 and §37.6. It supersedes
 `2026-10-13-voice-address-risi.md` (risi role, never applied). It records Harsha's decision of 2026-10-14 06:09 SLT.
 The server is implemented against this text **behind `RISI_SPOKEN_MENTION`** (default `canary`: only

@@ -1,6 +1,6 @@
 # Proposal: "Transcribing (Sinhala)… [Stop]" for voice notes (2026-10-14, Sinhala-slow hotfix)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.48** (§37.11, additive). Nothing changes on the wire
+**Status:** APPLIED as **v1.49 §37.12** (root, 2026-10-14; renumbered, §37.11 is spoken @Risi). Was: proposal for root/Harsha, to be applied as **v1.48** (§37.11, additive). Nothing changes on the wire
 until root edits PROTOCOL.md. The server implements it **behind the runtime flag `RISI_VOICE_PROGRESS`**
 (`off` | `canary` | `on`, default `off`; `canary` = `RISI_DEV_USERS` only), and Android implements it as an APK
 hotfix. Old apps ignore the unknown signal kind (§2.3) and never call the two endpoints.

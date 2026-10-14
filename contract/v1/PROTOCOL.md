@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.47 (Release 0.3)
+# RisiMe Wire Protocol — v1.49 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -612,6 +612,10 @@ Later versions add types (reactions, group events, images) without breaking olde
 - **Encryption state per chat (decision 048, replaces the global dev banner):** a lock and "Messages
   are end-to-end encrypted" for e2ee chats. Every other chat shows "Not end-to-end encrypted yet:
   <reason from `missing[]`>". The app never claims encryption for a plaintext chat.
+  - **Official and the Risi chat (v1.24+, §24/§25) never use the Private lock or the Private wording** (v1.49,
+    decision 048, Harsha 2026-10-14). Their marker is the **Official lock** (the lock with a small Risi badge, the
+    Official accent dot) and their text is **"Encrypted · Risi can read"**. "End-to-end encrypted" and "Messages are
+    end-to-end encrypted" are for Private conversations only (§24.9).
 
 ### 10.5 Server storage
 - Postgres:
@@ -4887,8 +4891,22 @@ change bumps it).
   "phone": e164 | null}`: a name cache for people in old chats; never overrides server data.
 - **Never in a backup:** MLS state and anything in `mls_kv` (`BK`, `R`, HPKE request keys, the
   §17.8 approvals), the sync cursor, the device id, Keycloak and push tokens, the database key, gap
-  rows and §13.3/§17.12 markers, outbox rows and drafts, full-size media files, avatars, app
-  settings, and the on-device behaviour log.
+  rows and §13.3/§17.12 markers, outbox rows other than unsent text (`outbox` below, v1.49), drafts,
+  full-size media files, avatars, app settings, and the on-device behaviour log.
+- **Outbox lines (v1.49, hard rule 9; proposal 2026-10-14-backup-held).** `message` lines gain an optional
+  **`outbox`** (`backup_entry_message_outbox.json`) for the user's own **unsent text** rows (never accepted by
+  the server: no `message_id`): `{"type": "message", "conversation_id", "message_id": null, "client_msg_id",
+  "from": <me>, "from_device", "server_ts": null, "payload": {"v": 1, "type": "text", "body", …}, "origin": null,
+  "shared_by": null, "status": null, "outbox": {"state": "pending" | "failed", "client_ts": ts}}`.
+  - `state: "pending"`: the row was waiting to be sent (held for encryption, "Waiting for encryption…", or queued
+    offline). `"failed"`: it showed "Not sent — tap to retry".
+  - `client_ts`: when the user wrote it (the row's local time), ISO-8601 UTC with milliseconds.
+  - `payload`: the same `text` envelope the outbox would send (`reply_to`, `forwarded`, `link_preview` kept).
+  - **Only text.** Unsent photos, files and voice notes stay out (their bytes are local files), and so do
+    reactions, deletes, `risi_ctl` rows and control messages.
+  - **Never carried:** the "Send without encryption" consent (`plain_ok`). After a restore the message is held
+    again and the user decides again (decision 048).
+  - The header's `counts.messages` includes outbox lines. The bundle `schema` is unchanged (1, or 2 with Official).
 
 ### 22.6 Restore (client; extends the §17.7 import)
 - **Matching:** an entry is imported unless a local row with that `message_id` exists (messages,
@@ -4912,6 +4930,20 @@ change bumps it).
   line) persisted; a killed restore resumes, and a repeated import changes nothing.
 - **Never destructive:** a restore never deletes or overwrites a local row (hard rule 9);
   restoring an older backup over newer chats only fills what is missing.
+- **Outbox lines (v1.49).** An `outbox` line is imported only when `from` is the restoring user, `message_id` is
+  null, `payload` is a valid `text` (§10.3/§33), `state` is `pending` or `failed`, and **no local row has its
+  `client_msg_id`** (whatever its state: an already-sent copy wins). `client_ts` at or before the conversation's
+  `cleared_upto` → skipped. It becomes an outgoing row with the **same `client_msg_id`**, local time `client_ts`,
+  no `message_id`, origin `"backup"`:
+  - `pending` → PENDING: in a 1:1 "Waiting for encryption…" at once; the normal outbox sends it **encrypted** as
+    soon as the chat's MLS group is ready (decision 048); after the 30-s wait "Send without encryption" is offered
+    again; nothing goes in plaintext without that tap.
+  - `failed` → FAILED ("Not sent — tap to retry"); sent only on the user's tap.
+  - **No duplicates:** a second restore skips it; a copy the old phone sent meanwhile has the same
+    `client_msg_id` and merges (the §2.2/§10.3 idempotent resend).
+  - **Old apps** skip an `outbox` line as a malformed `message` (today's result). **Old backups** restore as before.
+  - **Upgrade gate (§22.13, hard rule 9):** held and failed outgoing texts count as rows of their chat before an
+    update, after it, and after a backup → restore; the restore check has no outbox exception.
 
 ### 22.7 Client: when backups are made (android, normative where it says "must")
 - **Turning on** (Settings → Chats → Backup; offered after the update that brings v1.22 and as a
@@ -5782,8 +5814,31 @@ Lazy for 1:1s and migrated chats; immediate for new groups.
   is silent (no sound, no heads-up; the unread badge still counts it).
 - **Calls:** (v1.33) a 1:1 call from either tab is §16/§19 on the `dm:` (the call screen shows the
   peer's name); a group's Official call is §20 LiveKit on its Official `grp:`. No transcription in Private, ever; in Official only under §27.7 (v1.27).
-- **Encryption state** (decision 048) is per tab: each tab shows its own lock or "Not end-to-end
-  encrypted yet: <reason>". Official is always e2ee (it is a `grp:`).
+- **Encryption state** (decision 048; wording v1.49, Harsha 2026-10-14 "honesty") is per tab:
+  - **Private** (1:1 and group): the lock and "End-to-end encrypted" in the header (a group: "🔒 N members"), and
+    "Messages are end-to-end encrypted" in chat info. Unchanged.
+  - **Official** (1:1 and group): the **Official lock** (lock + Risi badge) and **"Encrypted · Risi can read"** in the
+    header (a group: "Encrypted · Risi can read · N members"). It **must never** show the Private lock or the words
+    "end-to-end encrypted".
+  - **Chat info** (1:1 and group), in the Official section: the Official lock, "Encrypted · Risi can read" and
+    "Messages are encrypted on the way and on the server. Risi, whose keys are on RisiMe's server, can read Official.
+    Private is only you and the other person." (a group: "…Private is only the people in this chat.").
+  - Not encrypted yet (any tab): "Not end-to-end encrypted yet: <reason>", unchanged. Official is always e2ee (it is a
+    `grp:`).
+  - The tab labels "🔒 Private" | "● Official", the chat-list markers "🔒 " / "● ", the notification titles and the
+    forward picker labels are unchanged (they are already distinct).
+  - **Calls:** the call screen's encryption line is "End-to-end encrypted" (Private lock) only for a Private call. A
+    group's **Official** call (§20 on the Official `grp:`): Official lock + **"Encrypted · Risi can listen"**, call info
+    "Encrypted (MLS frame keys). Risi is in Official and holds its keys, so it can listen". A 1:1's Official call
+    (§16/§19 on the `dm:`; Risi has no key and hears it only through §36 Transcribe, which everyone must allow):
+    Official lock + **"End-to-end encrypted · Official"**, call info "End-to-end encrypted (MLS-bound DTLS-SRTP). Risi
+    hears it only if everyone allows Transcribe".
+  - **Help texts:** Settings → About adds, after the decision-048 sentence: "Official tabs and your Risi chat are
+    encrypted too, but Risi can read them: its keys are on RisiMe's server. Private is only the people in the chat."
+    With tabs on, the create-group note reads "Private messages in this group are end-to-end encrypted. In Official,
+    Risi can read them too. New members don't see earlier messages."
+  - Client-only wording: no wire, storage or capability change. Gates that look for the Private header lock
+    (`risi_header_lock`) never match the Official header's icon (`risi_header_official_lock`).
 - **Room (additive migration; hard rule 9):** `chat_tabs(conversation_id PK, chat_id, tab,
   chat_kind)`, filled for **every** existing conversation as `tab = 'private'` with
   `chat_id = conversation_id`; and `chat_prefs(chat_id PK, last_tab, official_state)`. The
@@ -5843,7 +5898,8 @@ lines; Risi ignores them unless the sender is an active human member):
 - **`risi_request`** (`envelope_risi_request.json`): `{"v": 1, "type": "risi_request",
   "request_id": uuid-v4, "action": "ask" | "summarise" | "report", "text": str | null,
   "scope": {"since": ts}}`. "@Risi" in the composer is a chip that builds this envelope; **free
-  text is never parsed for intent** [decision 066]. `text` is 1–1000 grapheme clusters for `ask`,
+  text is never parsed for intent** [decision 066], except §37.11 (v1.49: a spoken vocative "Risi, …" in an
+  Official voice note, detected by the server on Risi's own transcript). `text` is 1–1000 grapheme clusters for `ask`,
   optional otherwise; `scope.since` is at most 24 h back (else the `error` `out_of_window`).
 - **`risi_action`** (`envelope_risi_action.json`): `{"v": 1, "type": "risi_action", "target":
   uuid, "action": "confirm" | "decline" | "edit" | "done" | "offer_yes" | "offer_not_now"
@@ -6000,6 +6056,9 @@ exactly what they saw in v1.24** (§25.8): no Risi chat, no tool call, no progre
   The one exception is client-side and the sender's own (decision 083): in Official, the sender's
   app turns the sender's own typed `@Risi …` (and, in a 1:1 Official, a message starting `Risi, …`)
   into a `risi_request`, exactly as if the @Risi chip had been used. The wire stays a `risi_request`.
+  A second, server-side exception is §37.11 (v1.49): Risi's own transcript of an Official voice note that addresses
+  Risi by name is the voice form of the chip. Only the vocative is detected; the rest is the question, never parsed
+  for commands.
 - **Risi acts only for the asker.** Reminders and calendar entries are the asker's own. A group
   reminder reaches only the asker and the people who tap **Me too** (§25.4).
 - **Every write** (`set_reminder`, `calendar_add`) shows a **confirm card** with [Add] [Cancel] to
@@ -6124,6 +6183,8 @@ Harsha decides otherwise).
   `404 not_found` for it.
 - **Asking in the Risi chat:** the composer sends every message as a `risi_request` `ask` (§24.11);
   the app shows it as the user's own bubble. Risi ignores a plain `text` there (it is never a request).
+- **Encryption wording (v1.49, §24.9):** its header shows the Official lock and "Encrypted · Risi can read", never the
+  Private lock.
 
 ### 25.3 Client tools (calendar)
 Client tools run on the asker's phone. They travel over TLS, **not MLS**, because Risi shares the
@@ -10126,6 +10187,8 @@ Decision 077 (Harsha 2026-10-11) **overrides the 24-hour limit** of §24.12, §2
   "Checked:" line. A missed-deadline question to the owner is a `reminder` with `phase: "overdue"`. "Reschedule?"
   offers up to 3 slots free for everyone **in Risi Calendar**, as `next_actions` `ask` chips; phone calendars can't
   be read by the server, and the text says so. Older apps show `body`. `RISI_BRIEF=off` disables the brief.
+  Example (v1.49): `envelope_risi_digest_brief.json`. Its `decisions` are objects `{"text", "conversation_id"}`;
+  phones draw a brief (and any digest `scope` they don't know) from `body`, which is also the chat-list preview.
 
 ### 35.5 Backfill (later; specified when it starts)
 With the chat owner's consent the phone uploads an Official chat's existing history, encrypted to the Risi member.
@@ -10542,8 +10605,9 @@ setting. Old apps drop an unknown envelope type (§10.3) and show Risi kinds as 
     (§37.6). Absent or `true` = allowed. Senders set `false` when their §37.7 setting is off. It is meaningful
     only in Official; it is never set in a Private tab (there is nothing to opt out of).
   - **`reply_to`** (§33.9) and **`forwarded`** (§33.4, `voice_payload_forwarded.json`).
-  - **`request_id`** (uuid-v4) only in the user's Risi chat (§37.8, `voice_payload_risi_chat.json`); ignored
-    elsewhere.
+  - **`request_id`** (uuid-v4) in the user's Risi chat (§37.8, `voice_payload_risi_chat.json`) and (v1.49) on an
+    Official note recorded with the @Risi chip on (§37.11, `voice_payload_official_chip.json`); absent and ignored
+    everywhere else (never in Private, never in a `dm:`). Dropped on forward (§37.3), kept on resend.
 - No caption. Envelope bound 22 KiB (§14.4).
 - **Strict validation before anything is stored or fetched:** the §14.4 `blob`/`enc` checks; `mime` as above;
   `duration_ms` in range; `waveform` decodes to exactly 64 bytes. Otherwise the envelope is **dropped as
@@ -10611,6 +10675,14 @@ transcript). Never in Private, in any form.
    retry and script check.
 4. The plaintext audio, the ciphertext and the key are deleted right after transcription and on any error.
    Never written to disk, logs or the learning log.
+   **Exception, the §37.8 retry queue only (v1.49):** while a Risi-chat note waits for the speech service, the
+   server keeps the note's blob reference (id, size, ciphertext SHA-256) and its key in one row of
+   `risi_voice_queue`, **sealed** with AES-256-GCM under `RISI_DATA_KEY` (AAD
+   `risi_voice_queue:<conversation_id>:<message_id>`). Never audio (plaintext or ciphertext), never a transcript; the
+   job's arguments hold ids only. Each attempt reads the ciphertext from the blob store and decrypts in memory exactly
+   as the first. The row is deleted when the note is transcribed, given up (≤ 30 min), or found deleted for everyone.
+   Official-group notes are not queued (a failure there is the `failed` card, as before). The §37.12 Try again keeps
+   a stopped or failed note in memory only (≤ 10 min), never on disk.
 
 **The kind `voice_transcript`** (a `text` envelope from Risi's leaf **in the same conversation**, §24.11;
 `envelope_risi_voice_transcript.json`, `envelope_risi_voice_transcript_unclear.json`):
@@ -10639,7 +10711,8 @@ risi: {"v": 1, "kind": "voice_transcript", "conversation_id": "grp:…", "messag
 - **Retention (§36.8, §35.1):** the posted transcript is a Risi post in Official (sealed, kept until deleted,
   §35.3 controls); the working copy in `risi_buffer` is sealed with `RISI_DATA_KEY`, TTL 24 h.
 - **Learning log:** one `transcribe` row per note: model, language, audio seconds, latency, status;
-  `output: null`. Never text or audio.
+  `output: null`. Never text or audio. (v1.49) In Official, one `risi_agent_runs` row (agent `spoken_mention`) per
+  §37.11 decision: codes only, never text.
 
 ### 37.7 The sender's setting
 `GET` / `PUT /api/v1/me/risi/voice` (auth) with `{"transcribe": bool, "action_items": bool}` → `200` the same
@@ -10655,8 +10728,32 @@ shape (`me_risi_voice_put.json`, `me_risi_voice_reply.json`). Both default `true
   (`transcribe` is ignored there: the note is a request to Risi), posts `voice_transcript` in the Risi chat,
   and then handles `text` exactly as a §24.11 `risi_request` `ask` with that `request_id` (§25 loop, §34
   routing). The **answer is text, in the transcript's language** (`lang` as §36.7), never audio.
-- `unclear`/`failed`: the transcript card says so, and Risi answers "I couldn't hear that clearly. Please try
-  again or type it." (in the app's language); no tools run.
+- **Risi never says "please type it", anywhere (v1.49, Harsha 2026-10-14).** Every line below is an ordinary
+  rule-made `answer` (§24.11) with the note's `request_id` (as the §25 offline notice: a later reply is a second Risi
+  message for the same request); no new kind, field or event. No tools run for any of them.
+  - **Very short:** a note under **1 000 ms** (500–999 ms pass §37.2) is not transcribed; Risi answers **"That was
+    very short. Could you say it again?"**. An `unclear` transcript with no speech (empty or noise only) gets the
+    same answer.
+  - **`unclear`** otherwise (low language probability, still romanised): the transcript card says so, and Risi
+    answers **"I couldn't hear that clearly. Could you say it again?"**.
+  - A blob that can't be fetched or verified: the `failed` card and **"I couldn't open that voice note. Could you
+    send it again?"**.
+  - Over 5 min: **"That voice note is over 5 minutes, too long for me. Could you send a shorter one?"**.
+  - **The speech service down, busy, out of memory or timing out** (both §37.6 attempts failed): **no** `failed`
+    card yet and **never** "type it". Risi at once answers **"Got your voice note. I'll reply in a moment."** (an
+    `answer` with the note's `request_id`, then `risi_progress` `done`) and queues the note. If the service already
+    reports unhealthy when the note arrives, the acknowledgement goes out before the first attempt (the note is still
+    tried).
+  - **The retry queue:** a job retries with backoff (15 s, doubling, at most every 5 min: 15, 30, 60, 120, 240, 300, 300 … s) while the speech
+    service is unhealthy or failing (storage: the §37.6 step 4 exception). When it answers, the note gets its normal
+    `voice_transcript` card and is handled as the §24.11 `ask` (a second `answer` for the same `request_id`).
+  - **Bounded give-up** after **30 min** (server config): the `failed` card, and Risi answers **"I couldn't listen
+    to your voice note: my speech service isn't answering. Please send it again a bit later."**
+  - A note deleted for everyone while it waits is dropped silently.
+- **The switch off for this user (v1.49):** when `RISI_VOICE_TRANSCRIBE` is `off`, or `canary` and the sender isn't
+  in `RISI_DEV_USERS`, a Risi-chat note gets the answer **"Voice notes to Risi are coming soon for your account."**.
+  `canary` covers the Risi chat path: a `RISI_DEV_USERS` sender's notes are transcribed there. `/auth/config`
+  `voice_transcribe` stays `off` under `canary` (decision 048 honesty).
 - No §38 extraction from Risi-chat notes (they are requests).
 
 ### 37.9 Amendments, examples, gate
@@ -10696,11 +10793,17 @@ change; old apps ignore the field. Android sends it only behind the developer fl
   (Android: never `SpeechRecognizer.createSpeechRecognizer`, never `ACTION_RECOGNIZE_SPEECH` activities); if the
   chosen language has no installed on-device pack, the note goes without `phone_transcript` and the UI says so. No
   audio leaves the phone except the §37.2 E2EE blob.
+  - **Exception (v1.49, Harsha 2026-10-14): a `risi_dev` account's explicit opt-in.** Only a `risi_dev` account whose
+    user turned the developer option on for themselves may attach the transcript of Google's **online** recogniser,
+    with **`engine: "android-online-google"`**, on their own notes in Official and their own Risi chat (never Private:
+    there the on-device rule holds without exception). The opt-in's UI says plainly that the audio of those notes goes
+    to Google. Everyone else is unchanged (on-device only). The other sender rules below hold for it too.
 - Only the device that **recorded** the note writes it, from its own recording, before encryption.
-- **Not written:** in the user's Risi chat (§37.8: the note is a request; Risi transcribes); on a note with
-  `transcribe: false` (the sender opted out of transcription in Official, so no text of that note goes to Risi's
-  leaf either); on a **forward** (§37.3: dropped like `transcribe`/`request_id`).
-- Allowed in Private and Official. It is part of the MLS-encrypted content (never plaintext metadata).
+- **Not written:** on a note with `transcribe: false` (the sender opted out of transcription in Official, so no
+  text of that note goes to Risi's leaf either); on a **forward** (§37.3: dropped like `transcribe`/`request_id`).
+- Allowed in Private, Official and (v1.49, Harsha 2026-10-14) **the user's Risi chat**, where Risi may compare it with
+  its own transcript and fall back to it (Server / Risi below). It is part of the MLS-encrypted content (never
+  plaintext metadata).
 - Best effort: the recogniser may take at most a few seconds after the recording stops (Android: 8 s); after that
   the note is sent without it. Never delays a note beyond that, never blocks it.
 
@@ -10717,9 +10820,34 @@ change; old apps ignore the field. Android sends it only behind the developer fl
 #### Server / Risi
 - The server sees only a larger ciphertext (it already learns the envelope size). Honest note for decision 048:
   nothing else is learned.
-- **Risi's device in Official can decrypt the field.** In v1.47 Risi **ignores it**: it still transcribes per §37.6,
-  doesn't post it, doesn't use it for §38 extraction, never writes it to the learning log, buffer or logs. (A later
-  version may use it as a compare candidate in the §36 compare view; that needs its own proposal.)
+- **Risi's device in Official and in the user's Risi chat can decrypt the field** (never Private: Risi isn't a
+  member there). In v1.47 Risi ignored it. **From v1.49 (proposal
+  2026-10-14-phone-transcript-fallback) Risi may use a valid `phone_transcript` only as a guarded fallback input**,
+  behind the server flag `RISI_VOICE_PHONE_FALLBACK` (`off` | `canary` | `on`, default `off`; `off` = the v1.47
+  behaviour, the field ignored):
+  - **When:** only when Risi's own transcription (§37.6) times out or fails. The live time budget is **3 × the note's
+    duration, at least 15 s**. Order: (1) Risi's routed model (§36.5) within the budget; (2) the note's
+    `phone_transcript`, if present and valid (receiver rules above); (3) a fast local model (omniASR-CTC-1B, CPU int8)
+    on the same audio; (4) otherwise `status: "failed"` as today.
+  - **Never a primary path:** Risi never skips its own model because a phone transcript exists (the compare view and
+    the Voice agent's transcription Index keep scoring both). One exception, the `risi_dev` opt-in below.
+  - **The post** is the normal §37.6 `voice_transcript` with `status: "ok"`, the phone's `text`, `language` = the
+    primary subtag of `lang` when it is `si` / `ta` / `en` (else the script's language or `null`; the §36.11 Sinhala
+    script check applies), `model: "phone-on-device"`, and two new optional fields: **`"source": "phone"`** (absent =
+    Risi's own model) and **`"engine"`** (the `phone_transcript.engine` it came from). `made_by` = `{"model":
+    "phone-on-device", "provider": "phone", …}` (`envelope_risi_voice_transcript_phone.json`).
+  - **Google transcript (the §37.10 `risi_dev` opt-in):** `engine: "android-online-google"` and `model:
+    "phone-google"` (`envelope_risi_voice_transcript_google.json`). For a `risi_dev` user's own notes the server may use
+    it even while `RISI_VOICE_PHONE_FALLBACK` is off (the user's choice): when Risi's model fails the hallucination
+    guard, or when the Voice agent's per-user route for Sinhala is `phone` (Google leads on the user's labelled notes;
+    Risi's model takes over once it beats Google by the promotion rule).
+  - **Rendering:** a phone that knows `source` shows **one** transcript block for the note when `source` is `phone`:
+    **"Transcript (Google)"** for `engine: "android-online-google"`, **"Transcript (sender's phone)"** for any other
+    engine. Old phones show the post as today (`body`).
+  - **Same rules as Risi's own transcript:** the opt-outs still win (a note with `transcribe: false` carries no
+    `phone_transcript` anyway); memory, the Ledger and §38 see it like any `ok` transcript; the learning-log row has
+    `model: "phone-on-device"` (or `phone-google`), `output: null`; the text is never logged. Never Private (Risi isn't
+    a member). §37.11 never runs on a phone transcript.
 
 #### Size
 Envelope bound stays 22 KiB (§14.4): 12 000 bytes of text + ≈ 600 bytes of the rest fit.
@@ -10730,6 +10858,273 @@ Envelope bound stays 22 KiB (§14.4): 12 000 bytes of text + ≈ 600 bytes of th
   envelope bytes identical to v1.46 (parity); forward drops it; the online recogniser is never constructed.
   server: both examples pass the §37.2 validator; Risi ignores the field (no post, no log). The full release gates
   apply (APK, protocol).
+- **v1.49 examples:** `envelope_risi_voice_transcript_phone.json`, `envelope_risi_voice_transcript_google.json`.
+  **v1.49 gate:** server: the fallback order (timeout → phone → CTC → failed), the budget formula, the flag off → the
+  v1.47 behaviour (field ignored), no text in logs or `risi_agent_runs`. Android: `source: "phone"` renders once, with
+  the engine's label. Server-only behind the flag (Risi fast lane); the rendering ships with an APK.
+
+### 37.11 Spoken @Risi in Official (v1.49)
+Applied from `contract/proposals/2026-10-14-spoken-risi.md` (Harsha 2026-10-14 06:09 and 07:41 SLT; it supersedes the
+never-applied `2026-10-13-voice-address-risi.md`). **No new envelope, `kind` or `risi_request` field.** Two additive
+changes: the optional `risi.voice_ref` on Risi's replies, and the §37.2 `request_id` on an Official note recorded with
+the @Risi chip (a meaning of an existing optional field; old servers ignore it there, old phones never send it there).
+No capability, no readiness, no `/auth/config` switch.
+
+**Scope (server, normative).** Only an Official `grp:` with Official `on` (1:1 and group Official alike). **Never
+Private, never a `dm:` conversation, never the user's Risi chat** (there every note already is a request, §37.8). It
+runs only on Risi's own §37.6 transcript of a note that was transcribed (`status: "ok"`), so every §37.6 condition
+holds: a human member's own note, not forwarded, no `transcribe: false`, the sender's §37.7 `transcribe` not `false`,
+≤ 5 min. `phone_transcript` (§37.10) is never used for this.
+
+**Addressed vs mentioned.** The note counts as @Risi only when Risi is **addressed**: a vocative at the start of the
+utterance or of a sentence, followed by a request. Merely mentioning Risi never counts. Decision order (the first that
+applies):
+1. **Name forms** (whole word; case-insensitive Latin): `risi`, `rishi`, `risee`, `reesi`, `reesee`, `risie`, `rizi`,
+   `risy`; Sinhala `රිසි`, `රිසී`, `රීසි`, `රිශි`; Tamil `ரிசி`, `ரிஷி`, `ரீசி`. A form followed by a letter, a combining
+   mark or an apostrophe is not the name in vocative use (`Risi's`, `රිසිට`, `ரிசிக்கு` are mentions).
+2. **A member's name.** If an active human member of the conversation has a first name equal to the form heard (e.g. a
+   colleague called Rishi), the note is **not** @Risi.
+3. **Sentence start.** Sentences are split at `.` `!` `?` `।` `…` and line breaks. A sentence qualifies only when, after
+   optional greetings (`hey`, `hi`, `hello`, `ok`, `okay`, `oh`, `so`, `aney`, `අනේ`, `හලෝ`, `ஏய்`, `ஹலோ`, …), it
+   **starts** with a name form.
+4. **Addressed (rules)** when the name is followed by
+   - a vocative separator (`,` `:` `!` `-` `–` `—`, or the sentence ends there, e.g. "Risi? Remind me…") and the
+     remainder is a request: it contains a request cue or ends with `?`; or
+   - directly (speech often has no comma) by a request cue as its first word(s).
+   Request cues (en/si/ta/Singlish): `can/could/would/will you`, `please`, `remind`, `tell me`, question words
+   (`what`, `when`, `where`, `who`, `how`, `which`, `why`), `set`, `add`, `schedule`, `book`, `send`, `summarise`,
+   `find`, `show`, `check`, `note`, `list`, `cancel`, `help`; `මට`, `කරුණාකර`, `මතක් කරන්න`, `කියන්න`, `බලන්න`,
+   `පුළුවන්ද`, `මොකක්ද`, `කවදාද`, …; `எனக்கு`, `தயவு`, `நினைவூட்டு`, `சொல்லு`, `என்ன`, `எப்போ`, `முடியுமா`, …;
+   `mata`, `mage`, `mathak karanna`, `kiyanna`, `balanna`, `puluwanda`, `monada`, `kawadada`, `enakku`, `sollu`, …
+5. **Mentioned (rules)** when the name is followed by a reporting or descriptive word (`said`, `says`, `told`, `is`,
+   `was`, `has`, `did`, `knows`, `and`, `about`, `කිව්වා`, `කියනවා`, `ගැන`, `சொன்னது`, `சொன்னார்`, `பற்றி`, `kiwwa`,
+   `gana`, …), or appears anywhere but a sentence start.
+6. **Unsure**: a vocative separator with no request in the remainder ("Risi, the venue is booked."), a request cue
+   later in the sentence but not first ("Risi හෙට meeting එක මතක් කරන්න"), or a trailing vocative ("Can you remind me,
+   Risi?"). Unsure goes to the Fast router's model (`RISI_ROUTER_MODEL`, the local loopback model; never a commercial
+   fallback) with a ≤ 40-token yes/no prompt; it counts as addressed only with **confidence ≥ 0.9**. No model
+   configured, an error, a timeout (1.5 s) or a lower confidence: **not @Risi**.
+
+When unsure, the note is **never treated as a request**, but Risi is **never silent** to a note that addresses it (below).
+A note that merely mentions Risi is never acted on at all (zero false positives).
+
+**The @Risi chip on a voice note.** In Official, when the @Risi chip is on while the user records, the app stamps the
+note's §37.2 **`request_id`** (a fresh UUIDv4, `voice_payload_official_chip.json`), exactly as it does for every note
+in the Risi chat (§37.8). The app keeps it on resend; it is dropped on forward. The server then handles the note as
+that user's `ask` with that `request_id` **whatever its words** (no name needed; a leading "Risi, …" is dropped from
+the question), and:
+- sends `risi_progress` `working` with that `request_id` as soon as the note arrives ("Risi is typing…" under the note);
+- transcribes it even with `transcribe: false` or the sender's §37.7 `transcribe` off: the chip is the sender's explicit
+  request for this note (as §37.8);
+- a note over 5 min gets the fixed §37.8 "too long" answer; an `unclear`/`failed` transcript gets "I couldn't hear
+  that clearly. Could you say it again?" (never "type it", §37.8). Never silence.
+Phones that don't know the Official meaning ignore the field (unchanged display).
+
+**Never silent.** When a note is addressed to Risi but the request is unclear (step 4 with nothing asked: "Hey Risi.",
+"Risi, the venue is booked.") or the address is borderline (step 6 and the model is below 0.9 or absent), Risi posts a
+rule-made `answer` in the same Official conversation (`notify: [sender]`, `voice_ref`, `refs: [note]`, `request_id` =
+the derived id below) asking back in the note's language, e.g. "Did you want me to do something with this? Tell me what
+you need: start a voice note with "Risi, …" or use @Risi." The note itself stays an ordinary message (§27/§38 as usual).
+
+**Effect when addressed (and the flag is on for the sender).** The note is handled as a §24.11 `risi_request` `ask` from
+its sender, exactly as if the @Risi chip had been used: the same §24.13/§25.6 limits and queue, the §25 loop, §34
+routing and the "never silent" progress (`risi_progress` with the `request_id` below).
+- `request_id` = a deterministic UUID (version 4 layout) derived from the note's `message_id`, so a repeat (a
+  re-delivery, a restarted job) is idempotent: one request, one answer.
+- `text` = the transcript from the word after the vocative to the end (1–1000 grapheme clusters). The rest of the
+  transcript is context only.
+- The answer is in the transcript's `language` (as §37.8). It is the ordinary Risi reply of that request (`answer`,
+  `confirm`, `draft`, `error`, …) in the **same Official conversation**, visible to all members, `notify: [sender]`.
+- An addressed (or chip) note is a request, so (as §37.8) it gets **no §38 action-items extraction and is not counted
+  by the §27.2 quiet rule**: its promises come from the request's own confirm cards, never twice. The §37.6 transcript
+  is still posted as usual.
+- Risi's memory opt-out (§35.3) does not block the request (a request is not learning, as typed @Risi).
+
+**`risi.voice_ref` (additive, optional; `envelope_risi_answer_voice_ref.json`).** Every Risi post made for a spoken or
+chip request carries in its `risi` object **`"voice_ref": {"message_id": timeuuid (the note), "speaker": uuid (its
+sender)}`**, and an `answer`'s `refs` contains the note's `message_id`.
+- Phones that know `voice_ref` draw the card as a reply to the note (the §33.9 quote block, rendered from the local copy
+  of the note: "🎤 Voice note 0:12", tap scrolls to it), and may show a "Risi is typing…" bubble for a `risi_progress`
+  whose `request_id` they did not create when it arrives right after their own Official voice note.
+- Phones that don't know it ignore it (§0) and show the card as today.
+- `voice_ref` is honoured only from a leaf whose attested kind is `agent` and only in Official (§24.11 rule for `risi`).
+
+**Learning log and shadow.** One run row per decision (`risi_agent_runs`, agent `spoken_mention`): mode
+(`shadow`/`canary`/`on`), decision (`addressed`/`unsure_yes`/`chip` → request; `ask`/`unsure_ask` → ask back;
+`mentioned`), by (`rules`/`model`/`chip`), language, latency, reason code, hashed user. **Never text** (§24.12). The
+model check, when it runs, is an ordinary `RisiMe.Agent.LLM` call (task `spoken_mention`): its learning-log row holds
+the prompt's SHA-256 and the note id, never the transcript.
+
+**Switch (server flag, read at runtime).** `RISI_SPOKEN_MENTION` = `off` | `shadow` | `canary` | `on`, default
+**`canary`**: `off` no detection; `shadow` detect and log for everyone, nobody's note becomes a request; `canary` notes
+from `RISI_DEV_USERS` act, everybody else is shadow; `on` everybody acts. The chip path acts under the same flag.
+
+**Eval.** Golden set `spoken_mention` (`server/test/risime/agent/golden/spoken_mention.jsonl`): addressed and merely
+mentioned examples in English, Sinhala, Tamil and Singlish (romanised forms, realistic speech with fillers and mixed
+script), each labelled `expect: "request" | "ask" | "none"`. Gate: **zero false positives** and ≥ 85 % recall on the
+addressed cases by rules alone; the model path is scored with `scripts/risi-eval --live`.
+
+- **Examples:** `envelope_risi_answer_voice_ref.json`, `voice_payload_official_chip.json`.
+- **Gate:** server (fake speech service and fake LLM): addressed forms in all four languages → exactly one request job
+  with the remainder as `text`; merely mentioned → none; the golden set (0 false positives); unsure without a model →
+  none, under 0.9 → none, ≥ 0.9 → one; Private / `dm:` → no path; the Risi chat → the §37.8 path only; `unclear` /
+  `failed` → no request; a repeat → the same `request_id`; `shadow` and `canary` for a non-dev user → a run row and no
+  request; no transcript text in run rows or logs; an addressed note gets no §38 extraction; a chip note is an ask
+  whatever its words. Server: Risi fast lane. Android: the chip on Official voice notes ships in the next APK; `voice_ref` rendering
+  follows in a later APK.
+
+### 37.12 Transcription progress, Stop and Try again (v1.49)
+Applied from `contract/proposals/2026-10-14-transcribe-progress.md` (Harsha 2026-10-14 07:41 SLT, the Sinhala-slow
+incident; the proposal named it §37.11, renumbered). **Additive:** one ephemeral signal kind and two endpoints, behind
+the server flag **`RISI_VOICE_PROGRESS`** (`off` | `canary` | `on`, default `off`; `canary` = `RISI_DEV_USERS` only).
+Old apps ignore the unknown signal kind (§2.3) and never call the endpoints. **Never Private.**
+
+**Signal `voice_transcribing`** (§2.3 `signal`; ephemeral, never stored, never replayed; `signal_voice_transcribing.json`).
+Sent **only to the note's sender** (every live socket of the sender's user; a Risi-chat note goes only to `risi_tools`
+sockets, as every Risi-chat event, §25.2), only while the flag is on for the sender:
+```
+{"kind": "voice_transcribing",
+ "data": {"conversation_id", "message_id" (the note), "state", "language", "seq", "can_cancel", "can_retry", "server_ts"}}
+```
+| field | rule |
+|---|---|
+| `state` | `working` (Risi is transcribing the note) \| `done` (finished: the §37.6 `voice_transcript` follows or has arrived, whatever its status) \| `cancelled` (stopped by the sender) \| `failed` (no transcript: the speech service and every fallback failed; the §37.6 `failed` card is also posted) |
+| `language` | the expected language (`si` \| `ta` \| `en`) from the sender's and the chat's language hint (decision 071 d), or `null`. A hint, not a detection: the app shows "Transcribing (Sinhala)…" for `si`, "Transcribing (Tamil)…" for `ta`, "Transcribing…" otherwise |
+| `seq` | grows by 1 per signal of one note; a client drops a signal with a lower `seq` than one already applied |
+| `can_cancel` | true while `working` |
+| `can_retry` | true on `cancelled` / `failed` while the server still holds the note's key **in memory** (at most 10 min after the stop or failure; never on disk, §36.4) |
+
+**Stop and Try again** (REST, auth; the note's sender only). Body `{"conversation_id", "message_id"}`
+(`me_risi_voice_cancel.json`). These two endpoints answer errors as `{"error": "<code>"}` (a bare code string, not the
+§0 object); clients act on the HTTP status.
+- **`POST /api/v1/me/risi/voice/cancel`**
+  - `200 {"state": "cancelled", "can_retry": bool}` (`me_risi_voice_cancel_reply.json`): the transcription is stopped;
+    **nothing is posted** for the note (no `voice_transcript`, no §38 items); the note itself is untouched. A
+    `cancelled` signal also goes out.
+  - `404 {"error": "not_running"}`: nothing is running for that note (already done, not the caller's note, or the flag
+    off for the caller).
+- **`POST /api/v1/me/risi/voice/retry`** (same body)
+  - `202 {"state": "working"}` (`me_risi_voice_retry_reply.json`): transcription starts again (signals as above).
+  - `409 {"error": "running"}`: it is still running.
+  - `410 {"error": "expired"}`: the server no longer holds the note (over 10 min, a restart, the note was deleted, or
+    it never held it): the app shows "Can't try again. Send the note again." and hides Try again.
+  - `404 {"error": "not_found"}`: not the caller's note, or the flag off for the caller.
+- Both endpoints refuse any conversation that is not an Official `grp:` or the caller's Risi chat: Risi never had a
+  Private note, so nothing is ever running or held for one.
+
+**Client (Android, normative where it says "must").**
+- Under the sender's **own** voice-note bubble (Official tab and the Risi chat only; never Private):
+  - `working`: one line "Transcribing (Sinhala)… " + **[Stop]** (when `can_cancel`);
+  - `cancelled`: "Transcription stopped" + **[Try again]** (when `can_retry`);
+  - `failed`: "Couldn't transcribe" + **[Try again]** (when `can_retry`);
+  - `done`: the line disappears (the §37.6 transcript block shows as before).
+- Stop → `cancel`; Try again → `retry` (on `410`: the "Can't try again" line, no button).
+- The state is in memory only (per process): never persisted, never backed up. A `working` line with no signal for
+  `max(60 s, 4 × duration)` disappears. Old servers never send the signal: nothing changes.
+
+**Server notes (non-normative).** The running transcription's task is kept per (conversation, note) in memory; Stop
+kills it (its loopback speech request is dropped). The validated note (blob id, key, sizes) stays in memory for Try
+again at most 10 min, then is dropped; a restart drops it. Codes and timings only in logs and `risi_agent_runs`
+(`agent=voice`, `mode=stt`, `status=cancelled`); never text.
+
+- **Examples:** `signal_voice_transcribing.json`, `me_risi_voice_cancel.json`, `me_risi_voice_cancel_reply.json`,
+  `me_risi_voice_retry_reply.json`.
+- **Gate:** server: signal shape and `seq`; cancel stops the task and posts nothing; retry re-runs; 410 after expiry;
+  Private refused; the flag off → 404 and no signal. Android: the line per state; Stop/Try again call the endpoints;
+  an old server (no signal) unchanged; Private never shows the line. APK hotfix gates (additive, no protocol break).
+
+### 37.13 Wrong language and Translate (v1.49)
+Official only (an Official `grp:` with Official on, §37.6), never Private, never the user's Risi chat. Available to a
+user when `GET /api/v1/me/risi/voice` says `"translate_available": true` (the server's `RISI_VOICE_TRANSLATE` is on
+for that user). Otherwise the phone shows neither link.
+
+#### 37.13.1 "Wrong language?" (re-transcribe with a language)
+Under every `voice_transcript` (§37.6) with `status` `ok` or `unclear`, every member (sender and receivers) sees
+**"Wrong language?"**. It opens three choices, **Tamil / Sinhala / English**, without the transcript's own
+`language`. One tap sends, in the same conversation, a **`risi_action` `transcript_language`**
+(`envelope_risi_action_transcript_language.json`):
+```
+{"v": 1, "type": "risi_action", "action": "transcript_language", "target": "<the note's message_id>",
+ "edit": null, "language": "si" | "ta" | "en",
+ "voice": {"blob": {…the note's §37.2 blob…}, "enc": {…the note's §37.2 enc…}, "duration_ms": int}}
+```
+- `voice` is copied from the note's own envelope (the tapping member has it): Risi deletes a note's key right after
+  transcribing it (§37.6), so the request carries it again, inside MLS like the note. Never sent outside MLS.
+- **Server (normative):** the action is honoured only when the sender is an active human member, the conversation is
+  Official, the flag is on for the sender, `language` is one of `si`/`ta`/`en`, Risi posted a transcript for
+  `target`, and `voice.blob.blob_id` and `sha256` equal the note's (recorded when Risi transcribed it; a note
+  transcribed before v1.49 has no record and is refused). At most **3** per note per 10 minutes (more are ignored).
+  Then Risi fetches and decrypts the blob as §37.6 (in memory, deleted after), transcribes it **with that language
+  forced** (§36.5 route for that language, no detection), and:
+  1. posts a **new `voice_transcript`** for the same `message_id` with the new text and `language`, plus
+     **`"relang": {"from": "si" | "ta" | "en" | null, "to": "ta", "by": uuid}`**
+     (`envelope_risi_voice_transcript_relang.json`);
+  2. deletes its earlier `voice_transcript` post (sender delete, §15) and everything learned from it (as
+     `transcript_delete`, §37.6: memory, facts, promises, the working copy, §38 items), then the new transcript goes
+     through the normal §37.6 understanding path (memory, Ledger, §38 action items);
+  3. updates the **speaker's** language profile (the note's milliseconds move from `from` to `to`, one correction
+     counted; codes and numbers only) and writes the learning-log `transcribe` row with `"relang": true`, the two
+     language codes, `output: null`. Never text or audio.
+  If the speech service fails, the earlier transcript stays and nothing is posted.
+- **Receivers:** a `voice_transcript` with `relang` **replaces** any earlier transcript of the same `message_id` (the
+  later envelope wins even if the delete hasn't arrived). It renders as §37.6 with a small line "Re-transcribed in
+  Tamil" (the `to` language's name). Old phones: the delete removes the old card, the new one renders as today.
+
+#### 37.13.2 Translate (per viewer)
+- Every transcript keeps its **original language and script** (unchanged §37.6).
+- Under a `voice_transcript` with `status: "ok"`, and under every **typed `text` message in Official whose text has
+  Sinhala or Tamil letters**, the phone shows **"Translate to Sinhala / English / Tamil"** without the text's own
+  language (§37.13.3 `language`).
+- One tap calls **`POST /api/v1/risi/translate`** (auth; `risi_translate_request.json`):
+  `{"conversation_id": "grp:…", "message_id": timeuuid, "target": "en" | "si" | "ta"}`
+  → **`200`** (`risi_translate_reply.json`):
+  `{"conversation_id", "message_id", "target", "source_language": "si" | "ta" | "en" | null, "text": str (≤ 4000),
+  "label": "Translated by Risi", "made_by": {"model": alias, "provider": "risime", "at", "also": []}}`.
+  Errors: `403 {"error": "not_available"}` (flag off for the user, not Official, not a member, a Risi chat or
+  Private); `404 {"error": "not_found"}` (Risi doesn't hold that message's text: never seen, deleted, or its
+  speaker opted out of memory); `422 bad_request` (the §0 error object); `429 {"error": "rate_limited"}` (30 per user per
+  10 min); `503 {"error": "unavailable"}` (the model is down).
+- The server translates **only text Risi already holds for that Official message** (the transcript's working copy,
+  or Risi's sealed memory of a typed message); the request never carries message text. It runs on **risi-l1**,
+  on demand. The translation is **not posted, not stored, not remembered and not logged** (the learning log row is
+  `task: "translate"`, the two language codes, latency, `output: null`). The phone keeps the result in memory for
+  the session and doesn't ask twice (no server cache in v1.49).
+- **Rendering:** shown **only on the tapping person's phone**, under the original, labelled **"Translated by
+  Risi"** (never a chat message, never sent to anyone). It isn't backed up and isn't in history shares.
+- **Setting** (per user, §37.7): `GET`/`PUT /api/v1/me/risi/voice` gain `"always_translate": "off" | "en" | "si" |
+  "ta"` (default `"off"`; `me_risi_voice_put_v149.json`, `me_risi_voice_reply_v149.json`) and the read-only
+  `"translate_available": bool` (ignored on `PUT`). While Translate isn't available to the user the server sends the
+  v1.41 shape unchanged: both fields absent (absent = not available; `always_translate` on a `PUT` is then ignored).
+  With a target set, the phone requests the translation itself
+  when it shows a transcript (or a typed si/ta message) whose language isn't the target, and shows it expanded. A
+  `PUT` without `always_translate` keeps the stored value. Settings → Risi: "Always translate voice notes to:
+  Off / English / Sinhala / Tamil".
+
+#### 37.13.3 The text's language
+- A transcript's `language` (§37.6). After v1.49 the language always matches the text's script (Sinhala letters →
+  `si`, Tamil letters → `ta`).
+- A typed message: Sinhala letters (U+0D80–U+0DFF) → `si`, Tamil letters (U+0B80–U+0BFF) → `ta` (the one with
+  more letters when both), else `en`. Latin-script Singlish counts as `en` and gets no Translate link (v1.49).
+
+#### 37.13.4 Memory, the Ledger and action items
+Risi's understanding of a Sinhala or Tamil note or message works from **the original plus an internal English
+rendering** (risi-l1, made when the note is understood): §38 extraction sees both, so a Tamil note makes the same
+action items an English one would. The rendering lives only in Risi's sealed working copy (24 h) and is never
+posted, logged or written to the learning log; items keep §38's language rules.
+
+#### 37.13.5 Amendments
+- §24.11 `risi_action`: `transcript_language` (fields above).
+- §37.6 `voice_transcript`: optional `relang`; a later transcript of the same `message_id` replaces the earlier.
+- §37.7: `always_translate`, `translate_available`.
+- §2 REST list: `POST /api/v1/risi/translate`.
+
+- **Examples:** `envelope_risi_action_transcript_language.json`, `envelope_risi_voice_transcript_relang.json`,
+  `risi_translate_request.json`, `risi_translate_reply.json`, `me_risi_voice_put_v149.json`,
+  `me_risi_voice_reply_v149.json`.
+- **Gate:** as the proposal (server: `transcript_language` honoured / refused, the forced language, `relang`, the
+  old post and its learned rows deleted, codes-only logs; `translate` 200/403/404/422/429/503, nothing posted or
+  stored). Server behind `RISI_VOICE_TRANSLATE` (default `canary`); Android ships with a later APK (the full
+  release gates apply).
 
 ## 38. Risi voice → action items (v1.42)
 Decision 082 (Part 5). **One pipeline:** the §27.2 extraction (already run on §36 call transcripts, §36.7)
@@ -11274,7 +11669,389 @@ under 1.5 % of one core and 5–10 MiB per participant, so **spark2's 31 Mbit/s 
   answers, every phone receives decrypted audio from both others, B leaves and A–C go on; then the same
   with video (frames decoded from every remote). `GCTEST OK`.
 
+## 42. Send a message for me (v1.49)
+Applied from `contract/proposals/2026-10-14-send-for-me.md` (P1 2026-10-14, Harsha's phone). Amends §25.4, §26.2,
+§26.3, §26.6, §26.8, §28.4 and §37.8 where the subsections below say so. Server behind `RISI_SEND_FOR_ME`
+(default `canary`); the app advertises `risi_send` only while its developer flag `send_for_me` is on. (§41 is
+reserved for Call Risi, v1.48.)
+
+### 42.0 Principles
+- **One card, one tap** (§28.0). "Send Upali a message asking him to update" ends in **one** card:
+  **To: Upali · the text · [Send] [Edit]**. [Send] is the only confirmation. No skills page, no second card.
+- **The phone sends, as the user, end-to-end encrypted.** The server never sends a message on the user's
+  behalf and never stores the text (it passes once in the tool call's args, as §26.6).
+- **Private unless the user says Official.** A friend's name → that 1:1's Private conversation. Official only
+  when the request says so ("in Official", "on the official tab").
+- **Not a consequential action.** Sending the user's own chat message is not money, pay, HR, deletion or legal
+  (principle 4, decision 085). The consequential-action guard registers `send_message` as
+  **non-consequential**; the user's own [Send] tap (or their per-contact standing choice) is the approval.
+- **Scheduled messages only with a time.** `schedule_message` is chosen only when the request gives a time or a
+  repeat ("tomorrow 9am", "every day"). Without one it is `send_message`.
+- **Never a false "off".** The server says a skill or permission is off only when the user turned the skill off
+  (server state) or the phone **freshly** reported the permission denied. Unknown or stale: it proceeds with
+  the card, and the phone's own answer at run time decides.
+
+### 42.1 Capability and switch
+- **Device capability `risi_send`** (in `mls.capabilities`, kept only with `risi_tools`;
+  `device_put_risi_send.json`). A device advertises it once it handles everything in this section.
+- **Server switch `RISI_SEND_FOR_ME`** = `off | canary | on` (`RisiMe.Agents.Flags`, runtime; default
+  `canary`: on for `RISI_DEV_USERS`). Not in `/auth/config` (the capability is what the phone needs; the
+  server decides per asker).
+- **Phase 1 (server only, works with nightly.7 unchanged):** for an asker with the switch on but **no**
+  `risi_send` device, `send_message` ends in the §25.4 **`draft`** card the app already renders: the text, in
+  the user's language, `target_conversation_id` = the recipient's conversation; [Use] opens that chat with the
+  composer filled (it never sends). The answer says: "Here's the message for Upali. Tap Use to open your chat
+  with it ready, then send." Honest: nothing is claimed sent.
+- **Phase 2 (APK with `risi_send`):** the card, the phone send and the "✓ Sent" reply below.
+
+### 42.2 The tool `send_message` (client tool, write, no skill)
+Model-facing args (server schema, informative): `{"to": str (a friend's name, or "this chat"),
+"text": str (1–4096 graphemes; the message in the user's language and style), "tab": "private" | "official"}`.
+`tab` defaults to `private`.
+
+**Offered** (`authorize/3`) when: the switch is on for the asker, the asker has an active Risi chat, the asking
+device advertises `risi_tools`, and (Phase 2) the device advertises `risi_send`. **No skill** (§26.1 is
+unchanged; it never needs Settings → Risi skills).
+
+**Resolving the recipient** (server, deterministic, before any card):
+- a whole display name or first name of the asker's **friends** (§9) or chat co-members, normalised as §34.5;
+- **several matches** ("Upali" names Upali Perera and Upali Silva): no card; the §34.5 `clarify` question
+  "Which Upali?" with one chip per person (up to 3, `keep: false`, no [Keep]); a chip resolves it without a
+  model call, exactly as §34.5;
+- **a close but not exact match** ("Upaly"): the §34.5 name question as for every named write;
+- **a contact with no 1:1 chat** (a co-member who isn't a friend, or no MLS 1:1 yet): no card; "You don't have a
+  1:1 chat with Upali yet. Open Contacts → Upali to start one, then ask me again.";
+- **no match**: "I couldn't find Upali in your contacts." (the model may ask who it is);
+- `tab: "official"`: the chat's Official conversation when it is `on`; otherwise "Official is off in your chat
+  with Upali." and no card;
+- "this chat" from an Official conversation: that conversation; from the Risi chat: ask who it is for.
+- Never a Risi chat.
+
+**The card** (`confirm`, §25.4, in the asker's Risi chat; `envelope_risi_confirm_send_message.json`):
+```
+risi: {"v": 1, "kind": "confirm", "request_id", "write_id", "tool": "send_message",
+       "summary": "Send to Upali Perera (Private): Hi Upali, please update RisiMe to the latest version.",
+       "when": null, "text": "<the message>",
+       "args": {"conversation_id": "dm:…", "text": "<the message>"},
+       "send": {"to": {"name": "Upali Perera", "user_id": uuid | null}, "tab": "private" | "official",
+                "language": "en" | "si" | "ta"},
+       "for": [asker], "buttons": ["send", "edit", "cancel"], "expires_at", "turn_ref", "call_ref",
+       "made_by", "notify": [asker]}
+body: "Send to Upali Perera (Private): <text>? Update RisiMe to answer."
+```
+- `args` is the tool call's exact args without `write_id` (§26.5 rule). `send` is display data.
+- The app shows **To: Upali Perera · 🔒 Private**, the text, **[Send]** (filled) and **[Edit]**; Cancel is a small
+  text button. An old app shows `summary` and no buttons (an unknown `tool`, §26.9).
+- At most 1 `send_message` card per turn; the §25.1 bound of 2 writes still holds.
+
+**[Edit]** = the §28.4 `confirm_write` with **`edit: {"text": str}`** (1–4096 graphemes, trimmed, not
+empty). The server re-seals the args with the edited text and sends the tool call with it, no model call. Any
+other key, or an edit on another tool, runs nothing (unchanged §28.4 rule). The phone's rule (§42.3) accepts the
+card's args merged with **its own user's** `edit`.
+
+**[Send]** = `confirm_write` (no `edit`). The server sends the `risi_tool_call` to the confirming device
+(if it advertises `risi_send`, else the turn's device), as §25.4.
+
+**Tool call** (`event_risi_tool_call_send_message.json`):
+`"tool": "send_message", "args": {"write_id": uuid, "conversation_id": str, "text": str}`.
+
+**Result** (`risi_tool_result_send_message.json`): `{"status": "ok", "result": {"state": "sent" | "queued"}}`
+(exactly this key). `sent`: the server acknowledged the message (it has a `message_id`) within 10 s; `queued`: it
+is in the phone's outbox. Errors (`status: "error"`): `{"code": "not_member"}` (the phone doesn't hold that
+conversation or the user isn't an active member), `{"code": "bad_args"}`. `declined`: the §42.3 rule failed.
+
+**The reply** (new `risi.kind` **`message_sent`**, in the asker's Risi chat, silent for others;
+`envelope_risi_message_sent.json`):
+```
+risi: {"v": 1, "kind": "message_sent", "request_id", "write_id", "conversation_id": "dm:…",
+       "to": {"name": "Upali Perera", "user_id": uuid | null}, "tab": "private" | "official",
+       "state": "sent" | "queued", "turn_ref", "call_ref": null, "made_by" (rule), "notify": [asker]}
+body: "✓ Sent to Upali Perera" | "Queued for Upali Perera: it goes as soon as your phone is online."
+```
+- **Never the text** (it is in the user's own chat already). Honesty: "Sent" only for the phone's `sent`.
+- The app shows the body as a tappable line; a tap opens `conversation_id` (that tab). Other apps show `body`.
+- `not_member`: "I couldn't send it: you're not in a chat with Upali on this phone." Timeout (15 s): the §25.4
+  `tool_timeout` error with [Retry] ("I couldn't reach your phone to send it.").
+- Activity: no §26.4 entry (no skill). No `risi_items` row (nothing pending). Nothing in the learning log
+  beyond the hashes-only `risi_turn_steps` row.
+
+### 42.3 The phone's rule for `send_message` (android, normative)
+The phone runs a `send_message` call only when **all** hold (the §25.3/§26.5 card rule, rule (a)):
+- this phone holds the agent-leaf `confirm` with the call's `write_id` and `tool: "send_message"`, with its
+  own user in `for`, not expired;
+- the first answer to it from **its own user's leaf** is `confirm_write`;
+- the call's args minus `write_id` equal the card's `args`, or the card's `args` merged with the `edit` of that
+  `confirm_write` (only `text`);
+- the `write_id` is unused on this phone; the conversation is one this phone holds, the user an active member,
+  never a Risi chat.
+Then it sends the text through the normal send path (encrypted at that moment, a fresh `client_msg_id`
+persisted first), exactly as if typed, and answers `sent`/`queued` as above. The recipient sees a normal message.
+
+**"Send without asking next time" (per contact, stored on the phone only).** Under [Send] the card offers the
+tick **"Send to Upali without asking next time"** (off by default). When it is on for that contact (user id and
+tab) and this phone is the device that sent the request (its history holds its own leaf's `risi_request` or
+voice note with the card's `request_id`, at most 10 minutes earlier), the phone sends the `confirm_write` itself
+when the card arrives, and the card shows "Sent without asking (your choice for Upali) · Ask me next time".
+The wire is unchanged: it is the user's own `confirm_write`, sent on the user's standing choice. The setting
+never leaves the phone and is listed in Settings → Risi skills → "Send a message for me", where each contact
+can be switched back to "Ask me".
+
+### 42.4 Scheduled messages only with a time (amends §26.6)
+- `schedule_message` is described to the model as "only when the request gives a time or a repeat". The server
+  refuses a `schedule_message` step whose `at` resolves to less than 2 minutes ahead or is not a time
+  ("now", "") with `failed` reason `no_time: use send_message`; when `send_message` is offered the turn then
+  continues with it.
+- The card follows the same one-tap pattern for a `risi_send` device: `buttons: ["schedule", "edit",
+  "cancel"]`, the `send` display object, [Edit] = `confirm_write` `edit: {"text"}`. Devices without `risi_send`
+  keep `["add", "cancel"]`.
+- The success line (`skill_done` body, §26.5) reads **"✓ Scheduled for Upali, Thu 09:00"** (or "…, every day at
+  09:00"). The activity summary is unchanged (recipient and time, never the text).
+
+### 42.5 The skill and permission state (amends §26.2, §26.8)
+**Phone (normative):** the app sends the §26.2 `PATCH` with `client_permission` for every skill with an Android
+permission **on start, whenever the app comes to the foreground, and on every change** it sees. A report whose
+values didn't change is sent at most every 30 minutes (so `reported_at` stays fresh); a change is sent at once.
+
+**Server (normative):**
+- **The device of a voice request** is the device that sent the note (Agent.Voice carries it to the buffered
+  request). When a request has no device (a note retried from the voice queue), the turn uses the asker's
+  `risi_tools` device seen most recently.
+- **`no_permission`** (the `skill_needed` reason, and the `authorize/3` gate) only when the device's report is
+  `denied` or `unsupported` **and** was reported within the last **6 hours**. `unknown`, `not_asked`, a stale
+  report, or no device: the tool is offered; the phone answers at run time (`no_permission`), and Risi says so
+  then, with the [Open Risi skills] chip.
+- **Scheduled messages never need `SCHEDULE_EXACT_ALARM`** (§26.1 "optional"): a `denied` report for it is never
+  `no_permission`; the card says "may be a few minutes late".
+- The skill's own **state** (`off` / `ask` / `allowed`) stays the server's record of the user's choice.
+
+### 42.6 Speech hints (server ↔ speech service, loopback; no client wire change)
+- `POST /v1/audio/transcriptions` gains an optional multipart field **`hotwords`** (comma-separated, at most 60
+  entries and 1000 characters). The service passes them to faster-whisper's `hotwords`, appends them to the
+  Qwen3 ASR context, and to Whisper's initial prompt after the Sinhala-script prompt (never replacing it). The
+  CTC model ignores them. An old service ignores the unknown field.
+- **Always:** `Risi`, `රිසි`, `ரிசி`. A Risi-chat request transcript that starts with a common mis-hearing of the
+  name ("Rishi,", "Risky,", "Reesi,", "රිෂි,") is normalised to "Risi," (only at the start, only in the user's own
+  Risi chat).
+- **The user's own contacts:** for a note in the **sender's own Risi chat** only, the display names the server
+  already holds for that user's friends and chat co-members (at most 50, first names and full names) are added,
+  **per request**. They are never logged, never stored, never in the
+  learning log, never used for another user's note. The phone-side recogniser (the Voice agent's L1) is the
+  preferred place for contact names; this is the server fallback.
+
+### 42.7 Agent design (decision 085)
+- **Owner:** the Risi Brain (`RisiMe.Agent.Turn`) chooses the action; `RisiMe.Agent.SendForMe` is its tool
+  (recipient resolution, the card, the reply). Sending itself is infrastructure (the phone's MLS send path).
+- **Signals:** card shown → [Send] / [Edit] / Cancel / superseded; edit distance of edits (count only); auto-send
+  per contact (phone-local, never reported). **Eval:** the gate's four utterances (en/si × voice/text) plus
+  "message Upali tomorrow 9am" (must schedule), "message Upali" with two Upalis (must ask), "send Upali" with no
+  1:1 chat (must say so). **Index:** share of send requests that reach [Send] in one card without an edit.
+- **Flags:** shadow is not meaningful (the card is the action); `canary` (Harsha) → `on`.
+- **Consequential-action guard:** `send_message` and `schedule_message` are registered **non-consequential**.
+
+### 42.8 Gate
+`scripts/send-for-me-test` (redroid, two phones): "send a message to <name> …" by **text and by voice**, in
+**English and Sinhala** → one card → one [Send] → the message arrives (decrypted) on the second phone →
+"✓ Sent to <name>" shown in the Risi chat. Also: [Edit] then [Send] delivers the edited text; a request with a
+time gives the scheduled card. Server tests: the tool, the card, the edit, the reply, the recipient cases, the
+skill-state rules (voice device, staleness, optional exact alarm), the hotwords never in logs. Android (JVM):
+decoding the new examples, the §42.3 rule (card, edit, own leaf, unused write_id), auto-send only on the asking
+device, the report on resume.
+
+### 42.9 Examples
+`device_put_risi_send.json`:
+```json
+{"mls":{"signature_key":"…","capabilities":["groups","tabs","risi_tools","risi_skills","risi_send"]}}
+```
+`envelope_risi_confirm_send_message.json`:
+```json
+{"v":1,"type":"text","body":"Send to Upali Perera (Private): Hi Upali, please update RisiMe to the latest version.? Update RisiMe to answer.","risi":{"v":1,"kind":"confirm","request_id":"6d1f2e3a-4b5c-4d6e-9f7a-8b9c0d1e2f3a","write_id":"2b3c4d5e-6f70-4812-93a4-b5c6d7e8f901","tool":"send_message","summary":"Send to Upali Perera (Private): Hi Upali, please update RisiMe to the latest version.","when":null,"text":"Hi Upali, please update RisiMe to the latest version.","args":{"conversation_id":"dm:0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e_7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3","text":"Hi Upali, please update RisiMe to the latest version."},"send":{"to":{"name":"Upali Perera","user_id":"0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e"},"tab":"private","language":"en"},"for":["7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3"],"buttons":["send","edit","cancel"],"expires_at":"2026-10-15T02:23:30.456Z","turn_ref":"8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","call_ref":"7e2a3f4b-5c6d-4e7f-8a9b-0c1d2e3f4a5b","notify":["7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3"]}}
+```
+`envelope_risi_action_confirm_write_send_edit.json`:
+```json
+{"v":1,"type":"risi_action","action":"confirm_write","target":"2b3c4d5e-6f70-4812-93a4-b5c6d7e8f901","edit":{"text":"Hi Upali, please update RisiMe today."}}
+```
+`event_risi_tool_call_send_message.json`:
+```json
+{"event_id":"e5b2c3d4-a5b0-11f1-8000-0242ac120002","kind":"risi_tool_call","data":{"tool_call_id":"4c5d6e7f-8a9b-4c0d-9e1f-2a3b4c5d6e7f","turn_id":"8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","request_id":"6d1f2e3a-4b5c-4d6e-9f7a-8b9c0d1e2f3a","conversation_id":"grp:2f3a4b5c-6d7e-4f8a-9b0c-1d2e3f4a5b6c","device_id":"c0a80101-0000-4000-8000-000000000001","tool":"send_message","args":{"write_id":"2b3c4d5e-6f70-4812-93a4-b5c6d7e8f901","conversation_id":"dm:0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e_7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3","text":"Hi Upali, please update RisiMe to the latest version."},"undo_entry_id":null,"expires_at":"2026-10-14T02:25:30.000Z","to_devices":["c0a80101-0000-4000-8000-000000000001"],"server_ts":"2026-10-14T02:23:30.000Z"}}
+```
+`risi_tool_result_send_message.json`:
+```json
+{"status":"ok","result":{"state":"sent"}}
+```
+`envelope_risi_message_sent.json`:
+```json
+{"v":1,"type":"text","body":"✓ Sent to Upali Perera","risi":{"v":1,"kind":"message_sent","request_id":"6d1f2e3a-4b5c-4d6e-9f7a-8b9c0d1e2f3a","write_id":"2b3c4d5e-6f70-4812-93a4-b5c6d7e8f901","conversation_id":"dm:0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e_7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3","to":{"name":"Upali Perera","user_id":"0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e"},"tab":"private","state":"sent","turn_ref":"8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","call_ref":null,"made_by":{"model":null,"provider":"rule","at":"2026-10-14T02:23:33.000Z","also":[]},"notify":["7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3"]}}
+```
+
+### 42.10 What ships where
+- **Server only (fast lane, works with nightly.7):** the voice-device fix and the §42.5 server rules (the P1's
+  false "off"), `schedule_message` only with a time, `send_message` Phase 1 (the `draft` card), the hotwords
+  field and the "Risi," normalisation, the flag.
+- **Needs the APK:** `risi_send` (the [Send] [Edit] card, the phone send, `message_sent`, per-contact auto-send),
+  the report on resume, the plain-words Risi skills page.
+- **Needs the speech service rebuilt** (root, `infra/whisper`): `hotwords` taking effect.
+
+- **Examples (applied):** `device_put_risi_send.json`, `envelope_risi_confirm_send_message.json`,
+  `envelope_risi_action_confirm_write_send_edit.json`, `event_risi_tool_call_send_message.json`,
+  `risi_tool_result_send_message.json`, `envelope_risi_message_sent.json`.
+
+## 43. Permission fix-it: "I need your calendar to do that." (v1.49)
+Applied from `contract/proposals/2026-10-14-permission-fixit.md` (Harsha 2026-10-14 10:55 / 10:57). Amends §26.2,
+§26.5 and §28.3: for a device with `risi_fixit` (and the switch on for the asker), `needs_permission` replaces
+`skill_needed`; phones without `risi_fixit` keep `skill_needed` exactly.
+
+### 43.0 Principles
+1. **One plain sentence:** "I need your calendar to do that." (in the request's language).
+2. **One button:** **[Allow calendar]**. It shows the Android permission prompt directly. If Android blocks
+   the prompt ("don't ask again"), it opens RisiMe's app-permissions page with the hint "Tap Calendar →
+   Allow". If the skill was off, the same tap turns it on: `ask` ("Show me first") by default.
+3. **After the user allows,** the phone tells Risi. **Risi retries the original request automatically** and
+   confirms it as usual (the card, then "✓ Added to your calendar").
+4. **After the user says no:** "OK, I won't use your calendar. You can change this in Risi skills." There is
+   no nagging. Risi asks again only on the next request that needs the permission.
+5. **This applies to every permission:** calendar, contacts, microphone, notifications, location, alarms, and
+   any future one. **Ask at first need,** never from the background. The user's own tap is the consent.
+6. **Never a false "off"** (§42.5 still holds): the card is shown only when the user's skill is off, or the
+   phone's fresh report or its own tool result says the permission is not granted.
+
+### 43.1 Capability and switch
+- **Device capability `risi_fixit`** (`mls.capabilities`, kept only with `risi_skills`). A device advertises
+  it once it handles this whole section.
+- **`RISI_PERMISSION_FIXIT`** = `off | canary | on` (runtime, `RisiMe.Agents.Flags`; default `canary`).
+- **The card is sent** when the switch is on for the asker **and** the asking device (or, when no device is
+  known, any device of the asker) advertises `risi_fixit`. Otherwise the server sends the §26.5
+  `skill_needed`, unchanged.
+
+### 43.2 The card `needs_permission` (new `risi.kind`, in the asker's Risi chat)
+```
+risi: {"v": 1, "kind": "needs_permission", "request_id": uuid, "resume_id": uuid,
+       "permission": "calendar" | "contacts" | "microphone" | "notifications" | "location" | "alarms",
+       "skill_id": "calendar" | "reminders" | "alarm" | … | null,
+       "turn_on": bool,          the skill is off: the tap also turns it on (state "ask")
+       "text": "I need your calendar to do that.",
+       "buttons": ["allow"], "expires_at": ts, "turn_ref": uuid | null, "call_ref": null,
+       "made_by" (rule), "notify": [asker]}
+body: "I need your calendar to do that. Update RisiMe to allow it here, or turn it on in Settings → Risi skills."
+```
+- `resume_id` names the server's sealed record of the original request (24 h; §43.4).
+- `permission` → Android (informative): calendar = `READ_CALENDAR` + `WRITE_CALENDAR`; contacts =
+  `READ_CONTACTS`; microphone = `RECORD_AUDIO`; notifications = `POST_NOTIFICATIONS` (API 33+); location =
+  `ACCESS_COARSE_LOCATION`; alarms = no runtime permission (the tap only turns the skill on). The app labels the
+  button "Allow calendar" / "Allow contacts" / …; an unknown `permission` shows "Open Risi skills".
+- If the request came from a group, the group gets only the §25.1 pointer line, as for every personal card.
+- Old apps (no `risi_fixit`) never get this kind.
+
+### 43.3 The two answers (`risi_action`, from the asker's own leaf, in the Risi chat)
+| `action` | `target` | when |
+|---|---|---|
+| **`permission_granted`** | `resume_id` | after Android says granted. The phone has already sent the §26.2 `PATCH` (`client_permission: "granted"`, and `state: "ask"` when `turn_on`) |
+| **`permission_declined`** | `resume_id` | the user refused the prompt, or closed the settings page without allowing |
+`edit: null` (`envelope_risi_action_permission_granted.json`). Anyone else's, a second one, or one after
+`expires_at`, is ignored.
+
+- **`permission_granted`:** Risi runs the original request again (a fresh turn with the same `request_id`, the
+  same text and the same routing, §34). No model call is spent on the card itself.
+- **`permission_declined`:** Risi posts the `answer` "OK, I won't use your calendar. You can change this in Risi
+  skills." with `next_actions: [{"label": "Risi skills", "action": "open", "target": "settings.risi_skills"}]`.
+  Nothing else: no reminder, no second card for that request.
+
+### 43.4 Server (normative)
+- **When:** instead of `skill_needed` (§26.5, §28.3) for a skill that is off or lacks the phone permission; and
+  when a client tool step answers `no_permission` (§25.3) in a turn.
+- **The resume record:** a `risi_pending_writes` row with `state: "resume"`, `tool: "needs_permission"`, the
+  original request's `message_id`, `permission` and `skill_id` sealed with `RISI_DATA_KEY`, 24 h, one use. It
+  holds ids only, never the request text: the text stays in the sealed 24-h buffer it is read from.
+- Learning log: the step stays `need_skill` / `denied` in `risi_turn_steps` (hashes only).
+
+### 43.5 The phone (android, normative)
+- **The card:** the sentence and **[Allow calendar]**. The tap runs `requestPermissions` from the chat
+  screen. If `shouldShowRequestPermissionRationale` is false after a refusal (Android blocks the prompt), the
+  app opens `Settings.ACTION_APPLICATION_DETAILS_SETTINGS` and shows "Tap Calendar → Allow". When the user
+  comes back, the app checks the permission again.
+- **Granted:** first the `PATCH`, then `permission_granted`. The card shows "✓ Risi can see your calendar".
+  **Refused:** `permission_declined`; the card shows "Not allowed".
+- **Settings → Risi skills → Calendar** (and contacts, notifications, microphone, the same pattern):
+  - not granted: one line and one button, "Risi can't see your calendar yet." **[Allow calendar]** (the same
+    prompt-or-settings logic);
+  - granted: "✓ Risi can see your calendar", then the "Show me first" / "Do it without asking" choice. Nothing
+    else.
+  - `READ_CALENDAR`/`WRITE_CALENDAR`, auto-sync, the window, the calendar count, error text and Copy diagnostics
+    are shown **only in developer mode**.
+- **Ask at first need:** the first "Add to calendar" (or the morning brief's calendar read) on a phone that
+  never asked shows the card's sentence and the prompt, with one line on why.
+
+### 43.6 Gate
+- Server tests, one per permission (calendar, notifications, alarms; contacts, microphone and location have
+  the same shape): denied → `needs_permission` card with `resume_id` → `permission_granted` → the original
+  request runs again (for the calendar, its card) → declined gives the one sentence. Old devices still get
+  `skill_needed`.
+- Android (JVM): the card decodes; the button picks the prompt or the settings page; granted sends the
+  `PATCH` and then `permission_granted`; declined sends `permission_declined`; the Calendar settings screen
+  shows only the line and the button until the permission is granted; developer details are hidden.
+- Device gate (scripts/send-for-me-test grows a step): "add dentist Friday 10am" with the calendar permission
+  revoked (`pm revoke`) → card → [Allow calendar] → `pm grant` stands in for the dialog → the calendar card
+  appears without a new request.
+
+### 43.7 Examples
+`envelope_risi_needs_permission.json`:
+```json
+{"v":1,"type":"text","body":"I need your calendar to do that. Update RisiMe to allow it here, or turn it on in Settings → Risi skills.","risi":{"v":1,"kind":"needs_permission","request_id":"6d1f2e3a-4b5c-4d6e-9f7a-8b9c0d1e2f3a","resume_id":"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f","permission":"calendar","skill_id":"calendar","turn_on":true,"text":"I need your calendar to do that.","buttons":["allow"],"expires_at":"2026-10-15T05:30:00.000Z","turn_ref":"8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","call_ref":null,"made_by":{"model":null,"provider":"rule","at":"2026-10-14T05:30:00.000Z","also":[]},"notify":["7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3"]}}
+```
+`envelope_risi_action_permission_granted.json`:
+```json
+{"v":1,"type":"risi_action","action":"permission_granted","target":"3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f","edit":null}
+```
+
+### 43.8 What ships where
+- **Server only (fast lane):** the card, the resume record and the two actions, behind `RISI_PERMISSION_FIXIT`.
+  It is inert until a phone advertises `risi_fixit`.
+- **APK:** `risi_fixit`, the card, the prompt-or-settings button, the new Calendar settings screen, asking at
+  first need, and developer-only diagnostics.
+
+- **Examples (applied):** `envelope_risi_needs_permission.json`, `envelope_risi_action_permission_granted.json`,
+  `device_put_risi_fixit.json`.
+
 ## Changelog
+- **v1.49** (2026-10-14, one bundle of today's proposals already implemented on main; **v1.48 (Call Risi §41) is
+  reserved and applied separately**):
+  - §37.11 spoken @Risi in Official (proposal 2026-10-14-spoken-risi): a vocative "Risi, …" on Risi's own transcript of
+    an Official note is the voice form of the chip (addressed vs mentioned rules, unsure → local model ≥ 0.9, never
+    silent: ask back); the @Risi chip on an Official voice note stamps the §37.2 `request_id` (now meaningful in
+    Official too); optional `risi.voice_ref` on the replies; flag `RISI_SPOKEN_MENTION` (default `canary`). One-line
+    amendments to §24.11, §25.0, §37.2, §37.6.
+  - §37.8 never "type it" (proposal 2026-10-14-voice-queue): the prescribed answers (very short, unclear, can't open,
+    too long, "Got your voice note. I'll reply in a moment.", the 30-min give-up, "coming soon for your account") and
+    the Risi-chat retry queue; §37.6 step 4 gains the sealed `risi_voice_queue` exception. No wire change.
+  - §37.10 the phone transcript as a guarded fallback input (proposal 2026-10-14-phone-transcript-fallback, with its
+    Google addendum): flag `RISI_VOICE_PHONE_FALLBACK` (default `off`), the 3 × duration (≥ 15 s) budget and order;
+    `voice_transcript` gains optional `source: "phone"` and `engine`; the `risi_dev` opt-in engine
+    `android-online-google` is labelled "Transcript (Google)" (`model: "phone-google"`); the phone may now write
+    `phone_transcript` in the user's Risi chat too (proposal 2026-10-14-phone-transcript amendment).
+  - §37.12 transcription progress, Stop and Try again (proposal 2026-10-14-transcribe-progress, renumbered from
+    §37.11): signal `voice_transcribing`, `POST /me/risi/voice/cancel` and `/retry`, flag `RISI_VOICE_PROGRESS`
+    (default `off`).
+  - §10.4 / §24.9 / §25.2 Official wording (proposal 2026-10-14-official-wording): Official and the Risi chat show the
+    Official lock and "Encrypted · Risi can read" (calls: "Encrypted · Risi can listen" / "End-to-end encrypted ·
+    Official"), never the Private lock or "end-to-end encrypted". Client-only.
+  - §37.13 "Wrong language?" and Translate (proposal 2026-10-14-voice-translate, which named it v1.50): `risi_action`
+    `transcript_language` (re-transcribe with a forced language, the note's blob/enc carried inside MLS),
+    `voice_transcript` `relang` (replaces the earlier transcript), per-viewer `POST /api/v1/risi/translate`,
+    `always_translate` / `translate_available` on `/me/risi/voice` (absent while unavailable); flag
+    `RISI_VOICE_TRANSLATE` (default `canary`). Server side only so far.
+  - §42 Send a message for me (proposal 2026-10-14-send-for-me): capability `risi_send`, the client tool
+    `send_message` and its one-tap card (`send` display object, [Send] [Edit], `confirm_write` `edit: {"text"}`), the
+    kind `message_sent`, `schedule_message` only with a time, fresh-only `no_permission` (6 h) and the voice request's
+    device, speech `hotwords`; flag `RISI_SEND_FOR_ME` (default `canary`).
+  - §43 Permission fix-it (proposal 2026-10-14-permission-fixit): capability `risi_fixit`, the kind
+    `needs_permission` ([Allow calendar]), `risi_action` `permission_granted` / `permission_declined` (Risi resumes
+    the original request); flag `RISI_PERMISSION_FIXIT` (default `canary`). Phones without `risi_fixit` keep
+    `skill_needed`.
+  - §22.5 / §22.6 held texts in backups (proposal 2026-10-14-backup-held, hard rule 9): `message` lines gain an
+    optional `outbox` {`state`, `client_ts`} for the user's own unsent text; restored with the same `client_msg_id`,
+    held again (never `plain_ok`), never twice; the upgrade gate counts them. `schema` unchanged.
+  - §35.4 the morning brief's example `envelope_risi_digest_brief.json` (no wire change).
+  - All additive. New capabilities `risi_send`, `risi_fixit`; no new §0 error object (the §37.12 and §37.13
+    endpoints answer bare `{"error": "<code>"}` strings, except `422 bad_request`).
 - **v1.47** (2026-10-14, Part 12 quick fix 2): §37.10 optional `voice.phone_transcript` {`text`, `lang`, `engine`}:
   the sender phone's own on-device transcript inside the E2EE voice envelope (never an online recogniser; not in
   the Risi chat, not with `transcribe: false`, dropped on forward; receivers validate leniently; Risi ignores it).

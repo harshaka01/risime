@@ -659,7 +659,121 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + mapOf(
+    /**
+     * v1.49 (2026-10-14 bundle; v1.48 is reserved for Call Risi): §37.11 the chip's `request_id` on an Official note and
+     * `risi.voice_ref`, §37.10 phone-sourced transcripts (`source`, `engine`), §37.12 `voice_transcribing` and Stop /
+     * Try again, the §35.4 brief. Fields this app doesn't model yet (voice_ref, source, engine, the signal and the two
+     * endpoints) are checked on the raw JSON; the Risi cards also go through the real parsers and [RisiRender].
+     */
+    private val v149: Map<String, (String) -> Any> by lazy {
+        fun obj(s: String) = ProtocolJson.parseToJsonElement(s).jsonObject
+        fun risi(s: String) = obj(s)["risi"]!!.jsonObject
+        fun str(o: JsonObject, k: String) = o[k]!!.jsonPrimitive.content
+        fun shown(s: String): RisiMeta {
+            val env = ProtocolJson.decodeFromString<RisiTextEnvelope>(s)
+            val m = env.risi!!
+            val text = ai.risicloud.risime.data.tabs.RisiRender.visibleText(env.body, m)
+            require(text.isNotBlank() && text != ai.risicloud.risime.data.tabs.RisiRender.FALLBACK) { "renders" }
+            return m
+        }
+        fun phoneCard(s: String, engine: String, model: String) = shown(s).also {
+            val t = RisiVoiceTranscript.parse(risi(s).toString())!!
+            require(t.ok && t.model == model)
+            val r = risi(s)
+            require(str(r, "source") == "phone" && str(r, "engine") == engine && str(r["made_by"]!!.jsonObject, "provider") == "phone")
+        }
+        mapOf(
+            "voice_payload_official_chip.json" to { s ->
+                val d = ai.risicloud.risime.data.mls.MlsPayload.decode(s.toByteArray())
+                (d as ai.risicloud.risime.data.mls.MlsPayload.Decoded.Voice).envelope.also {
+                    require(it.requestId == "2b7c4e1a-9d3f-4a8b-8c6e-5f0a1b2c3d4e" && it.durationMs == 6_200L && it.phoneTranscript == null)
+                }
+            },
+            "envelope_risi_answer_voice_ref.json" to { s ->
+                shown(s).also { m ->
+                    require(m.kind == "answer")
+                    val ref = risi(s)["voice_ref"]!!.jsonObject
+                    require(str(ref, "message_id") in risi(s)["refs"]!!.jsonArray.map { it.jsonPrimitive.content } && str(ref, "speaker").length == 36)
+                }
+            },
+            "envelope_risi_voice_transcript_phone.json" to { s -> phoneCard(s, "android-on-device", "phone-on-device") },
+            "envelope_risi_voice_transcript_google.json" to { s -> phoneCard(s, "android-online-google", "phone-google") },
+            "signal_voice_transcribing.json" to { s ->
+                ProtocolJson.decodeFromString<Signal>(s).also { sig ->
+                    require(sig.kind == "voice_transcribing")
+                    val d = sig.data
+                    require(str(d, "state") in setOf("working", "done", "cancelled", "failed") && str(d, "language") == "si")
+                    require(d["seq"]!!.jsonPrimitive.int == 1 && d["can_cancel"]!!.jsonPrimitive.boolean && !d["can_retry"]!!.jsonPrimitive.boolean)
+                    require(str(d, "conversation_id").startsWith("grp:") && "message_id" in d && "server_ts" in d)
+                }
+            },
+            "me_risi_voice_cancel.json" to { s -> obj(s).also { require(it.keys == setOf("conversation_id", "message_id")) } },
+            "me_risi_voice_cancel_reply.json" to { s -> obj(s).also { require(str(it, "state") == "cancelled" && it["can_retry"]!!.jsonPrimitive.boolean) } },
+            "me_risi_voice_retry_reply.json" to { s -> obj(s).also { require(str(it, "state") == "working") } },
+            "envelope_risi_digest_brief.json" to { s ->
+                val env = ProtocolJson.decodeFromString<RisiTextEnvelope>(s)
+                val m = env.risi!!
+                require(m.kind == "digest" && m.scope == "brief" && m.decisions == listOf("Go with vendor B"))
+                require(ai.risicloud.risime.data.tabs.RisiRender.digestShowsBody(m))
+                require(ai.risicloud.risime.data.tabs.RisiRender.visibleText(env.body, m) == env.body && env.body.startsWith("Good morning"))
+                m
+            },
+            // §22.5 held texts in backups (data/backup/BackupBundle.kt).
+            "backup_entry_message_outbox.json" to { s ->
+                ProtocolJson.decodeFromString<ai.risicloud.risime.data.backup.BackupMessageLine>(s).also {
+                    require(it.outbox!!.state == ai.risicloud.risime.data.backup.BackupOutbox.PENDING && it.outbox!!.clientTs == "2026-10-14T00:41:07.512Z" && it.payload["type"]!!.jsonPrimitive.content == "text")
+                }
+            },
+            // §42 send a message for me (net/Protocol149.kt).
+            "device_put_risi_send.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(DeviceMls.CAP_RISI_SEND in it.mls!!.capabilities!! && CAPABILITY_RISI_TOOLS in it.mls!!.capabilities!!) } },
+            "envelope_risi_confirm_send_message.json" to { s ->
+                shown(s).also { m ->
+                    require(m.kind == "confirm" && m.tool == RisiSend149.TOOL_SEND_MESSAGE && m.writeId == "2b3c4d5e-6f70-4812-93a4-b5c6d7e8f901")
+                    require(m.send == RisiSend(RisiSendTo("Upali Perera", "0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e"), RisiSendTabs.PRIVATE, "en"))
+                    require(risi(s)["buttons"]!!.jsonArray.map { it.jsonPrimitive.content } == listOf(RisiSend149.BUTTON_SEND, RisiSend149.BUTTON_EDIT, RisiSend149.BUTTON_CANCEL))
+                }
+            },
+            "envelope_risi_action_confirm_write_send_edit.json" to { s ->
+                obj(s).also { require(ai.risicloud.risime.data.tabs.RisiControl.valid(it) && str(it, "action") == "confirm_write" && it["edit"]!!.jsonObject.keys == setOf(RisiSend149.EDIT_TEXT)) }
+            },
+            "event_risi_tool_call_send_message.json" to { s ->
+                ProtocolJson.decodeFromString<Event>(s).risiToolCall()!!.also { c ->
+                    val a = c.sendMessageArgs()!!
+                    require(c.tool == RisiSend149.TOOL_SEND_MESSAGE && a.conversationId.startsWith("dm:") && a.writeId == c.writeId && a.text.startsWith("Hi Upali"))
+                }
+            },
+            "risi_tool_result_send_message.json" to { s ->
+                ProtocolJson.decodeFromString<RisiToolResult>(s).also { require(it.status == RisiToolResult.OK && ProtocolJson.decodeFromJsonElement(SendMessageResult.serializer(), it.result!!).state == SendMessageResult.SENT) }
+            },
+            "envelope_risi_message_sent.json" to { s ->
+                shown(s).also { m -> require(m.kind == RisiSend149.KIND_MESSAGE_SENT && str(risi(s), "state") == SendMessageResult.SENT && "text" !in risi(s)) }
+            },
+            // §43 permission fix-it.
+            "device_put_risi_fixit.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(DeviceMls.CAP_RISI_FIXIT in it.mls!!.capabilities!! && CAPABILITY_RISI_SKILLS in it.mls!!.capabilities!!) } },
+            "envelope_risi_needs_permission.json" to { s ->
+                shown(s).also { m -> require(m.kind == RisiFixit143.KIND_NEEDS_PERMISSION && m.permission == RisiFixit143.CALENDAR && m.turnOn == true && m.resumeId == "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f") }
+            },
+            "envelope_risi_action_permission_granted.json" to { s ->
+                obj(s).also { require(str(it, "action") == RisiFixit143.ACTION_GRANTED && str(it, "target") == "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f") }
+            },
+            // §37.13 wrong language and Translate: not modelled by this app yet (server-side only); checked raw.
+            "envelope_risi_action_transcript_language.json" to { s ->
+                obj(s).also { require(str(it, "action") == "transcript_language" && str(it, "language") in setOf("si", "ta", "en") && "blob" in it["voice"]!!.jsonObject && "enc" in it["voice"]!!.jsonObject) }
+            },
+            "envelope_risi_voice_transcript_relang.json" to { s ->
+                shown(s).also {
+                    require(RisiVoiceTranscript.parse(risi(s).toString())!!.language == "ta")
+                    require(str(risi(s)["relang"]!!.jsonObject, "to") == "ta")
+                }
+            },
+            "risi_translate_request.json" to { s -> obj(s).also { require(it.keys == setOf("conversation_id", "message_id", "target")) } },
+            "risi_translate_reply.json" to { s -> obj(s).also { require(str(it, "label") == "Translated by Risi" && str(it, "source_language") == "ta" && "text" in it) } },
+            "me_risi_voice_put_v149.json" to { s -> ProtocolJson.decodeFromString<RisiVoiceSettings>(s).also { require(it.transcribe && it.actionItems) } },
+            "me_risi_voice_reply_v149.json" to { s -> ProtocolJson.decodeFromString<RisiVoiceSettings>(s).also { require(it.transcribe && it.actionItems && obj(s)["translate_available"]!!.jsonPrimitive.boolean) } },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + v149 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

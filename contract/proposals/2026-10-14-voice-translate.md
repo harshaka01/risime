@@ -1,6 +1,8 @@
 # Proposal 2026-10-14: "Wrong language?" and Translate for Risi transcripts (v1.50, §37.13)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.50** (after the v1.49 bundle). Server and Android
+**Status:** APPLIED as **v1.49 §37.13** (root, 2026-10-14, folded into the v1.49 bundle; example names `*_v150` became
+`me_risi_voice_put_v149.json` / `me_risi_voice_reply_v149.json`; `translate_available`/`always_translate` are absent while
+unavailable, as the server does; 422 is the §0 `bad_request` object). Was: proposal for root/Harsha, to be applied as **v1.50** (after the v1.49 bundle). Server and Android
 implement it **behind the runtime flag `RISI_VOICE_TRANSLATE`** (`off` | `canary` | `on`, default **`canary`**:
 dev users first). Additive only: old apps ignore the new kind fields and never call the new endpoint.
 

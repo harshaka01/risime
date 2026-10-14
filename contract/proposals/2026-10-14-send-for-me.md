@@ -1,6 +1,6 @@
 # Proposal: "Send a message for me", scheduled messages only with a time, the skill-state report (2026-10-14)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.49 §42** (§41 is taken by the Call Risi proposal) (amends §25.4, §26.2, §26.3, §26.6,
+**Status:** APPLIED as **v1.49 §42** (root, 2026-10-14). Was: proposal for root/Harsha, to be applied as **v1.49 §42** (§41 is taken by the Call Risi proposal) (amends §25.4, §26.2, §26.3, §26.6,
 §26.8, §28.4, §37.8). Nothing in PROTOCOL.md changes until root applies it. Server and Android implement it
 **behind flags**: server `RISI_SEND_FOR_ME` = `off | canary | on` (default `canary` = `RISI_DEV_USERS`,
 Harsha first); the app advertises the new capability only while its developer flag `send_for_me` is on

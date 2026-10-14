@@ -21,7 +21,7 @@ defmodule RisiMe.Contract.ExamplesV147Test do
              example("voice_payload_phone_transcript.json")["phone_transcript"]
   end
 
-  # Proposal 2026-10-14-phone-transcript-fallback (§37.10 amendment, v1.48): the validated note
+  # v1.49 §37.10 (proposal 2026-10-14-phone-transcript-fallback): the validated note
   # may carry a valid phone transcript ONLY as a speech-fallback input (RisiMe.Agent.Speech.
   # transcribe_note/2, behind RISI_VOICE_PHONE_FALLBACK, default off). It is never posted, never
   # used for extraction and never logged while Risi's own model answers (voice_test.exs

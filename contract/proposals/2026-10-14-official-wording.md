@@ -1,6 +1,6 @@
 # Proposal: Official never shows the Private lock or wording ("Encrypted · Risi can read") (2026-10-14, android worker)
 
-**Status:** proposal for root/Harsha (Harsha 2026-10-14, item 6 "honesty"). To be applied as a **§10.4 / §24.9 / §25.2
+**Status:** APPLIED as **v1.49 §10.4 / §24.9 / §25.2** (root, 2026-10-14). Was: proposal for root/Harsha (Harsha 2026-10-14, item 6 "honesty"). To be applied as a **§10.4 / §24.9 / §25.2
 clarification** in the next free version. Client-only wording and icons: **no wire change**, no capability, no server
 change. Android implements it against this text (commit `fix(android): Official never shows the Private lock…`).
 
