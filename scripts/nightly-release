@@ -201,7 +201,8 @@ gate_ports CALLTEST_LLM_PORT=8197 CALLTEST_PORT=4410 CALLTEST_REDROID_A_PORT=573
   UITEST_LLM_PORT=8217 UITEST_PORT=4677 UITEST_REDROID_A_PORT=5877 UITEST_REDROID_B_PORT=5878 \
   EC_LLM_PORT=8165 EC_PORT=4165 EC_REDROID_A_PORT=5751 EC_REDROID_B_PORT=5752 \
   RC_LLM_PORT=8166 RC_PORT=4166 RC_PROXY_PORT=8167 RC_REDROID_A_PORT=5761 RC_REDROID_B_PORT=5762 RC_CLIP_PORT=8169 TX_CLIP_PORT=8766 VN_CLIP_PORT=8768 MP_OG_PORT=8781 \
-  OSTEST_PORT=4188 OSTEST_LLM_PORT=8188 OSTEST_REDROID_A_PORT=5881 OSTEST_REDROID_B_PORT=5882 OSTEST_REDROID_C_PORT=5883
+  OSTEST_PORT=4188 OSTEST_LLM_PORT=8188 OSTEST_REDROID_A_PORT=5881 OSTEST_REDROID_B_PORT=5882 OSTEST_REDROID_C_PORT=5883 \
+  CS_PORT=4414 CS_LLM_PORT=8191 CS_REDROID_A_PORT=5755 CS_REDROID_B_PORT=5756 CS_CLIP_PORT=8767
 # P0 2026-10-12 product gates (BLOCKING; own redroids and ports): B = the sign-in screen reaches a slow server and
 # says "This phone is offline"; C = the Official banner is its own row below the tabs at 720 px, font 1.0 and 1.3.
 if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
@@ -223,6 +224,10 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   STEP_T=2700 step scripts/call-back-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-BACK TEST FAILED: not releasing"; exit 1; }
   echo "==> Official-call transcription (scripts/call-transcribe-test, §36: consent, speakers, Stop, no audio left, Private untouched)"
   STEP_T=2700 step scripts/call-transcribe-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-TRANSCRIBE TEST FAILED: not releasing"; exit 1; }
+  # P0 2026-10-14: the after-call summary with the pilot's flags (RISI_ACTION_ITEMS=canary): a card within 30 s on both
+  # phones with one item, with zero items, and after Stop mid-call ("Summary of the first … min"); Private posts nothing.
+  echo "==> after-call summary (scripts/call-summary-test, P0 2026-10-14: zero action items still give the summary card)"
+  STEP_T=2700 step scripts/call-summary-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-SUMMARY TEST FAILED: not releasing"; exit 1; }
   echo "==> encryption clarity (scripts/e2ee-clarity-test: list markers, no silent plaintext, hold after a reinstall)"
   STEP_T=2400 step scripts/e2ee-clarity-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "E2EE CLARITY TEST FAILED: not releasing"; exit 1; }
   echo "==> talking to Risi (scripts/risi-chat-test: replies, offline notice, @Risi in Official, Private hint)"
