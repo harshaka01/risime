@@ -699,7 +699,7 @@ open_chat() {
   back_to_list || { A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null; sleep 2; dismiss_prompts; }
   wait_for "$1" 40 || return 1; tap "$1"; sleep 2
 }
-# Settings → Risi skills: wait until the skill titled $1 shows the state label $2 ("Off" | "Ask me each time" |
+# Settings → Risi skills: wait until the skill titled $1 shows the state label $2 ("Off" | "On" (was "Ask me each time") |
 # "Allowed"), up to $3 s (the label under the title; Compose's switch state isn't in uiautomator's "checked").
 wait_skill() {
   for _ in $(seq 1 "${3:-20}"); do
@@ -707,7 +707,7 @@ wait_skill() {
     python3 -I - "$WORK/ui-$DEV.xml" "$1" "$2" <<'PY' && return 0
 import sys, xml.etree.ElementTree as ET
 texts = [n.get('text') for n in ET.parse(sys.argv[1]).iter('node') if n.get('text')]
-states = {"Off", "Ask me each time", "Allowed", "Coming later"}
+states = {"Off", "On", "On · Do it without asking", "Ask me each time", "Allowed", "Coming later"}
 for i, t in enumerate(texts):
     if t == sys.argv[2]:
         nxt = next((x for x in texts[i + 1:] if x in states), None)
@@ -1018,11 +1018,11 @@ if [ "$SKILLS_STEP" = 1 ] && { [ "$ONLY" = 00000 ] || [ "${UITEST_SKILLS_ONLY:-0
   wait_for 'content-desc="Alarm skill"' 30 || fail "Risi skills: no Alarm switch"
   has 'Coming later' || true
   reveal "Alarm skill" && tap "Alarm skill" || fail "turn on Alarm"
-  wait_skill "Alarm" "Ask me each time" 20 || fail "Alarm didn't turn on (Ask me each time)"
+  wait_skill "Alarm" "On" 20 || fail "Alarm didn't turn on (Ask me each time)"
   pass "Settings → Risi skills: Alarm on (Ask me each time)"
   reveal "Scheduled messages skill" || fail "Risi skills: no Scheduled messages switch"
   tap "Scheduled messages skill" || fail "turn on Scheduled messages"
-  wait_skill "Scheduled messages" "Ask me each time" 20 || fail "Scheduled messages didn't turn on (exact alarms granted)"
+  wait_skill "Scheduled messages" "On" 20 || fail "Scheduled messages didn't turn on (exact alarms granted)"
   A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 80 / 100)) 300; sleep 1
   A shell input swipe $((W / 2)) $((H * 30 / 100)) $((W / 2)) $((H * 80 / 100)) 300; sleep 1
   shot "14-risi-skills"
@@ -1492,7 +1492,7 @@ PY
     sleep 1
   done
   [ "$asked" -gt 0 ] || { echo "    (no runtime prompt seen: granting READ/WRITE_CALENDAR with pm)"; A shell pm grant "$PKG" android.permission.READ_CALENDAR; A shell pm grant "$PKG" android.permission.WRITE_CALENDAR; }
-  wait_skill "Calendar" "Ask me each time" 20 || fail "$1: Calendar didn't turn on (Ask me each time)"
+  wait_skill "Calendar" "On" 20 || fail "$1: Calendar didn't turn on (Ask me each time)"
   pass "$1: Settings → Risi skills → Calendar on (Ask me each time) after the calendar permission prompt ($asked tap(s) on Allow)"
   CAL_READY=1
 }
