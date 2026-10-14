@@ -17,8 +17,8 @@ cd "$(dirname "$0")/.."
 M="$HOME/.local/bin/mise exec --"
 LOGD="$HOME/risime-logs/health-heal-test"; mkdir -p "$LOGD"; LOG="$LOGD/$(date -u +%m%d-%H%M).log"
 avail_gb() { awk '/MemAvailable/ {print int($2/1048576)}' /proc/meminfo; }
-for _ in $(seq 1 60); do [ "$(avail_gb)" -ge 8 ] && break; sleep 30; done
-[ "$(avail_gb)" -ge 8 ] || { echo "HHTEST FAIL MemAvailable < 8 GB for 30 min"; exit 1; }
+for _ in $(seq 1 60); do [ "$(avail_gb)" -ge "${HHTEST_MIN_GB:-3}" ] && break; sleep 30; done
+[ "$(avail_gb)" -ge "${HHTEST_MIN_GB:-3}" ] || { echo "HHTEST FAIL MemAvailable < ${HHTEST_MIN_GB:-3} GB for 30 min (spark2 reads MemAvailable low by design)"; exit 1; }
 export ERL_EPMD_ADDRESS=127.0.0.1 MIX_TEST_PARTITION=hh
 run() {
   local name="$1"; shift

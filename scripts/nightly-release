@@ -217,7 +217,7 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   # Incident 2026-10-14 (Health): a reinstall while peers are on the old app / offline heals (Official via Risi, Private
   # after the peers return; nudged once; one plain report). Server-level, ~1 min. "HHTEST OK".
   echo "==> Health heal (scripts/health-heal-test, incident 2026-10-14)"
-  hh_out="$(STEP_T=1800 step scripts/health-heal-test 2>&1)"; echo "$hh_out" | tail -20
+  hh_out="$(STEP_T=1800 step scripts/health-heal-test 2>&1)" || true; echo "$hh_out" | tail -20
   echo "$hh_out" | grep -q "HHTEST OK" || { echo "HEALTH HEAL TEST FAILED: not releasing"; exit 1; }
   echo "==> call -> back cycles (scripts/call-back-test, bug E: no black screen after a call)"
   STEP_T=2700 step scripts/call-back-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-BACK TEST FAILED: not releasing"; exit 1; }
