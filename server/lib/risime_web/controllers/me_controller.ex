@@ -120,6 +120,46 @@ defmodule RisiMeWeb.MeController do
     end
   end
 
+  @doc """
+  `POST /api/v1/me/risi/voice/cancel` (proposal 2026-10-14-transcribe-progress, flag
+  `RISI_VOICE_PROGRESS`): Stop the running transcription of the caller's own note. Only notes
+  Risi is transcribing (Official / the Risi chat) are known here; never Private.
+  """
+  def risi_voice_cancel(conn, params) do
+    user = conn.assigns.current_user.id
+
+    with true <- RisiMe.Agent.VoiceJobs.enabled_for?(user),
+         {:ok, conv, id} <- voice_job_params(params),
+         {:ok, can_retry} <- RisiMe.Agent.VoiceJobs.cancel(conv, id, user) do
+      json(conn, %{state: "cancelled", can_retry: can_retry})
+    else
+      _ -> conn |> put_status(404) |> json(%{error: "not_running"})
+    end
+  end
+
+  @doc "`POST /api/v1/me/risi/voice/retry` (same proposal): Try again."
+  def risi_voice_retry(conn, params) do
+    user = conn.assigns.current_user.id
+
+    with true <- RisiMe.Agent.VoiceJobs.enabled_for?(user),
+         {:ok, conv, id} <- voice_job_params(params) do
+      case RisiMe.Agent.VoiceJobs.retry(conv, id, user) do
+        :ok -> conn |> put_status(202) |> json(%{state: "working"})
+        {:error, :running} -> conn |> put_status(409) |> json(%{error: "running"})
+        {:error, :expired} -> conn |> put_status(410) |> json(%{error: "expired"})
+        {:error, _} -> conn |> put_status(404) |> json(%{error: "not_found"})
+      end
+    else
+      _ -> conn |> put_status(404) |> json(%{error: "not_found"})
+    end
+  end
+
+  defp voice_job_params(%{"conversation_id" => conv, "message_id" => id})
+       when is_binary(conv) and is_binary(id) and byte_size(conv) < 200 and byte_size(id) < 64,
+       do: {:ok, conv, String.downcase(id)}
+
+  defp voice_job_params(_), do: :error
+
   # v1.24 §24.11: `User` gains `tz` once set (absent: the server default).
   defp user_json(conn, user) do
     json = ApiJSON.user(user, Accounts.phone_verified?(user, conn.assigns.current_auth.kind))

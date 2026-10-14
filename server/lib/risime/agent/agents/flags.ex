@@ -38,12 +38,20 @@ defmodule RisiMe.Agents.Flags do
     # Decision 090: "Call Risi" (a voice call Risi answers); canary = Harsha first.
     "RISI_CALL_RISI" => :risi_call_risi,
     # Proposal 2026-10-14-spoken-risi (§37.11): a spoken "Risi, …" in an Official voice note.
-    "RISI_SPOKEN_MENTION" => :risi_spoken_mention
+    "RISI_SPOKEN_MENTION" => :risi_spoken_mention,
+    # Incident 2026-10-14 (Sinhala slow), proposals 2026-10-14-transcribe-progress and
+    # -phone-transcript-fallback: off until root applies them (v1.48).
+    "RISI_VOICE_PROGRESS" => :risi_voice_progress,
+    "RISI_VOICE_PHONE_FALLBACK" => :risi_voice_phone_fallback
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
   @feature_extra_modes %{"RISI_SPOKEN_MENTION" => ~w(shadow)}
-  @feature_defaults %{"RISI_SPOKEN_MENTION" => "canary"}
+  @feature_defaults %{
+    "RISI_SPOKEN_MENTION" => "canary",
+    "RISI_VOICE_PROGRESS" => "off",
+    "RISI_VOICE_PHONE_FALLBACK" => "off"
+  }
   @masters ~w(on legacy)
   @ttl_ms 5_000
   @ets :risime_agent_flags

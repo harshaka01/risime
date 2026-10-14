@@ -26,6 +26,12 @@ defmodule RisiMe.Agent.Speech.Http do
     `timeout`. Off by default; `transcribe/1,2` never uses it. `extra_models/0` lists what the
     extra service serves (the console's compare-only candidates).
   * **Health:** `GET /health`, cached 15 s.
+  * **Priority** (incident 2026-10-14): `opts[:priority]` `"live"` (voice notes,
+    `Speech.transcribe_note/2`) or `"batch"` (compare) is sent as the multipart field
+    `priority`; call chunks send none (`normal`). The service's priority gate serves `live`
+    first; an older service ignores the field.
+  * **Fallback** (incident 2026-10-14): `fallback_transcribe/2` asks the fast CPU model
+    (omniASR-CTC-1B int8) by name; `Speech.transcribe_note/2` uses it after a timeout.
   * **Language hint** (decision 071 amendment d): `opts[:language_hint]` (`["si", "en"]`) is
     sent as the multipart field `language_hint=si,en` on transcribe and compare (and the
     per-model fallback); omitted when empty.
@@ -122,7 +128,7 @@ defmodule RisiMe.Agent.Speech.Http do
         response_format: "verbose_json"
       ]
 
-      fields = with_hint(fields, opts)
+      fields = fields |> with_hint(opts) |> with_priority(opts)
 
       fields =
         if is_binary(opts[:language]), do: fields ++ [language: opts[:language]], else: fields
@@ -222,7 +228,9 @@ defmodule RisiMe.Agent.Speech.Http do
       timeout = Keyword.get(opts, :timeout, @timeout_ms)
       # All three models may run one after another on the service.
       fields =
-        with_hint([file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"}], opts)
+        [file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"}]
+        |> with_hint(opts)
+        |> with_priority(priority: "batch")
 
       case Req.post(req(base <> "/v1/audio/compare", timeout * 3 + 5_000),
              form_multipart: fields
@@ -435,6 +443,36 @@ defmodule RisiMe.Agent.Speech.Http do
         Speech.lang(Enum.find_value(results, &(&1.model == Speech.route("en") && &1.language)))
 
       {:ok, %{language_detected: detected, chosen: Speech.route(detected), results: results}}
+    end
+  end
+
+  # Incident 2026-10-14: `live` (a voice note), none (call chunks: `normal`) or `batch` (compare,
+  # evals). A service with the priority gate (infra/whisper) serves `live` first; an older one
+  # ignores the field.
+  defp with_priority(fields, opts) do
+    case opts[:priority] do
+      p when p in ["live", "batch"] -> fields ++ [priority: p]
+      _ -> fields
+    end
+  end
+
+  @doc """
+  The fast fallback (incident 2026-10-14): `fallback_model` (else `RISI_SPEECH_FALLBACK_MODEL`,
+  default `omnilingual-ctc-1b`: omniASR-CTC-1B, ONNX int8 on the CPU) by name, no language, no
+  hint; `opts[:timeout]` (default 10 s), `priority` live.
+  """
+  @impl true
+  def fallback_transcribe(audio, opts \\ []) when is_binary(audio) do
+    model =
+      config()[:fallback_model] || System.get_env("RISI_SPEECH_FALLBACK_MODEL") ||
+        "omnilingual-ctc-1b"
+
+    case post_transcription(audio, model,
+           timeout: Keyword.get(opts, :timeout, 10_000),
+           priority: Keyword.get(opts, :priority, "live")
+         ) do
+      {:error, :not_served} -> {:error, :unavailable}
+      other -> other
     end
   end
 

@@ -469,4 +469,53 @@ defmodule RisiMe.Agent.SpeechHttpTest do
     refute Http.healthy?()
     assert {:error, :unavailable} = Http.transcribe("x")
   end
+
+  describe "incident 2026-10-14: priority and the fast fallback" do
+    test "a live note sends priority=live; call chunks send none; compare sends batch" do
+      rec =
+        stub(fn conn, _body ->
+          case conn.request_path do
+            "/v1/audio/compare" -> Req.Test.json(conn, %{"results" => []})
+            _ -> Req.Test.json(conn, %{"text" => "hi", "language" => "en", "model" => "m"})
+          end
+        end)
+
+      assert {:ok, _} = Http.transcribe("a", priority: "live")
+      assert {:ok, _} = Http.transcribe("a")
+      assert {:ok, _} = Http.compare("a")
+
+      [{_, compare, _}, {_, plain, _}, {_, live, _}] = Agent.get(rec, & &1)
+      assert field(live, "priority") == "live"
+      assert field(plain, "priority") == nil
+      assert field(compare, "priority") == "batch"
+    end
+
+    test "fallback_transcribe asks omnilingual-ctc-1b by name, live, no hint" do
+      rec =
+        stub(fn conn, body ->
+          assert field(body, "model") == "omnilingual-ctc-1b"
+          assert field(body, "language_hint") == nil
+
+          Req.Test.json(conn, %{
+            "text" => "හෙට",
+            "language" => nil,
+            "model" => "omnilingual-ctc-1b",
+            "processing_s" => 0.3
+          })
+        end)
+
+      assert {:ok, %{model: "omnilingual-ctc-1b", text: "හෙට", elapsed_ms: 300}} =
+               Http.fallback_transcribe("a", timeout: 10_000)
+
+      [{_, body, _}] = Agent.get(rec, & &1)
+      assert field(body, "priority") == "live"
+    end
+
+    test "fallback_transcribe: an unserved model or memory refusal is unavailable" do
+      stub(fn conn, _ -> Plug.Conn.send_resp(conn, 404, "{}") end)
+      assert {:error, :unavailable} = Http.fallback_transcribe("a")
+      stub(fn conn, _ -> Plug.Conn.send_resp(conn, 503, "{}") end)
+      assert {:error, :unavailable} = Http.fallback_transcribe("a")
+    end
+  end
 end

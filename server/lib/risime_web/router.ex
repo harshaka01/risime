@@ -193,6 +193,9 @@ defmodule RisiMeWeb.Router do
     # v1.41 §37.7: the sender's voice-note setting.
     get "/me/risi/voice", MeController, :risi_voice
     put "/me/risi/voice", MeController, :put_risi_voice
+    # Proposal 2026-10-14-transcribe-progress (flag RISI_VOICE_PROGRESS): Stop / Try again.
+    post "/me/risi/voice/cancel", MeController, :risi_voice_cancel
+    post "/me/risi/voice/retry", MeController, :risi_voice_retry
     get "/calls/:call_id/transcribe", CallsController, :transcribe
     post "/calls/:call_id/transcribe/chunks", CallsController, :transcribe_chunk
   end

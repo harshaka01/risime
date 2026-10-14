@@ -62,7 +62,8 @@ defmodule RisiMe.Agent.Voice do
     Secretary,
     Speech,
     SpokenMention,
-    Transcript
+    Transcript,
+    VoiceJobs
   }
 
   alias RisiMe.{Blobs, Repo, Risi, TimeUUID}
@@ -180,7 +181,13 @@ defmodule RisiMe.Agent.Voice do
          key: key,
          plain_size: plain,
          mime: env["mime"],
-         duration_ms: d
+         duration_ms: d,
+         # §37.10 (lenient: malformed = nil, the note is kept); used only as the speech
+         # fallback while RISI_VOICE_PHONE_FALLBACK is on (incident 2026-10-14).
+         phone_transcript:
+           if(match?({:ok, _, _}, Speech.phone_transcript(env["phone_transcript"])),
+             do: env["phone_transcript"]
+           )
        }}
     else
       _ -> :error
@@ -284,9 +291,10 @@ defmodule RisiMe.Agent.Voice do
   defp start(conv, id, sender, env, note, mode) do
     rid = env["request_id"]
 
-    case Task.Supervisor.start_child(__MODULE__.TaskSup, fn ->
-           transcribe(conv, id, sender, note, mode, rid)
-         end) do
+    # Incident 2026-10-14: registered for Stop / Try again (`RisiMe.Agent.VoiceJobs`).
+    meta = %{conv: conv, note_id: id, sender: sender, note: note, mode: mode, rid: rid}
+
+    case VoiceJobs.start(meta, fn -> transcribe(conv, id, sender, note, mode, rid) end) do
       {:ok, pid} ->
         {:started, pid}
 
@@ -305,7 +313,9 @@ defmodule RisiMe.Agent.Voice do
     acked = mode == :risi_chat and not speech_healthy?() and ack(conv, sender, request_id)
 
     t0 = System.monotonic_time(:millisecond)
-    result = run_speech(conv, note, hint(conv, sender))
+    hint = hint(conv, sender)
+    VoiceJobs.working(conv, note_id, sender, hint)
+    result = run_speech(conv, note, hint, sender)
     latency = System.monotonic_time(:millisecond) - t0
     # The audio, the ciphertext and the key lived only in `run_speech/2`'s frames.
     :erlang.garbage_collect()
@@ -314,6 +324,8 @@ defmodule RisiMe.Agent.Voice do
          :risi_chat <- mode,
          {:ok, _} <- RisiMe.Agent.VoiceQueue.enqueue(conv, note_id, sender, note, request_id) do
       unless acked, do: ack(conv, sender, request_id)
+      # The queue's retry job takes over: the sender's "Transcribing…" line ends here.
+      VoiceJobs.finished(conv, note_id, sender, "queued")
       {:queued, note_id}
     else
       _ -> finish(conv, note_id, sender, note, mode, request_id, result, latency)
@@ -321,6 +333,7 @@ defmodule RisiMe.Agent.Voice do
   rescue
     e ->
       Logger.warning("Risi voice transcription failed in #{conv}: #{inspect(e.__struct__)}")
+      VoiceJobs.finished(conv, note_id, sender, "failed")
 
       # The Risi chat is never silent (PART 4d), and never "type it" for a service problem.
       if mode == :risi_chat do
@@ -340,7 +353,7 @@ defmodule RisiMe.Agent.Voice do
   """
   def retry(conv, note_id, sender, note, request_id) do
     t0 = System.monotonic_time(:millisecond)
-    result = run_speech(conv, note, hint(conv, sender))
+    result = run_speech(conv, note, hint(conv, sender), sender)
     latency = System.monotonic_time(:millisecond) - t0
     :erlang.garbage_collect()
 
@@ -383,6 +396,7 @@ defmodule RisiMe.Agent.Voice do
     log(conv, t, note, latency)
     note_speech(conv, sender, t, note)
     posted = post(conv, note_id, sender, note, t)
+    VoiceJobs.finished(conv, note_id, sender, t.status)
     buffer(conv, note_id, sender, t, mode, request_id, note.duration_ms)
     if mode == :risi_chat, do: risi_chat(conv, note_id, sender, t, request_id)
     posted
@@ -398,21 +412,25 @@ defmodule RisiMe.Agent.Voice do
     _ -> []
   end
 
-  # Fetch (as a member), verify, decrypt in memory, transcribe; retried once on a speech error.
-  defp run_speech(conv, note, hint) do
-    opts = Speech.hint_opts(hint)
+  # Fetch (as a member), verify, decrypt in memory, transcribe. Incident 2026-10-14:
+  # `Speech.transcribe_note/2` holds the live budget (3 × duration, ≥ 15 s), retries a fast error
+  # once, then falls back (the phone's transcript while RISI_VOICE_PHONE_FALLBACK is on, then the
+  # fast CPU model).
+  defp run_speech(conv, note, hint, sender) do
+    opts =
+      Speech.hint_opts(hint) ++
+        [
+          duration_ms: note.duration_ms,
+          phone_transcript: Map.get(note, :phone_transcript),
+          phone_fallback: RisiMe.Agents.Flags.feature_for("RISI_VOICE_PHONE_FALLBACK", sender),
+          sender: sender
+        ]
 
     case audio(conv, note) do
       {:ok, audio} ->
-        case Speech.transcribe(audio, opts) do
-          {:ok, r} ->
-            {:ok, r}
-
-          {:error, _} ->
-            case Speech.transcribe(audio, opts) do
-              {:ok, r} -> {:ok, r}
-              {:error, _} -> {:error, :failed}
-            end
+        case Speech.transcribe_note(audio, opts) do
+          {:ok, r} -> {:ok, r}
+          {:error, _} -> {:error, :failed}
         end
 
       {:error, _} = e ->
@@ -462,7 +480,8 @@ defmodule RisiMe.Agent.Voice do
       elapsed_ms: r[:elapsed_ms],
       reason: reason,
       p: p,
-      parts: if(status == "ok", do: parts(r), else: [])
+      parts: if(status == "ok", do: parts(r), else: []),
+      source: Map.get(r, :source)
     }
   end
 
@@ -477,7 +496,8 @@ defmodule RisiMe.Agent.Voice do
       elapsed_ms: nil,
       reason: nil,
       p: nil,
-      parts: []
+      parts: [],
+      source: nil
     }
 
   defp parts(r) do
@@ -524,7 +544,7 @@ defmodule RisiMe.Agent.Voice do
 
     risi = if t.script, do: Map.put(risi, "script", script_json(t.script)), else: risi
     risi = if t.romanised, do: Map.put(risi, "romanised", true), else: risi
-    {body, risi}
+    {body, phone_source(risi, t)}
   end
 
   defp script_json(s),
@@ -795,6 +815,16 @@ defmodule RisiMe.Agent.Voice do
       {:error, _} -> :skip
     end
   end
+
+  # Proposal 2026-10-14-phone-transcript-fallback: a transcript taken from the sender phone says
+  # so (`source: "phone"`, provider `phone`); only ever while RISI_VOICE_PHONE_FALLBACK is on.
+  defp phone_source(risi, %{source: "phone"}) do
+    risi
+    |> Map.put("source", "phone")
+    |> update_in(["made_by"], &Map.put(&1, "provider", "phone"))
+  end
+
+  defp phone_source(risi, _t), do: risi
 
   defp typing(sender, rid, conv) do
     RisiMe.Agent.Progress.send(sender, rid, conv, "working")

@@ -16,7 +16,7 @@ defmodule RisiMe.Agent.VoiceTest do
   import RisiMe.CallTranscribeHelpers,
     only: [await_post: 3, refute_post: 2, refute_post: 3, eventually: 1]
 
-  alias RisiMe.Agent.{Media, Secretary, Transcript, Voice}
+  alias RisiMe.Agent.{Media, Secretary, Transcript, Voice, VoiceJobs}
   alias RisiMe.{Blobs, TimeUUID}
   alias RisiMe.Workers.Risi, as: Job
 
@@ -322,7 +322,10 @@ defmodule RisiMe.Agent.VoiceTest do
       {_, s} = receive_note(w.og, w.a.user, env)
       _ = await_post(w.og, "voice_transcript", fn _ -> true end)
       await_done(s)
-      assert_received {:speech_opts, []}
+      assert_received {:speech_opts, opts}
+      assert opts[:language_hint] == nil
+      # Incident 2026-10-14: a note is asked live, within 3 × its duration (at least 15 s).
+      assert opts[:priority] == "live" and opts[:timeout] >= 15_000
 
       remember!("elsewhere", w.a.user.id, "හෙට උදේ දහයට හමුවෙමු.")
       remember!(w.og, w.b.user.id, "நாளை சந்திப்போம்")
@@ -332,7 +335,8 @@ defmodule RisiMe.Agent.VoiceTest do
       {_, s} = receive_note(w.og, w.a.user, env)
       _ = await_post(w.og, "voice_transcript", fn _ -> true end)
       await_done(s)
-      assert_received {:speech_opts, [language_hint: ["si", "ta"]]}
+      assert_received {:speech_opts, opts}
+      assert opts[:language_hint] == ["si", "ta"]
 
       # Nothing typed in si/ta remembered any more, but A's Sinhala note was transcribed in this
       # chat: the chat's spoken language (the learning log) hints si for B's note too, and A's
@@ -342,7 +346,8 @@ defmodule RisiMe.Agent.VoiceTest do
       {_, s} = receive_note(w.og, w.b.user, env)
       _ = await_post(w.og, "voice_transcript", fn _ -> true end)
       await_done(s)
-      assert_received {:speech_opts, [language_hint: ["si"]]}
+      assert_received {:speech_opts, opts}
+      assert opts[:language_hint] == ["si"]
       assert RisiMe.Agent.Lang.speech_lang(w.a.user.id) == "si"
       assert RisiMe.Agent.Lang.speech_lang(w.b.user.id) == "en"
     end
@@ -1151,6 +1156,78 @@ defmodule RisiMe.Agent.VoiceTest do
       await_done(s)
       assert [%{args: %{"request_id" => ^rid}}] = requests(rc)
       assert runs() == []
+    end
+  end
+
+  describe "incident 2026-10-14: Transcribing… [Stop] / Try again (RISI_VOICE_PROGRESS)" do
+    setup do
+      old = Application.get_env(:risime, :fake_speech_gate)
+      on_exit(fn -> Application.put_env(:risime, :fake_speech_gate, old) end)
+      :ok
+    end
+
+    defp signals(acc \\ []) do
+      receive do
+        {:signal, %{kind: "voice_transcribing", data: d}} -> signals([d | acc])
+      after
+        200 -> Enum.reverse(acc)
+      end
+    end
+
+    test "flag on: working → Stop (nothing posted) → Try again → done", w do
+      Application.put_env(:risime, :risi_agent_flags, %{"RISI_VOICE_PROGRESS" => "on"})
+      RisiMe.Messaging.subscribe(w.a.user.id)
+      Application.put_env(:risime, :fake_speech_gate, :closed)
+
+      {env, _, _} = note!(w.a.user.id, w.og, "en:hello there")
+      {id, {:started, pid}} = receive_note(w.og, w.a.user, env)
+      Process.sleep(100)
+
+      assert [%{"state" => "working", "seq" => 1, "can_cancel" => true, "message_id" => ^id}] =
+               signals()
+
+      # Only the sender may stop it.
+      assert {:error, :not_running} = VoiceJobs.cancel(w.og, id, w.b.user.id)
+      assert {:ok, true} = VoiceJobs.cancel(w.og, id, w.a.user.id)
+      refute Process.alive?(pid)
+      assert [%{"state" => "cancelled", "can_retry" => true, "seq" => 2}] = signals()
+      assert {:error, :not_running} = VoiceJobs.cancel(w.og, id, w.a.user.id)
+
+      Application.put_env(:risime, :fake_speech_gate, :open)
+      assert {:error, :not_found} = VoiceJobs.retry(w.og, id, w.b.user.id)
+      assert :ok = VoiceJobs.retry(w.og, id, w.a.user.id)
+      {_body, risi} = await_post(w.og, "voice_transcript", fn _ -> true end)
+      assert risi["message_id"] == id and risi["status"] == "ok"
+      Process.sleep(100)
+      states = Enum.map(signals(), & &1["state"])
+      assert states == ["working", "done"]
+      # Done: nothing is held any more.
+      assert VoiceJobs.lookup(w.og, id) == nil
+      assert {:error, :expired} = VoiceJobs.retry(w.og, id, w.a.user.id)
+    end
+
+    test "flag off (v1.47): no signal, Stop/Try again say no, nothing held", w do
+      RisiMe.Messaging.subscribe(w.a.user.id)
+      {env, _, _} = note!(w.a.user.id, w.og, "fail")
+      {id, started} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(started)
+      assert signals() == []
+      refute VoiceJobs.enabled_for?(w.a.user.id)
+      assert VoiceJobs.lookup(w.og, id) == nil
+    end
+
+    test "flag on: a failed note can be tried again", w do
+      Application.put_env(:risime, :risi_agent_flags, %{"RISI_VOICE_PROGRESS" => "on"})
+      RisiMe.Messaging.subscribe(w.a.user.id)
+      {env, _, _} = note!(w.a.user.id, w.og, "fail")
+      {id, started} = receive_note(w.og, w.a.user, env)
+      {_, risi} = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(started)
+      assert risi["status"] == "failed"
+
+      assert [%{"state" => "working"}, %{"state" => "failed", "can_retry" => true}] = signals()
+      assert %{state: :failed} = VoiceJobs.lookup(w.og, id)
     end
   end
 

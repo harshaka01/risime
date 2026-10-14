@@ -20,6 +20,9 @@ defmodule RisiMe.Agent.Speech do
   """
 
   @type result :: %{
+          optional(:fallback) => nil | String.t(),
+          optional(:fallback_reason) => nil | String.t(),
+          optional(:source) => String.t(),
           optional(:romanised) => boolean,
           optional(:language_probability) => number | nil,
           optional(:script) => script | nil,
@@ -60,6 +63,10 @@ defmodule RisiMe.Agent.Speech do
               {:ok, result} | {:error, :timeout | :unavailable | :failed}
   @callback compare(audio :: binary, opts :: keyword) ::
               {:ok, compare_result} | {:error, :timeout | :unavailable | :failed}
+  @doc "The fast fallback model (incident 2026-10-14: omniASR-CTC-1B, CPU int8) on one chunk."
+  @callback fallback_transcribe(audio :: binary, opts :: keyword) ::
+              {:ok, result} | {:error, :timeout | :unavailable | :failed}
+  @optional_callbacks fallback_transcribe: 2
 
   @langs ~w(si ta en)
   @models ~w(whisper-small-sinhala tamil-asr-qwen3 faster-whisper-large-v3)
@@ -93,6 +100,234 @@ defmodule RisiMe.Agent.Speech do
   def healthy?, do: impl().healthy?()
   def transcribe(audio, opts \\ []), do: impl().transcribe(audio, opts)
   def compare(audio, opts \\ []), do: impl().compare(audio, opts)
+
+  ## Voice notes: the live budget and the fallbacks (incident 2026-10-14, Sinhala slow)
+
+  @min_budget_ms 15_000
+  @phone_model "phone-on-device"
+
+  @doc """
+  The live time budget of a voice note (Harsha 2026-10-14): 3 × its duration, at least 15 s.
+  """
+  def budget_ms(duration_ms) when is_integer(duration_ms) and duration_ms > 0,
+    do: max(@min_budget_ms, 3 * duration_ms)
+
+  def budget_ms(_), do: @min_budget_ms
+
+  @doc "The fast fallback's own timeout: the note's duration, at least 10 s (RTF ~0.05 on CPU)."
+  def fallback_budget_ms(duration_ms) when is_integer(duration_ms) and duration_ms > 0,
+    do: max(10_000, duration_ms)
+
+  def fallback_budget_ms(_), do: 10_000
+
+  @doc "The model alias of a transcript taken from the sender phone (proposal 2026-10-14)."
+  def phone_model, do: @phone_model
+
+  @doc """
+  A voice note (§37.6) under the live budget, with the fallbacks (incident 2026-10-14,
+  docs/status/incident-2026-10-14-sinhala-slow.md):
+
+    1. the routed model (`transcribe/2`, `priority: "live"`, timeout `budget_ms/1`); a fast error
+       (not a timeout, within half the budget) is retried once, as before;
+    2. on a timeout or failure, the sender phone's own transcript (§37.10 `phone_transcript`),
+       only when `opts[:phone_fallback]` (flag `RISI_VOICE_PHONE_FALLBACK`, proposal
+       2026-10-14-phone-transcript-fallback) and the field is valid;
+    3. else the fast CPU model (`fallback_transcribe/2`, omniASR-CTC-1B int8);
+    4. else `{:error, :failed}`.
+
+  `opts`: `:duration_ms`, `:language_hint`, `:phone_transcript` (the envelope's map or nil),
+  `:phone_fallback`. A fallback result carries `fallback: "phone" | "ctc"` and
+  `fallback_reason: "timeout" | "unavailable" | "failed"`; a phone one `source: "phone"`.
+  Every note writes one `risi_agent_runs` row (agent `voice`, mode `stt`: the model, status,
+  latency, budget, codes only) and a slow or failed one pauses evals (`RisiMe.Agent.SpeechGuard`).
+  Never logs text.
+  """
+  def transcribe_note(audio, opts \\ []) when is_binary(audio) do
+    dur = opts[:duration_ms]
+    budget = budget_ms(dur)
+    t0 = System.monotonic_time(:millisecond)
+    primary_opts = Keyword.take(opts, [:language_hint]) ++ [timeout: budget, priority: "live"]
+
+    result =
+      case primary(audio, primary_opts, t0, budget) do
+        {:ok, r} -> {:ok, Map.merge(r, %{fallback: nil, fallback_reason: nil})}
+        {:error, why} -> fallback(audio, opts, why)
+      end
+
+    elapsed = System.monotonic_time(:millisecond) - t0
+    RisiMe.Agent.SpeechGuard.observe_live(result, elapsed, dur)
+    record_run(result, elapsed, budget, opts)
+    result
+  end
+
+  defp primary(audio, opts, t0, budget) do
+    case transcribe(audio, opts) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :timeout} = e ->
+        e
+
+      {:error, _} = e ->
+        left = budget - (System.monotonic_time(:millisecond) - t0)
+
+        if left > budget / 2,
+          do: transcribe(audio, Keyword.put(opts, :timeout, left)),
+          else: e
+    end
+  end
+
+  defp fallback(audio, opts, why) do
+    reason = to_string(why)
+
+    with :none <- phone_fallback(opts),
+         :none <- ctc_fallback(audio, opts) do
+      {:error, :failed}
+    else
+      {:ok, r} -> {:ok, Map.put(r, :fallback_reason, reason)}
+    end
+  end
+
+  defp phone_fallback(opts) do
+    with true <- opts[:phone_fallback] == true,
+         {:ok, text, tag} <- phone_transcript(opts[:phone_transcript]) do
+      lang = tag |> String.split(["-", "_"]) |> hd() |> String.downcase()
+      language = if lang in @langs, do: lang, else: script_lang(text)
+
+      {:ok,
+       %{
+         text: text,
+         language: language,
+         model: @phone_model,
+         elapsed_ms: 0,
+         speech: true,
+         romanised: language == "si" and romanised?(text),
+         language_probability: nil,
+         script: if(language == "si", do: script_check(text)),
+         segments: [],
+         source: "phone",
+         fallback: "phone"
+       }}
+    else
+      _ -> :none
+    end
+  end
+
+  @doc """
+  A valid §37.10 `phone_transcript` (lenient: anything malformed is `:error`, the note is kept):
+  `{:ok, trimmed_text, lang_tag}`.
+  """
+  def phone_transcript(%{"text" => t, "lang" => l, "engine" => e})
+      when is_binary(t) and is_binary(l) and is_binary(e) do
+    text = String.trim(t)
+    len = String.length(text)
+
+    if len in 1..4000 and byte_size(text) <= 12_000 and String.length(l) in 2..35 and
+         String.length(e) in 1..64,
+       do: {:ok, text, l},
+       else: :error
+  end
+
+  def phone_transcript(_), do: :error
+
+  defp ctc_fallback(audio, opts) do
+    m = impl()
+
+    if Code.ensure_loaded?(m) and function_exported?(m, :fallback_transcribe, 2) do
+      case m.fallback_transcribe(audio,
+             timeout: fallback_budget_ms(opts[:duration_ms]),
+             priority: "live"
+           ) do
+        {:ok, r} ->
+          # The CTC model is not language-conditioned: the language is its output's script.
+          language = if r.speech, do: script_lang(r.text), else: r.language
+
+          {:ok,
+           Map.merge(r, %{
+             language: language,
+             romanised: false,
+             language_probability: nil,
+             script: if(language == "si", do: script_check(r.text)),
+             fallback: "ctc"
+           })}
+
+        {:error, _} ->
+          :none
+      end
+    else
+      :none
+    end
+  end
+
+  @doc "`si` | `ta` | `en` by the script of `text` (Sinhala or Tamil letters, else `en`)."
+  def script_lang(text) when is_binary(text) do
+    {si, ta} =
+      text
+      |> String.to_charlist()
+      |> Enum.reduce({0, 0}, fn
+        c, {si, ta} when c in 0x0D80..0x0DFF -> {si + 1, ta}
+        c, {si, ta} when c in 0x0B80..0x0BFF -> {si, ta + 1}
+        _, acc -> acc
+      end)
+
+    cond do
+      si > 0 and si >= ta -> "si"
+      ta > 0 -> "ta"
+      true -> "en"
+    end
+  end
+
+  def script_lang(_), do: "en"
+
+  @doc "The §36.11 Sinhala script check of `text` (as the speech service computes it)."
+  def script_check(text) do
+    {si, la, letters} =
+      text
+      |> String.to_charlist()
+      |> Enum.reduce({0, 0, 0}, fn c, {si, la, l} ->
+        cond do
+          c in 0x0D80..0x0DFF -> {si + 1, la, l}
+          c in ?a..?z or c in ?A..?Z -> {si, la + 1, l + 1}
+          letter?(c) -> {si, la, l + 1}
+          true -> {si, la, l}
+        end
+      end)
+
+    %{expected: "sinh", sinhala_chars: si, latin_chars: la, ok: not (si == 0 and letters > 0)}
+  end
+
+  defp romanised?(text), do: not script_check(text).ok
+
+  defp letter?(c), do: String.match?(<<c::utf8>>, ~r/^\p{L}$/u)
+
+  # One `risi_agent_runs` row per note (Voice agent scores, decision 084): codes and timings.
+  defp record_run(result, elapsed, budget, opts) do
+    {status, model, fell_back, reason, lang} =
+      case result do
+        {:ok, %{fallback: nil} = r} ->
+          {"ok", r.model, false, nil, r.language}
+
+        {:ok, r} ->
+          {"ok", r.model, true, "#{r.fallback_reason}_#{r.fallback}", r.language}
+
+        {:error, _} ->
+          {"error", "none", true, "failed_all", nil}
+      end
+
+    %{
+      agent: "voice",
+      mode: "stt",
+      decision: model,
+      status: status,
+      fell_back: fell_back,
+      reason: reason,
+      latency_ms: elapsed,
+      budget_ms: budget,
+      lang: lang
+    }
+    |> then(fn row -> if opts[:sender], do: Map.put(row, :user, opts[:sender]), else: row end)
+    |> RisiMe.Agents.Runs.record()
+  end
 
   @doc """
   The extra compare service's models (compare only, never a route; `Speech.Http`):

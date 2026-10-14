@@ -74,7 +74,9 @@ defmodule RisiMe.Application do
       # v1.39 §36: call records (4 h, memory only) and the per-call transcription processes.
       RisiMe.Agent.CallTranscribe.Supervisor,
       # v1.41 §37.6: Risi's voice-note transcriptions (in memory, off the MLS lane).
-      {Task.Supervisor, name: RisiMe.Agent.Voice.TaskSup, max_children: 16}
+      {Task.Supervisor, name: RisiMe.Agent.Voice.TaskSup, max_children: 16},
+      # Incident 2026-10-14: the running transcriptions (Stop / Try again), memory only.
+      RisiMe.Agent.VoiceJobs
     ]
 
     # v1.24 S5: the Risi agent tree, only with RISI=on, the MLS NIF and its keys. Started after

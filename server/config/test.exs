@@ -144,6 +144,9 @@ config :risime, :risi_speech_http,
   api_key: "test-speech-key",
   req_options: [plug: {Req.Test, RisiMe.Agent.Speech.Http}, retry: false]
 
+# Incident 2026-10-14: tests never write the shared eval pause file (RisiMe.Agent.SpeechGuard).
+config :risime, :risi_speech_pause_file, false
+
 # Risi's own post limit is global (15 per 10 s); tests post faster than that.
 config :risime, :risi_send_limit, 10_000
 
