@@ -208,6 +208,24 @@ def current_priority():
     return getattr(_req, "priority", "normal")
 
 
+MAX_HOTWORDS, MAX_HOTWORDS_CHARS = 60, 1000
+
+
+def set_hotwords(raw):
+    """Proposal 2026-10-14-send-for-me §41.6: 'Risi,Upali Perera' -> the request's hint words
+    (at most 60 / 1000 chars). Per request, in memory only; never logged (only their count)."""
+    words = []
+    for w in (raw or "")[:MAX_HOTWORDS_CHARS].split(","):
+        w = " ".join(w.split())
+        if w and w not in words:
+            words.append(w)
+    _req.hotwords = words[:MAX_HOTWORDS]
+
+
+def current_hotwords():
+    return getattr(_req, "hotwords", [])
+
+
 class PrioritySlots:
     """At most n holders; waiters are served by class (live, normal, batch), FIFO within a class.
     `with slots:` uses the calling request's priority (set_priority)."""
@@ -517,13 +535,17 @@ def run(name, audio, language=None, prompt=None, temperature=0.0, vad_filter=Tru
     load_s = time.monotonic() - t_load
     try:
         t0 = time.monotonic()
+        hot = current_hotwords()
         with (cpu_slots if s["kind"] == "onnx_ctc" else slots):
             if s["kind"] == "ct2":
+                # §41.6: faster-whisper's `hotwords` sits next to the initial prompt (the Sinhala
+                # script prompt is kept, never replaced).
                 segments, info = m.transcribe(
                     audio, language=lang or None, initial_prompt=prompt or None,
                     temperature=temperature if temperature > 0 else [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
                     beam_size=BEAM_SIZE, vad_filter=vad_filter,
-                    condition_on_previous_text=False)
+                    condition_on_previous_text=False,
+                    hotwords=(", ".join(hot) if hot else None))
                 segs = list(segments)
                 text = "".join(x.text for x in segs).strip()
                 out = {"language": info.language,
@@ -535,7 +557,8 @@ def run(name, audio, language=None, prompt=None, temperature=0.0, vad_filter=Tru
                                      "compression_ratio": round(x.compression_ratio, 4)}
                                     for i, x in enumerate(segs)]}
             elif s["kind"] == "qwen3":
-                text, _ = m.transcribe(audio, prompt=prompt,
+                ctx = " ".join(x for x in [prompt or "", ", ".join(hot)] if x) or None
+                text, _ = m.transcribe(audio, prompt=ctx,
                                        language=lang if s.get("force_lang") else None)
                 out = {"language": s["lang"], "segments": []}
             else:  # onnx_ctc: no language conditioning, no prompt
@@ -638,9 +661,11 @@ def transcriptions(request: Request,
                    vad_filter: bool = Form(True),
                    language_hint: str | None = Form(None),
                    hint_mode: str | None = Form(None),
-                   priority: str | None = Form(None)):
+                   priority: str | None = Form(None),
+                   hotwords: str | None = Form(None)):
     auth(request)
     set_priority(priority or "normal")
+    set_hotwords(hotwords)
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
@@ -826,6 +851,7 @@ def compare(request: Request,
     (compare-only ones) are unloaded right after use, so this never holds more than one extra."""
     auth(request)
     set_priority(priority or "batch")  # compare and evals never get ahead of live notes
+    set_hotwords(None)  # §41.6: never another request's words (the thread is reused)
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
