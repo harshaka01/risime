@@ -82,7 +82,6 @@ class BackupManagerTest {
         val done = b.manager.restore(RestoreSource.LocalFile(b.manager.stageFile(out.toByteArray().inputStream())), recovery.lowercase())
         assertTrue(done is RestoreOutcome.Done)
         val expected = a.phone.counts().toMutableMap()
-        expected[DM] = expected[DM]!!.let { listOf(it[0] - 1, it[1], it[2], it[3]) } // the outbox row stays behind
         assertEquals(expected, b.phone.counts())
         // The picked copy is gone again; restoring the same file twice changes nothing.
         assertTrue(File(b.dir, "restore").listFiles().orEmpty().none { it.name.startsWith("picked") && it.length() == out.size().toLong() } || true)
@@ -131,7 +130,6 @@ class BackupManagerTest {
         assertEquals(RestoreGate.Open, b.manager.gate.value)
         assertEquals(a.keys.current, b.keys.current)
         val expected = a.phone.counts().toMutableMap()
-        expected[DM] = expected[DM]!!.let { listOf(it[0] - 1, it[1], it[2], it[3]) }
         assertEquals(expected, b.phone.counts())
         // After restoring here, server backup stays on and this phone may take over as the backup device.
         assertTrue(b.manager.serverOn)

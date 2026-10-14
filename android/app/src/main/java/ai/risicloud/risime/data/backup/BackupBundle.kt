@@ -119,9 +119,31 @@ data class BackupMessageLine(
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("played_at") val playedAt: String? = null,
+    /**
+     * Proposal 2026-10-14-backup-held (§22.5 amendment, hard rule 9): my unsent text (held "Waiting for
+     * encryption…", queued, or "Not sent"), with `message_id`, `server_ts` and `status` null; absent on every other
+     * line. Older apps skip such a line as malformed (no `message_id`), exactly as before.
+     */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val outbox: BackupOutbox? = null,
 ) {
     companion object {
         const val TYPE = "message"
+    }
+}
+
+/** Proposal 2026-10-14-backup-held: an unsent text's outbox state. */
+@Serializable
+data class BackupOutbox(
+    /** "pending" (held or queued: sent once the chat is ready) | "failed" (sent only on the user's tap). */
+    val state: String,
+    /** When the user wrote it (the row's local time), ISO-8601 UTC with milliseconds. */
+    @SerialName("client_ts") val clientTs: String,
+) {
+    companion object {
+        const val PENDING = "pending"
+        const val FAILED = "failed"
     }
 }
 

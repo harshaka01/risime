@@ -275,7 +275,8 @@ object BackupData {
     /**
      * A phone with 1:1 and group chats: texts both ways, a photo by reference, a call line, a local
      * "Missed call" line, a tombstone, a hidden tombstone, a reaction, group lines, a Clear chat
-     * watermark, plus what never goes into a backup (an outbox row, a §13.3 marker, a gap row).
+     * watermark, an unsent (held) text that travels as an `outbox` line, plus what never goes into a backup
+     * (a §13.3 marker, a gap row).
      */
     suspend fun fill(p: BackupPhone) {
         val m = p.db.messages()
@@ -302,7 +303,7 @@ object BackupData {
         p.db.deletes().putDeletedId(DeletedIdEntity(hiddenId, DM, PEER, false, at(15), "everyone", 1))
         val target = msg(DM, PEER, 1)
         ai.risicloud.risime.data.ReactionStore(p.db.reactions()).applyConfirmed(DM, target.messageId!!, ME, "👍", "add", at(16), HistoryFixtures.tuuid(HistoryFixtures.ms(at(16)), 16), "cm-r16")
-        // Never in a backup: an outbox row, a marker, a gap row.
+        // An unsent text (in a backup since proposal 2026-10-14-backup-held); never in a backup: a marker, a gap row.
         m.insert(msg(DM, ME, 20, status = MessageStatus.PENDING.name).copy(messageId = null, clientMsgId = "pending-20"))
         m.upsertSystemLine(ai.risicloud.risime.data.HistoryMarkers.row(DM, SystemLine.HISTORY_GAP, at(0), 0))
 
@@ -329,7 +330,7 @@ object BackupData {
         p.db.contacts().upsertAll(listOf(ContactEntity("+94771234568", "Kamal", "Co", PEER, true)))
     }
 
-    /** Text rows only for counting what a backup carries ([fill] minus the outbox row). */
+    /** One bundle line as JSON. */
     fun json(s: String): JsonObject = ProtocolJson.parseToJsonElement(s) as JsonObject
 
     fun type(line: String): String = (json(line)["type"] as JsonPrimitive).content

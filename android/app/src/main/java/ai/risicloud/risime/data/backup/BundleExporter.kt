@@ -22,7 +22,8 @@ import ai.risicloud.risime.net.isGroupConversation
  * §22.5 the bundle writer (android A4): JSON Lines per conversation in pages, never the whole
  * bundle in memory. Every conversation, not bound to the gap index or 30 days; call lines always
  * (a backup is the user's own). Never in a backup (§22.5): MLS state and `mls_kv`, the sync cursor,
- * the device id, tokens, gap rows and §13.3/§17.12 markers, outbox rows (pending/failed), media
+ * the device id, tokens, gap rows and §13.3/§17.12 markers, outbox rows other than my unsent texts
+ * (proposal 2026-10-14-backup-held: `outbox` lines), media
  * files, avatars, settings and the behaviour log.
  */
 class BundleExporter(
@@ -149,8 +150,8 @@ class BundleExporter(
             // A tombstone, or a row being deleted for everyone (shown as one meanwhile).
             return id?.let { BackupTombstoneLine(conversationId = conv, messageId = it, from = m.from.lowercase(), serverTs = m.serverTs, scope = "everyone", hidden = false) }
         }
-        // Outbox rows (never accepted by the server) are not in a backup.
-        if (m.status == MessageStatus.PENDING.name || m.status == MessageStatus.FAILED.name) return null
+        // Outbox rows (never accepted by the server): only my unsent texts travel (proposal 2026-10-14-backup-held).
+        if (m.status == MessageStatus.PENDING.name || m.status == MessageStatus.FAILED.name) return outboxLine(conv, m)
         val payload: JsonObject = when (m.kind) {
             // §24.10: a Risi message keeps its `risi` object.
             // v1.34: `forwarded` and `reply_to` are part of the payload (and a reserved `view_once` stays one).
@@ -172,6 +173,26 @@ class BundleExporter(
             status = if (m.outgoing) (if (m.voice && m.playedAt != null) "played" else statusName(m.status)) else null,
             playedAt = if (!m.outgoing && m.voice) m.playedAt?.let { BackupTime.iso(it) } else null,
             starredAt = id?.let { stars[it] }?.let { BackupTime.iso(it) },
+        )
+    }
+
+    /**
+     * Proposal 2026-10-14-backup-held (hard rule 9): my unsent **text** (held "Waiting for encryption…", queued, or
+     * "Not sent") as a `message` line with `outbox`: the envelope the outbox would send, its `client_msg_id` and local
+     * time; no `message_id`, `server_ts` or `status`. Unsent media (local files), reactions, deletes and controls stay
+     * out; so does the "Send without encryption" consent (`plain_ok`: the user decides again after a restore).
+     */
+    private fun outboxLine(conv: String, m: MessageEntity): BackupMessageLine? {
+        if (!m.outgoing || m.messageId != null || m.kind != MessageEntity.KIND_TEXT || m.isViewOnce) return null
+        if (!m.from.equals(me, true)) return null
+        val payload = json(MlsPayload.text(m.body, ai.risicloud.risime.data.mls.sendExtras(m), ai.risicloud.risime.net.LinkPreview.decode(m.linkPreview, m.body)))
+        return BackupMessageLine(
+            conversationId = conv, messageId = null, clientMsgId = m.clientMsgId, from = m.from.lowercase(), fromDevice = null,
+            serverTs = null, payload = payload, origin = null, sharedBy = null, status = null,
+            outbox = BackupOutbox(
+                state = if (m.status == MessageStatus.FAILED.name) BackupOutbox.FAILED else BackupOutbox.PENDING,
+                clientTs = BackupTime.iso(m.localTs),
+            ),
         )
     }
 

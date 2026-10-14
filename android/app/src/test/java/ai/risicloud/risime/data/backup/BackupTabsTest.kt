@@ -130,7 +130,6 @@ class BackupTabsTest {
         val r = b.importer().import(bundleOf(a).iterator())
         assertEquals(0, r.skipped["malformed"] ?: 0)
         val expected = a.counts().toMutableMap()
-        expected[BackupData.DM] = expected[BackupData.DM]!!.let { listOf(it[0] - 1, it[1], it[2], it[3]) } // the outbox row never travels
         assertEquals(expected, b.counts())
         assertTrue(b.counts()[official]!![0] == 5 && b.counts()[dmOfficial]!![0] == 3)
         assertEquals(ChatTabEntity(official, GRP, ChatTabEntity.TAB_OFFICIAL, ChatTabEntity.KIND_GROUP), b.db.chatTabs().get(official))

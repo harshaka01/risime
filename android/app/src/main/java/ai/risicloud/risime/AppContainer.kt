@@ -2269,6 +2269,8 @@ class AppContainer(
                     log = { Log.i("RisiMe", it) },
                     // §24.10: a restored Official conversation keeps its tab (never over a row this phone already has).
                     restoreTab = { t -> if (db.chatTabs().insertIfMissing(t) != -1L) Log.i("RisiMe", "restore: ${t.conversationId} is Official of ${t.chatId}") },
+                    // Proposal 2026-10-14-backup-held: restored unsent texts go out (encrypted) once their chat is ready.
+                    onOutboxRestored = { scope.launch { runCatching { engine.flushOutbox() } } },
                 )
             },
             server = backupServer,

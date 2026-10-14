@@ -58,7 +58,8 @@ class BundleRoundTripTest {
         assertEquals("conversation", types.first())
         assertEquals("contact", types.last())
         val text = lines.joinToString("\n")
-        assertFalse("outbox row", text.contains("pending-20"))
+        // Proposal 2026-10-14-backup-held: my unsent text travels as an `outbox` line (hard rule 9).
+        assertTrue("outbox row", lines.any { it.contains("\"client_msg_id\":\"pending-20\"") && it.contains("\"outbox\":{\"state\":\"pending\"") })
         assertFalse("§13.3 marker", text.contains(SystemLine.HISTORY_GAP_TEXT) || text.contains("sys:history"))
         assertTrue("the photo by reference with its key", text.contains("\"type\":\"image\"") && text.contains("\"enc\""))
         assertTrue("call lines always", text.contains("\"call_end\"") || text.contains("call_end"))
@@ -82,8 +83,6 @@ class BundleRoundTripTest {
         val b = phone()
         val r = b.importer().import(bundleOf(a).iterator())
         val expected = a.counts().toMutableMap()
-        // The outbox row and the marker never travel.
-        expected[DM] = expected[DM]!!.let { listOf(it[0] - 1, it[1], it[2], it[3]) }
         val got = b.counts()
         // B has the group line too (a system row) but counts() only counts texts/images/calls/tombstones.
         assertEquals(expected, got)

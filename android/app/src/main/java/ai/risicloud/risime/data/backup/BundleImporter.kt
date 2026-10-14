@@ -45,6 +45,8 @@ data class RestoreResult(
     val contacts: Int,
     val skipped: Map<String, Int>,
     val images: Boolean,
+    /** Proposal 2026-10-14-backup-held: my unsent texts restored to the outbox (part of [imported]). */
+    val outbox: Int = 0,
 )
 
 /** The bundle is not this app's or not this account's: nothing was imported. */
@@ -75,6 +77,8 @@ class BundleImporter(
     private val batch: Int = 1_000,
     /** §24.10 a schema-2 `conversation` line's tab (Official only; the app inserts it if this phone has no row yet). */
     private val restoreTab: suspend (ai.risicloud.risime.data.db.ChatTabEntity) -> Unit = {},
+    /** Proposal 2026-10-14-backup-held: called once after a restore that put unsent texts back in the outbox. */
+    private val onOutboxRestored: () -> Unit = {},
 ) {
     /** §24.10 Official conversations seen in this bundle (their Risi messages keep the `risi` object). */
     private val officialConvs = mutableSetOf<String>()
@@ -85,6 +89,7 @@ class BundleImporter(
     private var conversations = 0
     private var contactsAdded = 0
     private var anyImage = false
+    private var outboxRestored = 0
     private val skipped = sortedMapOf<String, Int>()
     private val gapsTouched = mutableSetOf<String>()
 
@@ -124,8 +129,9 @@ class BundleImporter(
         val h = history
         if (h != null) for (conv in gapsTouched) tx.run { HistoryImporter(messages, h, null, null, null).refreshGapMarker(conv, residual = false) }
         progress.clear()
-        val r = RestoreResult(imported, tombstones, groupEvents, conversations, contactsAdded, skipped.toMap(), anyImage)
-        log("restore ${header.backupId}: $imported imported, $tombstones tombstones, $groupEvents group lines, $conversations chats, $contactsAdded contacts, skipped $skipped")
+        if (outboxRestored > 0) onOutboxRestored()
+        val r = RestoreResult(imported, tombstones, groupEvents, conversations, contactsAdded, skipped.toMap(), anyImage, outboxRestored)
+        log("restore ${header.backupId}: $imported imported ($outboxRestored unsent),$tombstones tombstones, $groupEvents group lines, $conversations chats, $contactsAdded contacts, skipped $skipped")
         return r
     }
 
@@ -208,6 +214,7 @@ class BundleImporter(
     private suspend fun message(e: BackupMessageLine) {
         val conv = e.conversationId
         if (!validConv(conv)) return skip("malformed")
+        e.outbox?.let { return outbox(e, it) }
         val id = e.messageId?.lowercase()
         if (id != null && TimeUuid.canonical(id) == null) return skip("malformed")
         if (id != null && messages.byMessageId(id) != null) return skip("existing_row")
@@ -319,6 +326,44 @@ class BundleImporter(
         imported++
         // §22.6: a matching gap row goes; its marker is updated at the end.
         if (id != null) history?.let { h -> if (h.gap(id) != null) { h.deleteGaps(listOf(id)); gapsTouched += conv } }
+    }
+
+    /**
+     * Proposal 2026-10-14-backup-held (§22.6 amendment, hard rule 9): my unsent text comes back as an outgoing row with
+     * its **original `client_msg_id`** and no `message_id`: `pending` → PENDING (a 1:1 shows "Waiting for encryption…"
+     * at once; the outbox sends it **encrypted** once the chat is ready, and offers "Send without encryption" again only
+     * after its wait), `failed` → FAILED (sent only on the user's tap). Any local row with that `client_msg_id` wins (a
+     * second restore, or a copy already sent): no duplicate, no second send. Never `plain_ok` (decision 048).
+     */
+    private suspend fun outbox(e: BackupMessageLine, o: BackupOutbox) {
+        val conv = e.conversationId
+        if (e.messageId != null || !e.from.equals(me, true)) return skip("malformed")
+        if (o.state != BackupOutbox.PENDING && o.state != BackupOutbox.FAILED) return skip("malformed")
+        if (e.clientMsgId.isBlank()) return skip("malformed")
+        if (messages.byClientMsgId(e.clientMsgId) != null) return skip("existing_row")
+        val ts = BackupTime.ms(o.clientTs) ?: return skip("malformed")
+        if (cleared(conv, BackupTime.isoToTicks(o.clientTs))) return skip("cleared")
+        val text = MlsPayload.decode(ProtocolJson.encodeToString(JsonObject.serializer(), e.payload).toByteArray()) as? MlsPayload.Decoded.Text
+            ?: return skip("malformed")
+        // A Risi object never rides on my own unsent text.
+        if (text.risi != null) return skip("malformed")
+        val group = isGroupConversation(conv)
+        val pending = o.state == BackupOutbox.PENDING
+        val row = MessageEntity(
+            clientMsgId = e.clientMsgId, messageId = null, conversationId = conv, from = me.lowercase(),
+            to = if (group) conv else dmPeer(conv, me) ?: return skip("malformed"), body = text.body,
+            serverTs = null, localTs = ts,
+            status = if (pending) MessageStatus.PENDING.name else MessageStatus.FAILED.name,
+            outgoing = true,
+            // The bubble's label until the outbox looks at it: a 1:1 waits for encryption (the engine re-decides).
+            failReason = if (pending && !group) ai.risicloud.risime.data.ChatEngine.E2EE_WAITING else null,
+            kind = MessageEntity.KIND_TEXT, origin = ORIGIN_BACKUP,
+            forwardHops = text.extras.forwardHops, replyToMessageId = text.extras.replyTo?.messageId, replyToFrom = text.extras.replyTo?.from,
+            linkPreview = text.linkPreview?.encode(),
+        )
+        if (messages.insert(row) == -1L) return skip("existing_row")
+        imported++
+        outboxRestored++
     }
 
     private fun outgoingStatus(s: String?): String = when (s) {
