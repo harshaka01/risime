@@ -39,6 +39,12 @@ defmodule RisiMe.Agent.Voice do
     as the note arrives; the switch off or a note over 5 min get a fixed answer instead of
     silence; a speech service that looks unhealthy is still tried. The model being down is
     the typed-message path's (`RisiMe.Agent.Offline`: the request job's offline notice).
+    **The speech service down, busy or out of memory** (proposal 2026-10-14-voice-queue, P1
+    hotfix): never "please type it". Risi answers "Got your voice note. I'll reply in a
+    moment." and the note waits in `RisiMe.Agent.VoiceQueue` (sealed blob reference + key,
+    retried with backoff); it is answered normally once the service is back, or after 30 min
+    gets the `failed` card and an honest "I couldn't listen to your voice note…". A user
+    outside the switch is told voice notes to Risi aren't on for them yet.
   * **Learning log:** one `transcribe` row per note (model, language, audio seconds, latency,
     status), `output: null`.
   """
@@ -65,9 +71,20 @@ defmodule RisiMe.Agent.Voice do
   @max_text 4_000
   @min_probability 0.6
   @mimes ["audio/ogg; codecs=opus", "audio/mp4"]
-  @unclear_answer "I couldn't hear that clearly. Please try again or type it."
-  @off_answer "I can't listen to voice notes right now. Please type it."
-  @too_long_answer "That voice note is over 5 minutes, too long for me. Please send a shorter one or type it."
+  # Proposal 2026-10-14-voice-queue (P1 hotfix, Harsha 2026-10-14): Risi never says "please
+  # type it", anywhere. A speech service that is down, busy or out of memory: the note waits in
+  # the retry queue (`RisiMe.Agent.VoiceQueue`) behind an immediate acknowledgement; only a
+  # bounded give-up says it couldn't listen. A note under 1 s, or one whose transcript is empty
+  # or noise only, gets the "very short" line. A user outside `RISI_VOICE_TRANSCRIBE` is told
+  # it's coming soon.
+  @unclear_answer "I couldn't hear that clearly. Could you say it again?"
+  @short_answer "That was very short. Could you say it again?"
+  @blob_answer "I couldn't open that voice note. Could you send it again?"
+  @queued_answer "Got your voice note. I'll reply in a moment."
+  @failed_answer "I couldn't listen to your voice note: my speech service isn't answering. Please send it again a bit later."
+  @off_answer "Voice notes to Risi are coming soon for your account."
+  @too_long_answer "That voice note is over 5 minutes, too long for me. Could you send a shorter one?"
+  @min_ms 1_000
 
   ## Switches
 
@@ -256,6 +273,7 @@ defmodule RisiMe.Agent.Voice do
       not (Risi.enabled?() and Out.ready?()) -> :skip
       not enabled_for?(sender) -> {:reply, :off}
       note.duration_ms > @max_transcribe_ms -> {:reply, :too_long}
+      note.duration_ms < @min_ms -> {:reply, :too_short}
       true -> {:ok, :risi_chat}
     end
   end
@@ -282,33 +300,92 @@ defmodule RisiMe.Agent.Voice do
 
   @doc false
   def transcribe(conv, note_id, sender, note, mode, request_id \\ nil) do
+    # Proposal 2026-10-14-voice-queue: in the Risi chat a speech service that already looks
+    # down gets the acknowledgement at once (it is still tried, PART 4d).
+    acked = mode == :risi_chat and not speech_healthy?() and ack(conv, sender, request_id)
+
     t0 = System.monotonic_time(:millisecond)
     result = run_speech(conv, note, hint(conv, sender))
     latency = System.monotonic_time(:millisecond) - t0
     # The audio, the ciphertext and the key lived only in `run_speech/2`'s frames.
     :erlang.garbage_collect()
 
-    t = classify(result, note)
-    log(conv, t, note, latency)
-    note_speech(conv, sender, t, note)
-    posted = post(conv, note_id, sender, note, t)
-    buffer(conv, note_id, sender, t, mode, request_id, note.duration_ms)
-    if mode == :risi_chat, do: risi_chat(conv, note_id, sender, t, request_id)
-    posted
+    with {:error, :failed} <- result,
+         :risi_chat <- mode,
+         {:ok, _} <- RisiMe.Agent.VoiceQueue.enqueue(conv, note_id, sender, note, request_id) do
+      unless acked, do: ack(conv, sender, request_id)
+      {:queued, note_id}
+    else
+      _ -> finish(conv, note_id, sender, note, mode, request_id, result, latency)
+    end
   rescue
     e ->
       Logger.warning("Risi voice transcription failed in #{conv}: #{inspect(e.__struct__)}")
 
-      # The Risi chat is never silent (PART 4d).
+      # The Risi chat is never silent (PART 4d), and never "type it" for a service problem.
       if mode == :risi_chat do
         try do
-          fixed_answer(conv, sender, request_id, @unclear_answer)
+          fixed_answer(conv, sender, request_id, @failed_answer)
         rescue
           _ -> :ok
         end
       end
 
       {:error, :exception}
+  end
+
+  @doc """
+  One attempt of the retry job (`RisiMe.Agent.VoiceQueue`) for a queued Risi-chat note: `:retry`
+  while the speech service still fails, else the normal post and answer, `:done`.
+  """
+  def retry(conv, note_id, sender, note, request_id) do
+    t0 = System.monotonic_time(:millisecond)
+    result = run_speech(conv, note, hint(conv, sender))
+    latency = System.monotonic_time(:millisecond) - t0
+    :erlang.garbage_collect()
+
+    case result do
+      {:error, :failed} ->
+        :retry
+
+      _ ->
+        finish(conv, note_id, sender, note, :risi_chat, request_id, result, latency)
+        :done
+    end
+  end
+
+  @doc "The bounded give-up of a queued note: the `failed` card and the honest answer."
+  def give_up(conv, note_id, sender, note, request_id),
+    do: finish(conv, note_id, sender, note, :risi_chat, request_id, {:error, :failed}, 0)
+
+  @doc "The give-up when the queued note itself can't be read any more (the answer only)."
+  def give_up_answer(conv, sender, request_id),
+    do: fixed_answer(conv, sender, request_id, @failed_answer)
+
+  defp speech_healthy? do
+    Speech.healthy?()
+  rescue
+    _ -> false
+  end
+
+  # The acknowledgement: an ordinary rule-made `answer` with the note's `request_id`, like the
+  # §25 offline notice; the real answer follows as a second message for the same request.
+  defp ack(conv, sender, rid) do
+    fixed_answer(conv, sender, rid, @queued_answer)
+    true
+  rescue
+    _ -> false
+  end
+
+  defp finish(conv, note_id, sender, note, mode, request_id, result, latency) do
+    # A blob that can't be read (not the speech service) keeps the §37.8 "try again" answer.
+    t = classify(result, note) |> Map.put(:blob_error, result == {:error, :blob})
+    log(conv, t, note, latency)
+    note_speech(conv, sender, t, note)
+    posted = post(conv, note_id, sender, note, t)
+    buffer(conv, note_id, sender, t, mode, request_id, note.duration_ms)
+    if mode == :risi_chat, do: risi_chat(conv, note_id, sender, t, request_id)
+    posted
   end
 
   # The speech service's `language_hint` (decision 071 amendment d): the sender's language and
@@ -501,7 +578,8 @@ defmodule RisiMe.Agent.Voice do
     end
   end
 
-  defp note_gone?(note_id) do
+  @doc false
+  def note_gone?(note_id) do
     case RisiMe.Messaging.Store.impl().get_message(note_id) do
       {:ok, %{deleted_at: %DateTime{}}} -> true
       {:ok, _} -> false
@@ -663,6 +741,18 @@ defmodule RisiMe.Agent.Voice do
     :ok
   end
 
+  # `failed` (the speech service, once the retry queue gave up or couldn't take the note): an
+  # honest line, never "type it".
+  defp risi_chat(conv, _note_id, sender, %{status: "failed", blob_error: false}, rid),
+    do: fixed_answer(conv, sender, rid, @failed_answer)
+
+  defp risi_chat(conv, _note_id, sender, %{status: "failed"}, rid),
+    do: fixed_answer(conv, sender, rid, @blob_answer)
+
+  # An empty or noise-only transcript (no speech): the "very short" line, not a failure.
+  defp risi_chat(conv, _note_id, sender, %{reason: "no_speech"}, rid),
+    do: fixed_answer(conv, sender, rid, @short_answer)
+
   defp risi_chat(conv, _note_id, sender, _t, rid),
     do: fixed_answer(conv, sender, rid, @unclear_answer)
 
@@ -691,7 +781,12 @@ defmodule RisiMe.Agent.Voice do
   # The Risi chat while Risi can't listen (the switch off) or the note is over 5 min: an answer,
   # never silence. In a task: never posts from the conversation's process.
   defp cant_listen(conv, sender, rid, why) do
-    text = if why == :off, do: @off_answer, else: @too_long_answer
+    text =
+      case why do
+        :off -> @off_answer
+        :too_short -> @short_answer
+        _ -> @too_long_answer
+      end
 
     case Task.Supervisor.start_child(__MODULE__.TaskSup, fn ->
            fixed_answer(conv, sender, rid, text)

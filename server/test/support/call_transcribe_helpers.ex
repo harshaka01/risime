@@ -25,7 +25,12 @@ defmodule RisiMe.FakeSpeech do
     wait_gate()
     notify(:transcribe, audio)
 
-    case parse(audio) do
+    # Proposal 2026-10-14-voice-queue: `:fake_speech_down` = the service is down (every call
+    # fails, whatever the audio says) until a test brings it back.
+    parsed =
+      if Application.get_env(:risime, :fake_speech_down) == true, do: :fail, else: parse(audio)
+
+    case parsed do
       :fail ->
         {:error, :unavailable}
 

@@ -12,7 +12,9 @@ defmodule RisiMe.Agent.VoiceTest do
   use Oban.Testing, repo: RisiMe.Repo
 
   import Ecto.Query, only: [from: 2]
-  import RisiMe.CallTranscribeHelpers, only: [await_post: 3, refute_post: 3, eventually: 1]
+
+  import RisiMe.CallTranscribeHelpers,
+    only: [await_post: 3, refute_post: 2, refute_post: 3, eventually: 1]
 
   alias RisiMe.Agent.{Media, Secretary, Transcript, Voice}
   alias RisiMe.{Blobs, TimeUUID}
@@ -34,6 +36,8 @@ defmodule RisiMe.Agent.VoiceTest do
       :risi_agent_flags,
       :risi_speech,
       :fake_speech_healthy,
+      :fake_speech_down,
+      :risi_voice_queue,
       :risi_test_pid,
       :risi_tools,
       :risi_turn
@@ -510,25 +514,58 @@ defmodule RisiMe.Agent.VoiceTest do
     end
 
     test "unclear: the transcript card says so and Risi answers the fixed sentence; no ask", w do
-      rid = Ecto.UUID.generate()
-      {env, _, _} = note!(w.a.user.id, w.rc, "silence", %{"request_id" => rid})
-      {_, s} = receive_note(w.rc, w.a.user, env)
-      {_, card} = await_post(w.rc, "voice_transcript", fn _ -> true end)
-      assert card["status"] == "unclear"
-      {body, answer} = await_post(w.rc, "answer", fn _ -> true end)
-      await_done(s)
-      assert body == "I couldn't hear that clearly. Please try again or type it."
-      assert answer["request_id"] == rid and answer["notify"] == [w.a.user.id]
-      assert all_enqueued(worker: Job, args: %{"kind" => "request"}) == []
+      # Harsha 2026-10-14: empty/noise-only = "very short"; a low-confidence guess = "say it
+      # again"; never "type it".
+      for {audio, want} <- [
+            {"silence", "That was very short. Could you say it again?"},
+            {"lowp:mumble", "I couldn't hear that clearly. Could you say it again?"}
+          ] do
+        rid = Ecto.UUID.generate()
+        {env, _, _} = note!(w.a.user.id, w.rc, audio, %{"request_id" => rid})
+        {_, s} = receive_note(w.rc, w.a.user, env)
+        {_, card} = await_post(w.rc, "voice_transcript", fn _ -> true end)
+        assert card["status"] == "unclear"
+        {body, answer} = await_post(w.rc, "answer", &(&1["request_id"] == rid))
+        await_done(s)
+        assert body == want
+        refute body =~ "type"
+        assert answer["request_id"] == rid and answer["notify"] == [w.a.user.id]
+        assert all_enqueued(worker: Job, args: %{"kind" => "request"}) == []
+      end
+    end
+
+    test "a note under 1 s: the 'very short' line at once, no speech call, no ask", w do
+      Application.put_env(:risime, :risi_test_pid, self())
+      RisiMe.Messaging.subscribe(w.a.user.id)
+
+      for ms <- [500, 999] do
+        rid = Ecto.UUID.generate()
+
+        {env, _, _} =
+          note!(w.a.user.id, w.rc, "en:hi", %{"request_id" => rid, "duration_ms" => ms})
+
+        {_, {:replied, pid}} = receive_note(w.rc, w.a.user, env)
+        await_done({:started, pid})
+        {body, _} = await_post(w.rc, "answer", &(&1["request_id"] == rid))
+        assert body == "That was very short. Could you say it again?"
+        refute_received {:fake_speech, _, _}
+        assert all_enqueued(worker: Job, args: %{"kind" => "request", "request_id" => rid}) == []
+      end
+
+      # 1 s exactly is transcribed as usual.
+      {_rid, _id, card, _args} =
+        voice_ask!(w, "en:one second", %{"duration_ms" => 1_000})
+
+      assert card["status"] == "ok"
     end
 
     # PART 4d: a voice note in the Risi chat is a turn like a typed message.
     defp final(answer),
       do: %{"tool" => "final", "answer" => answer, "sources" => [], "next_steps" => []}
 
-    defp voice_ask!(w, audio) do
+    defp voice_ask!(w, audio, extra \\ %{}) do
       rid = Ecto.UUID.generate()
-      {env, _, _} = note!(w.a.user.id, w.rc, audio, %{"request_id" => rid})
+      {env, _, _} = note!(w.a.user.id, w.rc, audio, Map.put(extra, "request_id", rid))
       {id, s} = receive_note(w.rc, w.a.user, env)
       {_, card} = await_post(w.rc, "voice_transcript", fn _ -> true end)
       await_done(s)
@@ -590,7 +627,7 @@ defmodule RisiMe.Agent.VoiceTest do
 
       for {prep, extra, want} <- [
             {fn -> Application.put_env(:risime, :risi_voice_transcribe, false) end, %{},
-             "I can't listen to voice notes right now. Please type it."},
+             "Voice notes to Risi are coming soon for your account."},
             {fn -> Application.put_env(:risime, :risi_voice_transcribe, true) end,
              %{"duration_ms" => 300_001}, "over 5 minutes"}
           ] do
@@ -601,6 +638,7 @@ defmodule RisiMe.Agent.VoiceTest do
         await_done({:started, pid})
         {body, a} = await_post(w.rc, "answer", &(&1["request_id"] == rid))
         assert body =~ want and a["notify"] == [w.a.user.id]
+        refute body =~ "type"
 
         assert_receive {:signal,
                         %{kind: "risi_progress", data: %{"request_id" => ^rid, "state" => "done"}}}
@@ -610,20 +648,103 @@ defmodule RisiMe.Agent.VoiceTest do
       end
     end
 
-    test "PART 4d: a speech service that looks unhealthy is still tried; down = the failed card + answer",
+    test "PART 4d: a speech service that looks unhealthy is still tried (with the ack at once)",
          w do
       Application.put_env(:risime, :fake_speech_healthy, false)
-      {_rid, _id, card, _args} = voice_ask!(w, "en:still heard")
-      assert card["status"] == "ok" and card["text"] == "still heard"
-
       rid = Ecto.UUID.generate()
-      {env, _, _} = note!(w.a.user.id, w.rc, "fail", %{"request_id" => rid})
+      {env, _, _} = note!(w.a.user.id, w.rc, "en:still heard", %{"request_id" => rid})
       {_, s} = receive_note(w.rc, w.a.user, env)
-      {_, card} = await_post(w.rc, "voice_transcript", fn r -> r["status"] == "failed" end)
-      await_done(s)
-      assert card["text"] == nil
       {body, _} = await_post(w.rc, "answer", &(&1["request_id"] == rid))
-      assert body == "I couldn't hear that clearly. Please try again or type it."
+      assert body == "Got your voice note. I'll reply in a moment."
+      {_, card} = await_post(w.rc, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert card["status"] == "ok" and card["text"] == "still heard"
+      assert [_] = all_enqueued(worker: Job, args: %{"kind" => "request", "request_id" => rid})
+    end
+
+    # Proposal 2026-10-14-voice-queue (P1 hotfix): the service down never gets "type it".
+    test "speech down: ack at once, queued (sealed, no audio), answered when the service is back",
+         w do
+      Application.put_env(:risime, :fake_speech_down, true)
+      RisiMe.Messaging.subscribe(w.a.user.id)
+      rid = Ecto.UUID.generate()
+      {env, _cipher, key} = note!(w.a.user.id, w.rc, "en:what's on today", %{"request_id" => rid})
+      {id, s} = receive_note(w.rc, w.a.user, env)
+      {body, ack} = await_post(w.rc, "answer", &(&1["request_id"] == rid))
+      await_done(s)
+      assert body == "Got your voice note. I'll reply in a moment."
+      assert ack["notify"] == [w.a.user.id]
+      refute body =~ "type"
+      refute_post(w.rc, "voice_transcript")
+
+      assert_receive {:signal,
+                      %{kind: "risi_progress", data: %{"request_id" => ^rid, "state" => "done"}}}
+
+      # The queued row: the key only sealed (never in clear), no audio; the job holds ids only.
+      assert RisiMe.Agent.VoiceQueue.queued?(id)
+
+      [sealed] =
+        RisiMe.Repo.all(
+          from q in "risi_voice_queue", where: q.note_message_id == ^id, select: q.sealed
+        )
+
+      refute :binary.match(sealed, key) != :nomatch
+      refute :binary.match(sealed, Base.encode64(key)) != :nomatch
+      assert [job] = all_enqueued(worker: RisiMe.Agent.VoiceQueue)
+      assert Map.keys(job.args) |> Enum.sort() == ~w(conv note request_id sender until)
+      refute Jason.encode!(job.args) =~ Base.encode64(key)
+
+      # Still down: snoozed with backoff, nothing posted.
+      assert {:snooze, 15} = perform_job(RisiMe.Agent.VoiceQueue, job.args)
+      refute_post(w.rc, "answer")
+
+      # Back: the normal card, the ask, and the row is gone.
+      Application.put_env(:risime, :fake_speech_down, false)
+      assert :ok = perform_job(RisiMe.Agent.VoiceQueue, job.args)
+      {_, card} = await_post(w.rc, "voice_transcript", fn _ -> true end)
+      assert card["status"] == "ok" and card["text"] == "what's on today"
+      refute RisiMe.Agent.VoiceQueue.queued?(id)
+      assert [_] = all_enqueued(worker: Job, args: %{"kind" => "request", "request_id" => rid})
+    end
+
+    test "speech down past the bound: the failed card and an honest answer, never 'type it'", w do
+      Application.put_env(:risime, :fake_speech_down, true)
+      Application.put_env(:risime, :risi_voice_queue, max_ms: 0)
+      rid = Ecto.UUID.generate()
+      {env, _, _} = note!(w.a.user.id, w.rc, "en:hello", %{"request_id" => rid})
+      {id, s} = receive_note(w.rc, w.a.user, env)
+      {_, _ack} = await_post(w.rc, "answer", &(&1["request_id"] == rid))
+      await_done(s)
+
+      [job] = all_enqueued(worker: RisiMe.Agent.VoiceQueue)
+      assert :ok = perform_job(RisiMe.Agent.VoiceQueue, job.args)
+      {_, card} = await_post(w.rc, "voice_transcript", fn _ -> true end)
+      assert card["status"] == "failed" and card["text"] == nil
+      {body, _} = await_post(w.rc, "answer", &(&1["request_id"] == rid))
+      assert body =~ "I couldn't listen to your voice note"
+      refute body =~ "type"
+      refute RisiMe.Agent.VoiceQueue.queued?(id)
+      assert all_enqueued(worker: Job, args: %{"kind" => "request", "request_id" => rid}) == []
+    end
+
+    test "canary (2a): the Risi chat of a RISI_DEV_USERS user transcribes; others get the honest off line",
+         w do
+      Application.put_env(:risime, :risi_voice_transcribe, false)
+      Application.put_env(:risime, :risi_agent_flags, %{"RISI_VOICE_TRANSCRIBE" => "canary"})
+      Application.put_env(:risime, :risi_dev_users, [String.downcase(w.a.user.id)])
+      assert RisiMe.Agents.Flags.feature_for("RISI_VOICE_TRANSCRIBE", w.a.user.id)
+      {_rid, _id, card, _args} = voice_ask!(w, "en:canary hears me")
+      assert card["status"] == "ok" and card["text"] == "canary hears me"
+
+      rc = RisiMe.RisiHelpers.own_risi_chat!(w.b.user)
+      intervals!(rc, [w.b.user.id])
+      rid = Ecto.UUID.generate()
+      {env, _, _} = note!(w.b.user.id, rc, "en:hi", %{"request_id" => rid})
+      assert {_, {:replied, pid}} = receive_note(rc, w.b.user, env)
+      await_done({:started, pid})
+      {body, _} = await_post(rc, "answer", &(&1["request_id"] == rid))
+      assert body == "Voice notes to Risi are coming soon for your account."
+      refute body =~ "type"
     end
 
     test "without a request_id, or forwarded, nothing happens", w do
