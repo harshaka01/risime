@@ -9,6 +9,9 @@
 # Prints "FASTLANE LIVE <tag>" or "FASTLANE FAILED: <step>". Log: ~/risime-logs/fastlane/<time>.log.
 # Never while a deploy holds ~/risime-run/.deploy.lock (run-server waits for it). No APK, no redroid.
 set -uo pipefail
+# One fast lane at a time (root 2026-10-14: two concurrent runs shared the fastlane worktree and wiped a canary build).
+exec 7>"$HOME/risime-logs/fastlane.lock"
+flock -n 7 || { echo "FASTLANE FAILED: another scripts/risi-fastlane is running (lock ~/risime-logs/fastlane.lock); wait and retry"; exit 1; }
 cd "$(dirname "$0")/.."
 REPO="$PWD"; M="$HOME/.local/bin/mise exec --"
 CANARY=1; REF=""
