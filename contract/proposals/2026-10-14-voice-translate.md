@@ -67,13 +67,14 @@ Under every `voice_transcript` (§37.6) with `status` `ok` or `unclear`, every m
 - The server translates **only text Risi already holds for that Official message** (the transcript's working copy,
   or Risi's sealed memory of a typed message); the request never carries message text. It runs on **risi-l1**,
   on demand. The translation is **not posted, not stored, not remembered and not logged** (the learning log row is
-  `task: "translate"`, the two language codes, latency, `output: null`). Same request within 10 minutes: served from
-  an in-memory cache (sealed, never on disk).
+  `task: "translate"`, the two language codes, latency, `output: null`). The phone keeps the result in memory for
+  the session and doesn't ask twice (no server cache in v1.50).
 - **Rendering:** shown **only on the tapping person's phone**, under the original, labelled **"Translated by
   Risi"** (never a chat message, never sent to anyone). It isn't backed up and isn't in history shares.
 - **Setting** (per user, §37.7): `GET`/`PUT /api/v1/me/risi/voice` gain `"always_translate": "off" | "en" | "si" |
   "ta"` (default `"off"`; `me_risi_voice_put_v150.json`, `me_risi_voice_reply_v150.json`) and the read-only
-  `"translate_available": bool` (ignored on `PUT`). With a target set, the phone requests the translation itself
+  `"translate_available": true` (ignored on `PUT`). **Both fields are present only while Translate is available to
+  the user; absent = not available** (the v1.41 reply is byte-identical for everyone else). With a target set, the phone requests the translation itself
   when it shows a transcript (or a typed si/ta message) whose language isn't the target, and shows it expanded. A
   `PUT` without `always_translate` keeps the stored value. Settings → Risi: "Always translate voice notes to:
   Off / English / Sinhala / Tamil".
