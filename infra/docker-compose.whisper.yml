@@ -16,7 +16,7 @@ services:
   whisper:
     build:
       context: whisper
-    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr5
+    image: risime/whisper:ct2-4.8.2-fw-1.2.1-asr6
     restart: unless-stopped
     ports:
       - "127.0.0.1:8200:8000"
@@ -70,6 +70,13 @@ services:
       WHISPER_COMPARE_TA: ${WHISPER_COMPARE_TA:-whisper-tamil-medium,omnilingual-ctc-1b,faster-whisper-large-v3}
       WHISPER_COMPARE_EN: ${WHISPER_COMPARE_EN:-faster-whisper-large-v3-turbo}
       OMNI_CTC_THREADS: ${OMNI_CTC_THREADS:-8}
+      # asr6 (incident 2026-10-14, docs/status/incident-2026-10-14-sinhala-slow.md): live voice
+      # notes (priority=live) get the GPU slots first; omniASR-CTC-1B (CPU int8) is resident as
+      # the fast fallback, outside the GPU budget; resident models go only below the hard floor.
+      WHISPER_CPU_FALLBACK: ${WHISPER_CPU_FALLBACK:-omnilingual-ctc-1b}
+      WHISPER_CPU_WORKERS: ${WHISPER_CPU_WORKERS:-2}
+      WHISPER_HARD_FLOOR_MB: ${WHISPER_HARD_FLOOR_MB:-1536}
+      WHISPER_PRIORITY: ${WHISPER_PRIORITY:-on}
       TRITON_CACHE_DIR: /cache/triton
       # cudaMallocAsync returns freed CUDA memory instead of caching it: measured 2.0 GB vs
       # 4.4 GB resident for large-v3 (int8_float16 vs float16 + cub_caching), and no slower.

@@ -29,6 +29,20 @@ script {expected, sinhala_chars, latin_chars, ok}, script_ok, romanised (the fin
 retried_with. Compare runs every model with language=si and the prompt when the chunk is si and
 adds script + romanised per result.
 
+Live first (incident 2026-10-14, docs/status/incident-2026-10-14-sinhala-slow.md):
+  priority      form field on every endpoint: live (voice notes) | normal (default: call chunks) |
+                batch (compare default, evals). The GPU slots go to live first, then normal, then
+                batch, FIFO within a class (WHISPER_PRIORITY=off: plain FIFO as before).
+  CPU fallback  WHISPER_CPU_FALLBACK (e.g. omnilingual-ctc-1b, ONNX int8 on the CPU) loads at start,
+                stays resident, is outside the GPU budget and the GPU slots (its own
+                WHISPER_CPU_WORKERS), and is never evicted. A Sinhala chunk whose Sinhala models
+                don't fit memory goes to it before large-v3 (large-v3 took 40-60 s on a 6-s Sinhala
+                note with its temperature fallback).
+  hard floor    resident (WHISPER_KEEP) models are evicted for memory pressure only below
+                WHISPER_HARD_FLOOR_MB (default 1536), not at the load floor.
+  /health       adds "queue" (GPU slots running/waiting per class) and "live" (the last 10 min of
+                live requests: n, p50/p95 seconds, worst RTF) for the eval guard (scripts/speech-guard).
+
 Privacy: audio is decoded in memory (never written to disk), no transcript text or prompt is
 logged, the access log is off. Runs offline with local model directories.
 """
@@ -36,6 +50,7 @@ logged, the access log is off. Runs offline with local model directories.
 import collections
 import ctypes
 import gc
+import heapq
 import hmac
 import io
 import logging
@@ -160,6 +175,15 @@ for _n in filter(None, os.environ.get("WHISPER_KEEP", "").split(",")):
         SPECS[_n].update(role="resident", idle_s=None)
 if DEFAULT not in SPECS:
     raise SystemExit(f"default model missing: {DEFAULT_DIR}")
+# Incident 2026-10-14: the CPU fallback (resident, outside the GPU budget and slots).
+CPU_FALLBACK = os.environ.get("WHISPER_CPU_FALLBACK", "")
+if CPU_FALLBACK in SPECS:
+    SPECS[CPU_FALLBACK].update(role="cpu_fallback", idle_s=None)
+else:
+    CPU_FALLBACK = ""
+CPU_WORKERS = int(os.environ.get("WHISPER_CPU_WORKERS", "2"))
+HARD_FLOOR_MB = int(os.environ.get("WHISPER_HARD_FLOOR_MB", "1536"))
+PRIORITY_ON = os.environ.get("WHISPER_PRIORITY", "on") != "off"
 ACCEPTED = set(SPECS) | {"whisper-1", "auto"}
 
 if not API_KEY:
@@ -171,9 +195,79 @@ logging.getLogger("faster_whisper").setLevel(logging.WARNING)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-# At most NUM_WORKERS transcriptions run at once; more requests wait here.
-slots = threading.BoundedSemaphore(NUM_WORKERS)
+
+PRIORITIES = {"live": 0, "normal": 1, "batch": 2}
+_req = threading.local()  # the request's priority (FastAPI runs each sync request in one thread)
+
+
+def set_priority(p):
+    _req.priority = p if p in PRIORITIES else "normal"
+
+
+def current_priority():
+    return getattr(_req, "priority", "normal")
+
+
+class PrioritySlots:
+    """At most n holders; waiters are served by class (live, normal, batch), FIFO within a class.
+    `with slots:` uses the calling request's priority (set_priority)."""
+
+    def __init__(self, n):
+        self.n, self.busy, self.seq = n, 0, 0
+        self.cv = threading.Condition()
+        self.waiting = []  # heap of (class, seq)
+
+    def __enter__(self):
+        with self.cv:
+            self.seq += 1
+            me = (PRIORITIES[current_priority()] if PRIORITY_ON else 1, self.seq)
+            heapq.heappush(self.waiting, me)
+            while not (self.busy < self.n and self.waiting[0] == me):
+                self.cv.wait()
+            heapq.heappop(self.waiting)
+            self.busy += 1
+            self.cv.notify_all()
+        return self
+
+    def __exit__(self, *exc):
+        with self.cv:
+            self.busy -= 1
+            self.cv.notify_all()
+        return False
+
+    def stats(self):
+        with self.cv:
+            names = {v: k for k, v in PRIORITIES.items()}
+            waiting = {k: 0 for k in PRIORITIES}
+            for c, _ in self.waiting:
+                waiting[names[c]] += 1
+            return {"slots": self.n, "running": self.busy, "waiting": waiting}
+
+
+# At most NUM_WORKERS GPU transcriptions run at once; more requests wait here, live first.
+slots = PrioritySlots(NUM_WORKERS)
+# The CPU fallback runs beside them (no GPU).
+cpu_slots = threading.BoundedSemaphore(CPU_WORKERS)
 compare_lock = threading.Lock()
+# The last live (voice-note) requests: (monotonic time, total seconds, audio seconds).
+live_recent = collections.deque(maxlen=200)
+live_lock = threading.Lock()
+
+
+def live_stats(window_s=600):
+    now = time.monotonic()
+    with live_lock:
+        xs = [(t, a) for at, t, a in live_recent if now - at <= window_s]
+    if not xs:
+        return {"n": 0, "p50_s": None, "p95_s": None, "max_rtf": None, "window_s": window_s}
+    ts = sorted(t for t, _ in xs)
+
+    def pick(q):
+        return round(ts[min(len(ts) - 1, int(q * len(ts)))], 3)
+
+    rtfs = [t / a for t, a in xs if a > 0]
+    return {"n": len(ts), "p50_s": pick(0.5), "p95_s": pick(0.95),
+            "max_rtf": round(max(rtfs), 3) if rtfs else None, "window_s": window_s}
 
 
 def mem_available_mb():
@@ -214,10 +308,15 @@ class Pool:
         self.last_used = {}
 
     def _used(self):
-        return sum(SPECS[n]["est_mb"] for n in list(self.loaded) + list(self.loading))
+        # The CPU fallback is host RAM only, outside the GPU model budget.
+        return sum(SPECS[n]["est_mb"] for n in list(self.loaded) + list(self.loading)
+                   if SPECS[n]["role"] != "cpu_fallback")
 
-    def _evict_one(self, keep):
+    def _evict_one(self, keep, allow_resident=True):
         for n in self.loaded:
+            role = SPECS[n]["role"]
+            if role == "cpu_fallback" or (role == "resident" and not allow_resident):
+                continue
             if n != DEFAULT and n != keep and self.in_use[n] == 0:
                 m = self.loaded.pop(n)
                 self._close(n, m)
@@ -247,8 +346,11 @@ class Pool:
                 return self.loaded[name]
             need = SPECS[name]["est_mb"]
             # The detector/default model is the baseline: it always loads.
-            while name != DEFAULT and (self._used() + need > BUDGET_MB or mem_available_mb() - need < MIN_AVAIL_MB):
-                if not self._evict_one(keep=name):
+            # The detector and the CPU fallback load at start and are never refused; a resident
+            # (WHISPER_KEEP) model is displaced only for a routed one.
+            cpu = SPECS[name]["role"] == "cpu_fallback"
+            while name != DEFAULT and not cpu and (self._used() + need > BUDGET_MB or mem_available_mb() - need < MIN_AVAIL_MB):
+                if not self._evict_one(keep=name, allow_resident=SPECS[name]["role"] == "route"):
                     raise NoMemory(f"{name} needs ~{need} MB: budget {BUDGET_MB} MB, "
                                    f"{self._used()} MB loaded, {mem_available_mb()} MB available, "
                                    f"floor {MIN_AVAIL_MB} MB")
@@ -280,7 +382,8 @@ class Pool:
                     self._close(n, self.loaded.pop(n))
             while mem_available_mb() < MIN_AVAIL_MB:
                 avail = mem_available_mb()
-                if not self._evict_one(keep=None):
+                # Resident models (the small Sinhala fallback) go only below the hard floor.
+                if not self._evict_one(keep=None, allow_resident=avail < HARD_FLOOR_MB):
                     break
                 log.warning("memory pressure: MemAvailable %d MB < floor %d MB, unloaded LRU",
                             avail, MIN_AVAIL_MB)
@@ -414,7 +517,7 @@ def run(name, audio, language=None, prompt=None, temperature=0.0, vad_filter=Tru
     load_s = time.monotonic() - t_load
     try:
         t0 = time.monotonic()
-        with slots:
+        with (cpu_slots if s["kind"] == "onnx_ctc" else slots):
             if s["kind"] == "ct2":
                 segments, info = m.transcribe(
                     audio, language=lang or None, initial_prompt=prompt or None,
@@ -501,7 +604,9 @@ def health():
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return JSONResponse({"status": "loading"}, status_code=503)
-    return {"status": "ok", "model": DEFAULT, "loaded": loaded}
+    return {"status": "ok", "model": DEFAULT, "loaded": loaded, "queue": slots.stats(),
+            "live": live_stats(), "available_mb": mem_available_mb(),
+            "cpu_fallback": CPU_FALLBACK or None}
 
 
 @app.get("/v1/models")
@@ -532,8 +637,10 @@ def transcriptions(request: Request,
                    temperature: float = Form(0.0),
                    vad_filter: bool = Form(True),
                    language_hint: str | None = Form(None),
-                   hint_mode: str | None = Form(None)):
+                   hint_mode: str | None = Form(None),
+                   priority: str | None = Form(None)):
     auth(request)
+    set_priority(priority or "normal")
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
@@ -597,6 +704,14 @@ def transcriptions(request: Request,
                                 break
                             except NoMemory:
                                 continue
+                        if res is None and CPU_FALLBACK:
+                            # Incident 2026-10-14: the resident CPU model (~0.05 RTF) before
+                            # large-v3, whose Sinhala decode took 40-60 s for a 6-s note.
+                            res = run(CPU_FALLBACK, audio, language="si")
+                            script, romanised = script_check(res["text"])
+                            res.update(script=script, script_ok=not romanised,
+                                       romanised=romanised, retried_with=None)
+                            routing["fallback_model"] = CPU_FALLBACK
                         if res is None:
                             res = run_si(DEFAULT, audio, prompt=prompt, temperature=temperature,
                                          vad_filter=vad_filter)
@@ -630,18 +745,21 @@ def transcriptions(request: Request,
     finally:
         del audio
     total = time.monotonic() - t_all
+    if current_priority() == "live":
+        with live_lock:
+            live_recent.append((time.monotonic(), total, duration))
     # Metrics only, never text (decision 066: learn and delete). Per chunk: the detected
     # language and probability (renormalised over si/ta/en), large-v3's own top language, the
     # hint and the routing decision, and the model that answered (2026-10-13 routing check).
     r = routing or {}
     log.info("transcribed %.1fs audio in %.2fs model=%s req=%s lang=%s route=%s detected=%s "
-             "p=%s probs=%s top=%s/%s hint=%s mode=%s fallback=%s retried_with=%s", duration,
+             "p=%s probs=%s top=%s/%s hint=%s mode=%s fallback=%s retried_with=%s prio=%s", duration,
              total, res["model"], model_name, res.get("language"), r.get("reason"),
              r.get("detected"), r.get("probability"),
              ",".join(f"{k}:{v}" for k, v in (r.get("probs") or {}).items()) or None,
              r.get("whisper_top"), r.get("whisper_top_p"), ",".join(r.get("hint") or []) or None,
              r.get("hint_mode"), r.get("fallback_model") or r.get("fallback"),
-             res.get("retried_with"))
+             res.get("retried_with"), current_priority())
     if response_format == "text":
         return PlainTextResponse(res["text"])
     if response_format == "json":
@@ -669,9 +787,11 @@ def transcriptions(request: Request,
 def detect_only(request: Request,
                 file: UploadFile = File(...),
                 language_hint: str | None = Form(None),
-                hint_mode: str | None = Form(None)):
+                hint_mode: str | None = Form(None),
+                priority: str | None = Form(None)):
     """The routing decision for a chunk without transcribing it (routing eval; metrics only)."""
     auth(request)
+    set_priority(priority or "normal")
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
@@ -700,10 +820,12 @@ def compare(request: Request,
             models: str | None = Form(None),
             prompt: str | None = Form(None),
             language_hint: str | None = Form(None),
-            hint_mode: str | None = Form(None)):
+            hint_mode: str | None = Form(None),
+            priority: str | None = Form(None)):
     """Every candidate on the same chunk, one after another. Models outside the resident pool
     (compare-only ones) are unloaded right after use, so this never holds more than one extra."""
     auth(request)
+    set_priority(priority or "batch")  # compare and evals never get ahead of live notes
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
@@ -781,6 +903,9 @@ def idle_reaper():
 if __name__ == "__main__":
     pool.acquire(DEFAULT)
     pool.release(DEFAULT)
+    if CPU_FALLBACK:
+        pool.acquire(CPU_FALLBACK)
+        pool.release(CPU_FALLBACK)
     threading.Thread(target=idle_reaper, daemon=True).start()
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")),
                 access_log=False, log_level="info")
