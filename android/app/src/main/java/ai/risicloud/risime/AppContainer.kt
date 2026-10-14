@@ -675,7 +675,59 @@ class AppContainer(
             google = { from, to -> gcal.readForCheck(from, to, skillOff = risiSkillsStore.localState(ai.risicloud.risime.net.RisiSkillIds.CALENDAR) == ai.risicloud.risime.net.RisiSkillStates.OFF, me = runCatching { sessionStore.deviceId() }.getOrNull()) },
             googleAccount = { runCatching { gcal.accountIfMine(sessionStore.deviceId()) }.getOrNull() },
             exportPdf = { a -> exportPdfForRisi(a) },
+            // Proposal 2026-10-14-send-for-me §42.3: only while this device advertises `risi_send`.
+            sendMessage = { a -> if (risiSendOn()) sendMessageForRisi(a) else ai.risicloud.risime.net.RisiToolResult.error(ai.risicloud.risime.net.RisiToolErrorCodes.UNKNOWN_TOOL) },
         )
+    }
+
+    /**
+     * Proposal 2026-10-14-send-for-me §42.2/§42.3 a confirmed `send_message`: the user's own text, sent now through the
+     * normal send path (encrypted at this moment, a fresh client_msg_id), exactly as if typed. `sent` once the server
+     * took it (it has a message_id) within 10 s; `queued` while it waits in this phone's outbox.
+     */
+    private suspend fun sendMessageForRisi(a: ai.risicloud.risime.net.SendMessageArgs): ai.risicloud.risime.net.RisiToolResult {
+        val conv = a.conversationId.lowercase()
+        if (!scheduleTargetOk(conv)) return ai.risicloud.risime.net.RisiToolResult.error("not_member")
+        val id = java.util.UUID.randomUUID().toString()
+        if (engine.sendText(conv, a.text.trim(), id) == null) return ai.risicloud.risime.net.RisiToolResult.error("not_member")
+        val sent = withTimeoutOrNull(10_000) {
+            while (true) {
+                if (db.messages().byClientMsgId(id)?.messageId != null) return@withTimeoutOrNull true
+                delay(250)
+            }
+            @Suppress("UNREACHABLE_CODE") false
+        } == true
+        val state = if (sent) ai.risicloud.risime.net.SendMessageResult.SENT else ai.risicloud.risime.net.SendMessageResult.QUEUED
+        return ai.risicloud.risime.net.RisiToolResult(
+            ai.risicloud.risime.net.RisiToolResult.OK,
+            ai.risicloud.risime.net.ProtocolJson.encodeToJsonElement(ai.risicloud.risime.net.SendMessageResult.serializer(), ai.risicloud.risime.net.SendMessageResult(state)) as kotlinx.serialization.json.JsonObject,
+        )
+    }
+
+    /**
+     * §42.3 auto-send: for a contact the user chose "Send without asking", this phone sends the card's
+     * `confirm_write` itself, once, only when it is the phone that sent the request (SendForMeRules.autoConfirm).
+     */
+    private fun startAutoSender() = scope.launch {
+        chatTabs.rows.map { rows -> rows?.values?.firstOrNull { it.risi }?.conversationId }.distinctUntilChanged().collectLatest { conv ->
+            conv ?: return@collectLatest
+            db.messages().conversation(conv).collect { rows ->
+                if (!risiSendOn()) return@collect
+                val me = sessionStore.current()?.user?.id ?: return@collect
+                val myDevice = runCatching { sessionStore.deviceId() }.getOrNull()
+                val now = System.currentTimeMillis()
+                for (row in rows.takeLast(40)) {
+                    val r = ai.risicloud.risime.data.tabs.RisiMessages.meta(row) ?: continue
+                    if (!ai.risicloud.risime.data.tabs.SendForMeRules.isSendCard(r)) continue
+                    val wid = r.writeId?.lowercase() ?: continue
+                    if (autoSent(wid)) continue
+                    if (!ai.risicloud.risime.data.tabs.SendForMeRules.autoConfirm(row, r, rows, me, myDevice, now, autoSendStore)) continue
+                    autoSentPrefs.edit().putLong(wid, now).apply()
+                    Log.i("RisiMe", "send for me: confirmed on the user's standing choice")
+                    runCatching { engine.sendRisiControl(conv, ai.risicloud.risime.data.tabs.RisiControl.action(wid, "confirm_write")) }
+                }
+            }
+        }
     }
 
     /**
@@ -1148,6 +1200,22 @@ class AppContainer(
         )
     }
 
+    /** Proposal 2026-10-14-send-for-me: the developer flag `send_for_me` (on by default for `risi_dev` accounts). */
+    val sendForMeFlag by lazy { ai.risicloud.risime.data.tabs.SendForMeFlag(voicePrefs) }
+
+    /** §42.3 "Send without asking next time", per contact and tab (this phone only, never sent anywhere). */
+    val autoSendStore: ai.risicloud.risime.data.tabs.AutoSendStore by lazy {
+        ai.risicloud.risime.data.tabs.PrefsAutoSendStore(appContext.getSharedPreferences("risime_send_for_me", Context.MODE_PRIVATE))
+    }
+
+    /** §42.3 write ids this phone confirmed on the user's standing choice (kept so the card says so after a restart). */
+    private val autoSentPrefs by lazy { appContext.getSharedPreferences("risime_send_for_me_sent", Context.MODE_PRIVATE) }
+
+    fun autoSent(writeId: String): Boolean = runCatching { autoSentPrefs.contains(writeId.lowercase()) }.getOrDefault(false)
+
+    /** This device advertises `risi_send` (the executor runs `send_message`, the auto-send runs). */
+    fun risiSendOn(): Boolean = deviceRegistrar.advertised?.contains(ai.risicloud.risime.net.DeviceMls.CAP_RISI_SEND) == true
+
     /** Decision 090: the developer flag `call_risi` (off unless a `risi_dev` account turns it on). */
     val callRisiFlag by lazy { ai.risicloud.risime.calls.risi.CallRisiFlag(voicePrefs) }
 
@@ -1558,6 +1626,8 @@ class AppContainer(
             addToCallSupported = { runCatching { calls.canAdvertiseAddToCall() }.getOrDefault(false) },
             // Decision 090: the developer flag `call_risi` (off: never advertised, the PUT body is v1.47's).
             callRisiSupported = { callRisiFlag.on.value },
+            // Proposal 2026-10-14-send-for-me §42.1: the developer flag `send_for_me` (risi_dev accounts first).
+            risiSendSupported = { sendForMeFlag.on.value },
             screenShareSupported = { runCatching { calls.canAdvertiseScreenShare() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
@@ -1704,6 +1774,8 @@ class AppContainer(
         scope.launch {
             runCatching {
                 if (mlsEngine == null || !mlsCore.registered) return@runCatching
+                // Proposal 2026-10-14-send-for-me §42.1: the flag follows the session's `risi_dev` (no network).
+                sendForMeFlag.effective(sessionStore.current()?.user?.risiDev == true)
                 val r = deviceRegistrar.refreshCapabilities(runCatching { push.currentToken() }.getOrNull()) ?: return@runCatching
                 Log.i("RisiMe", "capabilities changed: re-registered ($r)")
             }
@@ -2249,6 +2321,8 @@ class AppContainer(
     init {
         // v1.44 §39.3: the sender's link-preview fetch (the switch is checked at send time).
         engine.linkPreviews = { url -> linkPreviews.fetchIfOn(url) }
+        // Proposal 2026-10-14-send-for-me §42.3: the per-contact auto-send (idle unless this device advertises `risi_send`).
+        startAutoSender()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 foreground.value = true
@@ -2256,6 +2330,8 @@ class AppContainer(
                 appLock.checkOnReturn()
                 scope.launch { appLock.onForeground() }
                 refreshCapabilities()
+                // Proposal 2026-10-14-send-for-me §42.5: report the skill/permission state whenever the app comes back.
+                if (risiSkillsOn()) scope.launch { runCatching { risiSkillsStore.onForeground(backgroundSkillPermissions) } }
                 scope.launch {
                     updater.onForeground()
                     updater.maybeCheck(SystemClock.elapsedRealtime())

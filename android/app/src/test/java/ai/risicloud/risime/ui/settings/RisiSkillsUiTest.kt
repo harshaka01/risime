@@ -99,7 +99,9 @@ class RisiSkillsUiTest {
     @Test fun focusShowsCanCannotExactPermissionsAndTheModes() {
         val m = model(registry())
         rule.setContent { RisiMeTheme { RisiSkillsScreen(m, Perms(ClientPermission.GRANTED), "alarm", {}) } }
-        rule.onNodeWithText("com.android.alarm.permission.SET_ALARM").assertExists()
+        // Proposal 2026-10-14-send-for-me §42: plain words, never the Android permission string.
+        rule.onNodeWithText("com.android.alarm.permission.SET_ALARM").assertDoesNotExist()
+        rule.onNodeWithText("Ask me each time").assertDoesNotExist()
         rule.onNodeWithText("• Set a one-time or repeating alarm on the phone you asked from").assertExists()
         rule.onNodeWithTag("risi_mode_$ASK_EACH_TIME").performScrollTo().performClick()
         rule.waitForIdle()

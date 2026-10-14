@@ -96,6 +96,15 @@ interface RisiHost {
     /** [Add] after [Edit] on a calendar_add card: `confirm_write` with `edit` (the corrected title/start/end/all_day). */
     fun confirmEdited(writeId: String, edit: kotlinx.serialization.json.JsonObject) {}
 
+    /** Proposal 2026-10-14-send-for-me §42.3: the per-contact "Send without asking next time" (this phone only). */
+    val autoSend: ai.risicloud.risime.data.tabs.AutoSendStore? get() = null
+
+    /** §42.3 write ids this phone confirmed on the user's standing choice (the card says "Sent without asking"). */
+    fun autoSent(writeId: String): Boolean = false
+
+    /** §42.2 `message_sent`: open the chat the message went to. */
+    fun openConversation(conversationId: String) = openChat(conversationId, null)
+
     /** P0 the phone's calendar for the calendar action card (picker, the local add record, Open). */
     val calendar: ai.risicloud.risime.data.tabs.RisiCalendarPort? get() = null
 

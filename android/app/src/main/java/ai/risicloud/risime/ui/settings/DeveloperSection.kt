@@ -68,6 +68,10 @@ fun RisiDevSection(c: AppContainer) {
             val before = c.callRisiFlag.on.value
             c.callRisiFlag.setDeveloper(dev == true)
             if (before != c.callRisiFlag.on.value) c.refreshCapabilities()
+            // Proposal 2026-10-14-send-for-me: `send_for_me` (on by default for a developer account) follows it too.
+            val sendBefore = c.sendForMeFlag.on.value
+            c.sendForMeFlag.setDeveloper(dev == true)
+            if (sendBefore != c.sendForMeFlag.on.value) c.refreshCapabilities()
         }
         if (dev == true) {
             when (val r = c.api.risiDev()) {
@@ -117,7 +121,24 @@ fun RisiDevSection(c: AppContainer) {
             PhoneRecogniserSection(c)
             PhoneTtsSection()
             CallRisiDevRow(c)
+            SendForMeDevRow(c)
         }
+    }
+}
+
+const val SEND_FOR_ME_FLAG_LABEL = "Send a message for me (one-tap card)"
+const val SEND_FOR_ME_FLAG_HELP = "Risi drafts the message and shows one card with Send and Edit. Your phone sends it, encrypted. On by default for developer accounts."
+
+/** Proposal 2026-10-14-send-for-me: the developer flag `send_for_me` (toggling it re-advertises `risi_send`). */
+@Composable
+fun SendForMeDevRow(c: AppContainer) {
+    val on by c.sendForMeFlag.on.collectAsStateWithLifecycle()
+    Row(Modifier.fillMaxWidth().testTag("dev_send_for_me"), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(SEND_FOR_ME_FLAG_LABEL, style = MaterialTheme.typography.bodyMedium)
+            Text(SEND_FOR_ME_FLAG_HELP, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = { c.sendForMeFlag.set(it); c.refreshCapabilities() }, modifier = Modifier.testTag("dev_send_for_me_switch"))
     }
 }
 

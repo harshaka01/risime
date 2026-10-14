@@ -56,7 +56,11 @@ class RisiSkillsStore(
     /** "Also cancel N pending": this phone's own pending items of a skill (scheduled messages), cancelled locally. */
     private val cancelLocal: suspend (skillId: String) -> Unit = {},
     private val log: (String) -> Unit = {},
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
+    /** When the last permission report reached the server (the 30-min heartbeat, proposal 2026-10-14-send-for-me §42.5). */
+    @Volatile private var reportedAtMs: Long = 0L
+
     private val _skills = MutableStateFlow<List<RisiSkill>?>(null)
 
     /** In registry order; null until loaded. */
@@ -106,16 +110,27 @@ class RisiSkillsStore(
     /** §26.2: report the Android permission of every skill whose reported state differs (on start and on change). */
     suspend fun reportPermissions(permissions: SkillPermissions) = lock.withLock { reportLocked(permissions) }
 
-    private suspend fun reportLocked(permissions: SkillPermissions) {
+    /**
+     * Proposal 2026-10-14-send-for-me §42.5: the app came to the foreground. Loads the skills if this process hasn't
+     * yet, then reports: every change at once, and the unchanged values too when the last report is over 30 min old
+     * (so the server's `reported_at` stays fresh and it never acts on a stale "denied").
+     */
+    suspend fun onForeground(permissions: SkillPermissions) {
+        if (_skills.value == null) { refresh(permissions); return }
+        lock.withLock { reportLocked(permissions, heartbeat = true) }
+    }
+
+    private suspend fun reportLocked(permissions: SkillPermissions, heartbeat: Boolean = false) {
         val list = _skills.value ?: return
-        val changes = list.filter { it.available && (it.where != "server" || it.permissions.any { p -> p.scope == "android" }) }
-            .mapNotNull { s ->
-                val now = permissions.current(s)
-                if (s.client?.permission == now) null else RisiSkillChange(s.id, clientPermission = now)
-            }.take(10)
+        val reportable = list.filter { it.available && (it.where != "server" || it.permissions.any { p -> p.scope == "android" }) }
+        val due = heartbeat && now() - reportedAtMs >= HEARTBEAT_MS
+        val changes = reportable.mapNotNull { s ->
+            val cur = permissions.current(s)
+            if (s.client?.permission == cur && !due) null else RisiSkillChange(s.id, clientPermission = cur)
+        }.take(10)
         if (changes.isEmpty()) return
         when (val r = patch(RisiSkillsPatch(changes))) {
-            is ApiResult.Ok -> merge(r.value.skills)
+            is ApiResult.Ok -> { merge(r.value.skills); reportedAtMs = now() }
             else -> log("risi skills: permission report not sent")
         }
     }
@@ -129,7 +144,9 @@ class RisiSkillsStore(
         if (!skill.available) return SkillTurnOn.Failed(skillsErrorText(RisiSkillsErrors.SKILL_UNAVAILABLE))
         val perm = permissions.request(skill)
         return lock.withLock {
-            if (perm != ClientPermission.GRANTED && perm != ClientPermission.NOT_NEEDED) {
+            // §42.5: Scheduled messages' exact-alarm access is optional (WorkManager sends it, maybe a few minutes
+            // late): a refusal is reported, but the skill still turns on.
+            if (perm != ClientPermission.GRANTED && perm != ClientPermission.NOT_NEEDED && !permissionOptional(skill)) {
                 patch(RisiSkillsPatch(listOf(RisiSkillChange(id, clientPermission = perm)))).let { if (it is ApiResult.Ok) merge(it.value.skills) }
                 return@withLock SkillTurnOn.Refused(refusedText(skill, perm))
             }
@@ -188,6 +205,12 @@ class RisiSkillsStore(
     }
 
     companion object {
+        /** §42.5 unchanged permission values are re-sent at most this often. */
+        const val HEARTBEAT_MS = 30L * 60_000
+
+        /** §26.1/§42.5: a skill whose phone permission only makes it more exact (Scheduled messages' exact alarms). */
+        fun permissionOptional(skill: RisiSkill): Boolean = skill.id == ai.risicloud.risime.net.RisiSkillIds.SCHEDULED_MESSAGES
+
         fun encodeStates(m: Map<String, String>): String =
             ai.risicloud.risime.net.ProtocolJson.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.JsonObject(m.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) }))
 

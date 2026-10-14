@@ -211,6 +211,12 @@ data class RisiMeta(
     val clarify: RisiNameClarify? = null,
     /** v1.39 §36.7: the reader-language hint of a transcribed `discussion_summary` / `discussion_card` ("si" | "ta" | "en"); no rendering rule. */
     val lang: String? = null,
+    /** Proposal 2026-10-14-send-for-me §42.2: a `send_message` / `schedule_message` card's display data. */
+    val send: RisiSend? = null,
+    /** §42.2 `message_sent`: the recipient (never the text). */
+    val to: RisiSendTo? = null,
+    /** §42.2 `message_sent`: "private" | "official". */
+    val tab: String? = null,
 ) {
     /** The §27 summary this row belongs to: `summary_id`, else a note's `note_id` (§30.3: the same id). */
     val summaryKey: String? get() = summaryId ?: noteId

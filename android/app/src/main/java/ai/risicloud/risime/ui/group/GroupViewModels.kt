@@ -647,6 +647,11 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun scheduleMayBeLate(): Boolean = !c.backgroundSkillPermissions.exactAlarmsAllowed()
 
+        // Proposal 2026-10-14-send-for-me §42.3: the per-contact "Send without asking" (this phone only).
+        override val autoSend: ai.risicloud.risime.data.tabs.AutoSendStore get() = c.autoSendStore
+
+        override fun autoSent(writeId: String): Boolean = c.autoSent(writeId)
+
         override val calendar: ai.risicloud.risime.data.tabs.RisiCalendarPort get() = c.calendarPort
 
         // §29: only on a risi_events device (else the cards render from their own data, without buttons).

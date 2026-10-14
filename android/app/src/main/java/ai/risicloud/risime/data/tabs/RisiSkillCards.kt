@@ -28,6 +28,8 @@ object RisiSkillCards {
         ai.risicloud.risime.net.RisiKinds129.TOOL_RISI_CALENDAR_ADD,
         // v1.34 §33.15 "send this as a PDF to …" (buttons [send, cancel]).
         ai.risicloud.risime.net.RisiTools134.TOOL_EXPORT_PDF,
+        // Proposal 2026-10-14-send-for-me §42.2 "send a message for me" (buttons [send, edit, cancel]).
+        ai.risicloud.risime.net.RisiSend149.TOOL_SEND_MESSAGE,
     )
 
     fun knownConfirmTool(r: RisiMeta): Boolean = r.tool in CONFIRM_TOOLS

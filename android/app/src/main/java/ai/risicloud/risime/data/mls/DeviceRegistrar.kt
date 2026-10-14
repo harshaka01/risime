@@ -81,6 +81,8 @@ class DeviceRegistrar(
     private val addToCallSupported: () -> Boolean = { false },
     /** Proposal 2026-10-14-call-risi §41.1: the developer flag `call_risi` is on (advertised only with `group_calls` and `risi_tools`). */
     private val callRisiSupported: () -> Boolean = { false },
+    /** Proposal 2026-10-14-send-for-me §42.1: the developer flag `send_for_me` is on (advertised only with `risi_tools`). */
+    private val risiSendSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -148,6 +150,8 @@ class DeviceRegistrar(
             DeviceMls.CAP_CALL_TRANSCRIBE.takeIf {
                 mls.deletesSupported && imagesSupported() && callsSupported() && mls.tabsSupported && tabsSupported() && callTranscribeSupported()
             },
+            // Proposal 2026-10-14-send-for-me §42.1: only with `risi_tools`, while the developer flag `send_for_me` is on.
+            DeviceMls.CAP_RISI_SEND.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSendSupported() },
             // Proposal 2026-10-14-call-risi §41.1: only with `group_calls` and `risi_tools`, while the developer flag is on.
             DeviceMls.CAP_CALL_RISI.takeIf {
                 ai.risicloud.risime.calls.risi.CallRisiRules.advertise(

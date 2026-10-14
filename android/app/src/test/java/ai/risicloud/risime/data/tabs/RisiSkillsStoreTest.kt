@@ -65,13 +65,48 @@ class RisiSkillsStoreTest {
         val server = Server(registry())
         val s = store(server)
         s.refresh()
-        val perms = Perms(mapOf("scheduled_messages" to ClientPermission.NOT_ASKED), afterPrompt = mapOf("scheduled_messages" to ClientPermission.DENIED))
-        val r = s.turnOn("scheduled_messages", perms)
+        val perms = Perms(mapOf("calendar" to ClientPermission.NOT_ASKED), afterPrompt = mapOf("calendar" to ClientPermission.DENIED))
+        val r = s.turnOn("calendar", perms)
         assertTrue(r is SkillTurnOn.Refused)
-        assertEquals(listOf("scheduled_messages"), perms.prompted)
-        assertEquals(RisiSkillStates.OFF, s.skill("scheduled_messages")!!.state)
-        assertEquals(listOf(RisiSkillChange("scheduled_messages", clientPermission = ClientPermission.DENIED)), server.patches.single().changes)
-        assertEquals(RisiSkillStates.OFF, s.localState("scheduled_messages"))
+        assertEquals(listOf("calendar"), perms.prompted)
+        assertEquals(RisiSkillStates.OFF, s.skill("calendar")!!.state)
+        assertEquals(listOf(RisiSkillChange("calendar", clientPermission = ClientPermission.DENIED)), server.patches.single().changes)
+        assertEquals(RisiSkillStates.OFF, s.localState("calendar"))
+    }
+
+    /** Proposal 2026-10-14-send-for-me §42.5: exact alarms are optional for Scheduled messages (WorkManager sends it). */
+    @Test fun scheduledMessagesTurnOnEvenWithoutExactAlarms() = runBlocking {
+        val server = Server(registry())
+        val s = store(server)
+        s.refresh()
+        val perms = Perms(mapOf("scheduled_messages" to ClientPermission.NOT_ASKED), afterPrompt = mapOf("scheduled_messages" to ClientPermission.DENIED))
+        assertEquals(SkillTurnOn.On, s.turnOn("scheduled_messages", perms))
+        assertEquals(listOf(RisiSkillChange("scheduled_messages", RisiSkillStates.ASK, ClientPermission.DENIED)), server.patches.single().changes)
+        assertEquals(RisiSkillStates.ASK, s.localState("scheduled_messages"))
+    }
+
+    /** §42.5: on every foreground, changes go at once; unchanged values are re-sent only when the last report is 30 min old. */
+    @Test fun foregroundReportsChangesAtOnceAndAHeartbeatEvery30Minutes() = runBlocking {
+        val server = Server(registry())
+        var t = 1_000_000L
+        val s = RisiSkillsStore(get = { server.get() }, patch = { server.patch(it) }, now = { t })
+        val perms = Perms(mapOf("alarm" to ClientPermission.NOT_NEEDED, "reminders" to ClientPermission.GRANTED, "calendar" to ClientPermission.GRANTED, "scheduled_messages" to ClientPermission.GRANTED))
+        // The first foreground of the process loads and reports what differs.
+        s.onForeground(perms)
+        assertEquals(1, server.patches.size)
+        // Back within 30 min, nothing changed: nothing sent.
+        s.onForeground(perms)
+        t += 10 * 60_000
+        s.onForeground(perms)
+        assertEquals(1, server.patches.size)
+        // A change is sent at once.
+        perms.now = perms.now + ("calendar" to ClientPermission.DENIED)
+        s.onForeground(perms)
+        assertEquals(listOf(RisiSkillChange("calendar", clientPermission = ClientPermission.DENIED)), server.patches.last().changes)
+        // 30 min after the last report: the unchanged values too (a fresh reported_at).
+        t += RisiSkillsStore.HEARTBEAT_MS
+        s.onForeground(perms)
+        assertEquals(setOf("alarm", "reminders", "calendar", "scheduled_messages"), server.patches.last().changes.map { it.id }.toSet())
     }
 
     @Test fun aGrantedPermissionTurnsItOnAsAskAndTheRecordIsKept() = runBlocking {

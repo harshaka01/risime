@@ -21,6 +21,7 @@ import ai.risicloud.risime.net.ScheduleMessageResult
 import ai.risicloud.risime.net.SetAlarmArgs
 import ai.risicloud.risime.net.SetAlarmResult
 import ai.risicloud.risime.net.exportPdfArgs
+import ai.risicloud.risime.net.sendMessageArgs
 import java.time.Instant
 
 /*
@@ -54,6 +55,11 @@ class RisiToolExecutor(
     private val googleAccount: suspend () -> String? = { null },
     /** v1.34 §33.15 make the PDF on this phone and send it as a `file` (null: this build has no PDF export). */
     private val exportPdf: (suspend (ai.risicloud.risime.net.ExportPdfArgs) -> RisiToolResult)? = null,
+    /**
+     * Proposal 2026-10-14-send-for-me §42.3: send the user's own message now through the normal send path and
+     * answer `sent`/`queued` (or `not_member`). Null: this build/device doesn't advertise `risi_send` (`unknown_tool`).
+     */
+    private val sendMessage: (suspend (ai.risicloud.risime.net.SendMessageArgs) -> RisiToolResult)? = null,
 ) {
     companion object {
         /** §26.3 the request must be at most this old at the call's `server_ts`. */
@@ -76,6 +82,17 @@ class RisiToolExecutor(
 
         /** The keys a `calendar_add` `confirm_write` edit may change. */
         val EDIT_KEYS = setOf("title", "start", "end", "all_day")
+
+        /** §42.2/§42.4: the tools whose `confirm_write` may carry `edit: {"text"}` (and nothing else). */
+        val TEXT_EDIT_TOOLS = setOf(ai.risicloud.risime.net.RisiSend149.TOOL_SEND_MESSAGE, RisiToolCall.TOOL_SCHEDULE_MESSAGE)
+
+        /** A text edit: exactly `{"text": non-blank string}`. */
+        fun textEditOk(edit: JsonObject?): Boolean {
+            edit ?: return false
+            if (edit.keys != setOf(ai.risicloud.risime.net.RisiSend149.EDIT_TEXT)) return false
+            val t = (edit[ai.risicloud.risime.net.RisiSend149.EDIT_TEXT] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content ?: return false
+            return t.isNotBlank()
+        }
 
         /** Same `calendar_add` args: equal keys, `title`/`all_day` exactly, `start`/`end` as instants. */
         fun calendarArgsEqual(a: JsonObject, b: JsonObject): Boolean {
@@ -114,6 +131,7 @@ class RisiToolExecutor(
         RisiToolCall.TOOL_CALENDAR_CHECK -> calendarCheckTool(call)
         RisiToolCall.TOOL_CALENDAR_ADD -> calendarAddTool(call)
         ai.risicloud.risime.net.RisiTools134.TOOL_EXPORT_PDF -> exportPdfTool(call)
+        ai.risicloud.risime.net.RisiSend149.TOOL_SEND_MESSAGE -> sendMessageTool(call)
         else -> RisiToolResult.error(RisiToolErrorCodes.UNKNOWN_TOOL)
     }
 
@@ -126,6 +144,8 @@ class RisiToolExecutor(
         RisiToolCall.TOOL_CALENDAR_ADD -> calendarAddTool(call, gated = false)
         // v1.34 §33.15: gated by `pdf_export` (kept by the server only with `risi_tools`), not by a skill.
         ai.risicloud.risime.net.RisiTools134.TOOL_EXPORT_PDF -> exportPdfTool(call)
+        // §42.2: no skill; gated by `risi_send` (kept by the server only with `risi_tools`).
+        ai.risicloud.risime.net.RisiSend149.TOOL_SEND_MESSAGE -> sendMessageTool(call)
         else -> RisiToolResult.error(RisiToolErrorCodes.UNKNOWN_TOOL)
     }
 
@@ -165,10 +185,12 @@ class RisiToolExecutor(
         if (args != null) {
             // Proposal 2026-10-09-risi-action-loop §4: a calendar_add may run the card's args merged with
             // the `edit` that MY OWN `confirm_write` carried (timestamps compared as instants).
-            val edit = if (call.tool == RisiToolCall.TOOL_CALENDAR_ADD) RisiControl.editOf(confirm.systemJson) else null
+            val edit = if (call.tool == RisiToolCall.TOOL_CALENDAR_ADD || call.tool in TEXT_EDIT_TOOLS) RisiControl.editOf(confirm.systemJson) else null
             val okArgs = args == callArgs ||
                 (call.tool == RisiToolCall.TOOL_CALENDAR_ADD && calendarArgsEqual(args, callArgs)) ||
-                (edit != null && edit.keys.all { it in EDIT_KEYS } && calendarArgsEqual(JsonObject(args + edit), callArgs))
+                (call.tool == RisiToolCall.TOOL_CALENDAR_ADD && edit != null && edit.keys.all { it in EDIT_KEYS } && calendarArgsEqual(JsonObject(args + edit), callArgs)) ||
+                // Proposal 2026-10-14-send-for-me §42.2/§42.4: the card's args with MY OWN edited `text`, exactly.
+                (call.tool in TEXT_EDIT_TOOLS && textEditOk(edit) && JsonObject(args + edit!!) == callArgs)
             if (!okArgs) return false
         } else if (!v125CalendarCardMatches(card, call)) {
             return false
@@ -257,6 +279,35 @@ class RisiToolExecutor(
         if (!exportConfirmed(call, a)) { log("risi tool export_pdf: declined (no confirmed card)"); return RisiToolResult.declined() }
         if (!record(call, a.conversationId)) return RisiToolResult.declined()
         return run(a)
+    }
+
+    /**
+     * Proposal 2026-10-14-send-for-me §42.3: `send_message` runs only after the card rule (a) (the agent's card with
+     * this `write_id`, my own first answer `confirm_write`, args equal to the card's or to the card's merged with MY
+     * own `edit.text`), with an unused `write_id`. Never the Allowed path: the per-contact "send without asking" is
+     * the phone sending that `confirm_write` itself, so this rule is the same either way. A send that couldn't be
+     * made (not a member) releases its `write_id`, so [Retry] can run it again.
+     */
+    private suspend fun sendMessageTool(call: RisiToolCall): RisiToolResult {
+        val run = sendMessage ?: return RisiToolResult.error(RisiToolErrorCodes.UNKNOWN_TOOL)
+        val a = call.sendMessageArgs() ?: return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
+        val n = graphemes(a.text)
+        if (a.writeId != call.writeId || a.text.isBlank() || n > ai.risicloud.risime.net.RisiSend149.MAX_TEXT_GRAPHEMES || a.conversationId.isBlank()) {
+            return RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
+        }
+        if (!unused(call.writeId)) { log("risi tool send_message: declined (write_id used)"); return RisiToolResult.declined() }
+        if (!cardConfirmed(call)) { log("risi tool send_message: declined (no confirmed card)"); return RisiToolResult.declined() }
+        if (!record(call, a.conversationId)) return RisiToolResult.declined()
+        val r = try {
+            run(a)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("risi tool send_message: ${e.javaClass.simpleName}")
+            RisiToolResult.error(RisiToolErrorCodes.BAD_ARGS)
+        }
+        if (r.status != RisiToolResult.OK) dao.deleteWrite(a.writeId)
+        return r
     }
 
     // ---- tools ----

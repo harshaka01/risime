@@ -76,8 +76,9 @@ import java.util.Locale
 const val RISI_SKILLS_ROUTE = "risi_skills"
 const val RISI_SKILLS_TITLE = "Risi skills"
 const val RISI_SKILLS_BLURB = "Every skill is off until you turn it on. Risi acts only when you ask, in your Risi chat or with @Risi in Official — never in Private."
-const val ASK_EACH_TIME = "Ask me each time"
-const val ALLOWED = "Allowed"
+/** Proposal 2026-10-14-send-for-me §42: the two choices in plain words (was "Ask me each time" / "Allowed"). */
+const val ASK_EACH_TIME = SkillPlainText.SHOW_ME_FIRST
+const val ALLOWED = SkillPlainText.WITHOUT_ASKING
 
 private val ENTRY_TIME = DateTimeFormatter.ofPattern("EEE d MMM, HH:mm", Locale.ENGLISH)
 
@@ -286,7 +287,8 @@ fun RisiSkillsRoute(c: AppContainer, skillId: String?, onBack: () -> Unit, onRis
             skillOff = c.risiSkillsStore.skills.map { c.risiSkillsStore.localState(RisiSkillIds.CALENDAR) == RisiSkillStates.OFF },
         )
     }
-    RisiSkillsScreen(model, permissions, skillId, onBack, calendar = c.calendarPort, google = google, openRisiItems = onRisiItems?.takeIf { c.risiItemsOn() }, openSettings = {
+    RisiSkillsScreen(model, permissions, skillId, onBack, calendar = c.calendarPort, google = google, openRisiItems = onRisiItems?.takeIf { c.risiItemsOn() },
+        autoSend = c.autoSendStore.takeIf { c.risiSendOn() }, openSettings = {
         runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }, openClock = {
         runCatching { ctx.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -307,6 +309,8 @@ fun RisiSkillsScreen(
     google: GcalSettingsModel? = null,
     /** v1.35 §34.4: Calendar → "Risi's items" (null: not shown, i.e. this phone doesn't advertise `risi_items`). */
     openRisiItems: (() -> Unit)? = null,
+    /** Proposal 2026-10-14-send-for-me §42.3: the contacts Risi sends to without asking (null: not a `risi_send` phone). */
+    autoSend: ai.risicloud.risime.data.tabs.AutoSendStore? = null,
 ) {
     val skills by model.store.skills.collectAsStateWithLifecycle()
     val error by model.store.error.collectAsStateWithLifecycle()
@@ -358,6 +362,7 @@ fun RisiSkillsScreen(
                     )
                 }
             }
+            if (autoSend != null) item(key = "send_for_me") { SendForMeSection(autoSend) }
         }
     }
     revoke?.let { r -> RevokeDialog(r, onConfirm = model::confirmRevoke, onDismiss = model::dismissRevoke) }
@@ -389,12 +394,7 @@ private fun SkillCard(
                 Column(Modifier.weight(1f).clickable(onClick = onToggleOpen)) {
                     Text(s.title.ifBlank { s.id }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        when {
-                            !s.available -> "Coming later"
-                            s.state == RisiSkillStates.ALLOWED -> ALLOWED
-                            s.state == RisiSkillStates.ASK -> ASK_EACH_TIME
-                            else -> "Off"
-                        },
+                        SkillPlainText.stateLine(s),
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.testTag("risi_skill_state_${s.id}"),
                     )
@@ -407,7 +407,16 @@ private fun SkillCard(
                     modifier = Modifier.semantics { contentDescription = "${s.title} skill" }.testTag("risi_skill_switch_${s.id}"),
                 )
             }
-            Text(s.description, style = MaterialTheme.typography.bodyMedium)
+            Text(SkillPlainText.sentence(s), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_skill_sentence_${s.id}"))
+            // §42.5: what this phone allows, right under the sentence (never the Android permission string).
+            s.client?.let { c ->
+                if (s.available) Text(
+                    SkillPlainText.permissionLine(c.permission, ai.risicloud.risime.data.tabs.RisiSkillsStore.permissionOptional(s)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (c.permission == ai.risicloud.risime.net.ClientPermission.DENIED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("risi_skill_client_${s.id}").then(if (c.permission == ai.risicloud.risime.net.ClientPermission.DENIED) Modifier.clickable(onClick = openSettings) else Modifier),
+                )
+            }
             note?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("risi_skill_note_${s.id}"))
                 OutlinedButton(onClick = openSettings) { Text("Open settings", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
@@ -430,15 +439,13 @@ private fun SkillCard(
             Bullets("Can", s.can)
             Bullets("Cannot", s.cannot)
             if (s.permissions.isNotEmpty()) {
-                Text("Permissions", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text("What it needs", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 s.permissions.forEach { p ->
                     Column(Modifier.testTag("risi_skill_perm")) {
-                        Text(p.label.ifBlank { p.name }, style = MaterialTheme.typography.bodyMedium)
-                        Text(p.name + if (p.runtime) " (asked on this phone)" else "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("• " + SkillPlainText.permissionLabel(p.label) + if (p.runtime) " (your phone asks you)" else "", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
-            s.client?.let { Text("This phone: " + permissionText(it.permission), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("risi_skill_client_${s.id}")) }
             if (calendar != null) {
                 HorizontalDivider()
                 CalendarSourcesBlock(calendar)
@@ -450,10 +457,10 @@ private fun SkillCard(
             if (s.on) {
                 HorizontalDivider()
                 if (s.allowsAllowed) {
-                    ModeRow(ASK_EACH_TIME, "Risi shows a card and waits for your Add.", s.state == RisiSkillStates.ASK, !busy) { onMode(RisiSkillStates.ASK) }
-                    ModeRow(ALLOWED, "Risi does it for you, without a card, when you ask for something only you are affected by.", s.state == RisiSkillStates.ALLOWED, !busy) { onMode(RisiSkillStates.ALLOWED) }
+                    ModeRow(ASK_EACH_TIME, SkillPlainText.SHOW_ME_FIRST_HELP, s.state == RisiSkillStates.ASK, !busy) { onMode(RisiSkillStates.ASK) }
+                    ModeRow(ALLOWED, SkillPlainText.WITHOUT_ASKING_HELP, s.state == RisiSkillStates.ALLOWED, !busy) { onMode(RisiSkillStates.ALLOWED) }
                 } else {
-                    Text("Always asks you first (it affects other people).", style = MaterialTheme.typography.bodySmall)
+                    Text(SkillPlainText.ALWAYS_SHOWS, style = MaterialTheme.typography.bodySmall)
                 }
             }
             HorizontalDivider()
@@ -503,13 +510,39 @@ private fun ModeRow(title: String, sub: String, selected: Boolean, enabled: Bool
     }
 }
 
-fun permissionText(p: String): String = when (p) {
-    "granted" -> "permission granted"
-    "denied" -> "permission refused"
-    "not_asked" -> "permission not asked yet"
-    "not_needed" -> "no permission needed"
-    "unsupported" -> "not supported"
-    else -> "unknown"
+fun permissionText(p: String): String = SkillPlainText.permissionLine(p)
+
+const val SEND_FOR_ME_TITLE = "Send a message for me"
+const val SEND_FOR_ME_SENTENCE = "Risi writes the message and shows it to you with Send and Edit. Your phone sends it, encrypted, as you. No skill to turn on."
+const val SEND_FOR_ME_NONE = "Risi asks you before every message. On a message card you can tick \"without asking next time\" for one person."
+
+/**
+ * Proposal 2026-10-14-send-for-me §42.3: the people Risi may send to without asking (chosen on a card, stored only
+ * on this phone), each switchable back to "Ask me".
+ */
+@Composable
+fun SendForMeSection(store: ai.risicloud.risime.data.tabs.AutoSendStore) {
+    val version by store.version.collectAsStateWithLifecycle()
+    val list = remember(version) { store.list() }
+    Card(Modifier.fillMaxWidth().testTag("risi_send_for_me")) {
+        Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            Text(SEND_FOR_ME_TITLE, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(SEND_FOR_ME_SENTENCE, style = MaterialTheme.typography.bodyMedium)
+            if (list.isEmpty()) Text(SEND_FOR_ME_NONE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            list.forEach { a ->
+                Row(Modifier.fillMaxWidth().testTag("risi_send_auto_${a.userId}"), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(a.name, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            (if (a.tab == ai.risicloud.risime.net.RisiSendTabs.OFFICIAL) "Official" else "Private") + " · sends without asking",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = { store.set(a.userId, a.tab, a.name, false) }) { Text("Ask me") }
+                }
+            }
+        }
+    }
 }
 
 /** §26.5 the revoke dialog: what stays, and "Also cancel N pending" where there can be pending items. */

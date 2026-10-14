@@ -152,12 +152,15 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.REPORT -> ReportCard(r)
                     RisiKinds.OFFER -> OfferCard(r, ctx)
                     RisiKinds.ERROR -> RisiErrorCard(row, r, ctx)
-                    RisiKinds.CONFIRM -> if (r.tool == ai.risicloud.risime.net.RisiKinds129.TOOL_RISI_CALENDAR_ADD) RisiCalendarAddCard(row, r, ctx)
+                    // Proposal 2026-10-14-send-for-me §42.2/§42.4: the one-tap send / schedule card.
+                    RisiKinds.CONFIRM -> if (ai.risicloud.risime.data.tabs.SendForMeRules.isOneTapCard(r)) SendMessageCard(row, r, ctx)
+                        else if (r.tool == ai.risicloud.risime.net.RisiKinds129.TOOL_RISI_CALENDAR_ADD) RisiCalendarAddCard(row, r, ctx)
                         else if (ai.risicloud.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r) && ai.risicloud.risime.data.tabs.RisiCalendarCards.proposal(r) != null) CalendarActionCard(row, r, ctx) else ConfirmCard(row, r, ctx)
                     RisiKinds.REMINDER_SET -> ReminderSetCard(row, r, ctx)
                     RisiKinds.DRAFT -> DraftCard(row, r, ctx)
                     RisiKinds.SKILL_DONE -> SkillDoneCard(row, r, ctx)
                     RisiKinds.SKILL_NEEDED -> SkillNeededCard(row, r, ctx)
+                    ai.risicloud.risime.net.RisiSend149.KIND_MESSAGE_SENT -> MessageSentLine(row, r, ctx)
                     ai.risicloud.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> DiscussionSummaryCard(r, ctx)
                     ai.risicloud.risime.net.RisiKinds127.DISCUSSION_CARD -> DiscussionCard(row, r, ctx)
                     ai.risicloud.risime.net.RisiKinds127.ITEM_DUE, ai.risicloud.risime.net.RisiKinds127.ITEM_OVERDUE, ai.risicloud.risime.net.RisiKinds127.ITEM_NUDGE -> ItemReminderCard(row, r, ctx)
@@ -194,12 +197,15 @@ private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
     RisiKinds.REPORT -> "Risi · Report"
     RisiKinds.OFFER -> "Risi"
     // Server item 8: a proactive offer (origin "offer") asks "Add to calendar?" / "Remind me?".
-    RisiKinds.CONFIRM -> ai.risicloud.risime.data.tabs.RisiOffers.header(r)?.let { "Risi · $it" }
+    RisiKinds.CONFIRM -> if (ai.risicloud.risime.data.tabs.SendForMeRules.isSendCard(r)) "Risi · Send a message"
+        else if (ai.risicloud.risime.data.tabs.SendForMeRules.isOneTapCard(r)) "Risi · Schedule a message"
+        else ai.risicloud.risime.data.tabs.RisiOffers.header(r)?.let { "Risi · $it" }
         ?: if (ai.risicloud.risime.data.tabs.RisiCalendarCards.isCalendarAdd(r)) "Risi · Add to calendar" else "Risi · Confirm"
     RisiKinds.REMINDER_SET -> "Risi · Reminder set"
     RisiKinds.DRAFT -> "Risi · Draft"
     RisiKinds.SKILL_DONE -> "Risi · Done"
     RisiKinds.SKILL_NEEDED -> "Risi · Skill needed"
+    ai.risicloud.risime.net.RisiSend149.KIND_MESSAGE_SENT -> "Risi"
     ai.risicloud.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> "Risi · Follow-ups"
     ai.risicloud.risime.net.RisiKinds127.DISCUSSION_CARD -> "Risi · Discussion summary"
     ai.risicloud.risime.net.RisiKinds127.ITEM_DUE, ai.risicloud.risime.net.RisiKinds127.ITEM_OVERDUE, ai.risicloud.risime.net.RisiKinds127.ITEM_NUDGE ->

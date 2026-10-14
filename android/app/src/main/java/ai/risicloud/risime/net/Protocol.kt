@@ -720,6 +720,9 @@ data class DeviceMls(
         /** Proposal 2026-10-14-call-risi §41.1: Call Risi (with `group_calls` and `risi_tools`; developer flag `call_risi` in v1). */
         const val CAP_CALL_RISI = "call_risi"
 
+        /** Proposal 2026-10-14-send-for-me §42.1: the `send_message` tool, its card and `message_sent` (only with `risi_tools`). */
+        const val CAP_RISI_SEND = "risi_send"
+
         /** v1.24 §24.7: two tabs, only while `/auth/config` says `tabs: on` and the core enforces §24.1. */
         const val CAP_TABS = CAPABILITY_TABS
 
