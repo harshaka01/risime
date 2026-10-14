@@ -1860,6 +1860,7 @@ class AppContainer(
         scope.launch {
             runCatching {
                 if (mlsEngine == null || !mlsCore.registered) return@runCatching
+                followFreshDeveloper()
                 // Proposal 2026-10-14-send-for-me §42.1: the flag follows the session's `risi_dev` (no network).
                 val dev = sessionStore.current()?.user?.risiDev == true
                 sendForMeFlag.effective(dev)
@@ -1870,6 +1871,31 @@ class AppContainer(
             }
             // P0 background delivery: the server must hold this phone's current push token.
             runCatching { if ((mlsCore.registered || mlsCore.notApplicable) && canAuthenticate()) push.ensureRegistered() }
+        }
+    }
+
+    private var lastMeCheckAt = 0L
+
+    /**
+     * An account that became a developer after sign-in (RISI_DEV_USERS) never advertised `risi_send`: the stored
+     * `risi_dev` was from sign-in. At most one `GET /me` per 30 s, failures ignored; a changed `risi_dev` is stored
+     * and the developer flags follow it (as Settings -> Developer does).
+     */
+    private suspend fun followFreshDeveloper() {
+        val s = sessionStore.current() ?: return
+        val now = System.currentTimeMillis()
+        if (!canAuthenticate() || now - lastMeCheckAt < 30_000) return
+        lastMeCheckAt = now
+        val me = (api.me() as? ApiResult.Ok)?.value?.user ?: return
+        if (me.risiDev != s.user.risiDev) runCatching { sessionStore.updateUser(s.user.copy(risiDev = me.risiDev)) }
+        val dev = me.risiDev
+        phoneSttFlag.setDeveloper(dev)
+        val callBefore = callRisiFlag.on.value
+        callRisiFlag.setDeveloper(dev)
+        val flags = listOf(sendForMeFlag, fixitFlag, skillDiagnosticsFlag)
+        // The caller re-advertises right after; flag.on is already current for its capability check.
+        if (callBefore != callRisiFlag.on.value || ai.risicloud.risime.data.tabs.followDeveloper(dev, flags)) {
+            Log.i("RisiMe", "developer flags followed /me (risi_dev=$dev)")
         }
     }
 

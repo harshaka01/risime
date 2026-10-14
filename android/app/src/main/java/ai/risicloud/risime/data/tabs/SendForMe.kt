@@ -76,6 +76,16 @@ open class DevDefaultFlag(private val prefs: SharedPreferences?, val name: Strin
     }
 }
 
+/**
+ * A fresh `risi_dev` (from `GET /me`) applied to developer flags; true when any effective flag changed (the device
+ * then re-advertises). An account added to RISI_DEV_USERS after sign-in follows it on the next foreground.
+ */
+fun followDeveloper(dev: Boolean, flags: List<DevDefaultFlag>): Boolean {
+    val before = flags.map { it.on.value }
+    flags.forEach { it.setDeveloper(dev) }
+    return flags.map { it.on.value } != before
+}
+
 /** One contact the user lets Risi send to without asking (per tab). */
 data class AutoSendContact(val userId: String, val tab: String, val name: String)
 
