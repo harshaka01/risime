@@ -186,7 +186,8 @@ class RisiToolExecutor(
             // Proposal 2026-10-09-risi-action-loop §4: a calendar_add may run the card's args merged with
             // the `edit` that MY OWN `confirm_write` carried (timestamps compared as instants).
             val edit = if (call.tool == RisiToolCall.TOOL_CALENDAR_ADD || call.tool in TEXT_EDIT_TOOLS) RisiControl.editOf(confirm.systemJson) else null
-            val okArgs = args == callArgs ||
+            // §42.2: when MY confirm carried a text edit, only the edited text runs (never the text I changed).
+            val okArgs = if (call.tool in TEXT_EDIT_TOOLS && edit != null) textEditOk(edit) && JsonObject(args + edit) == callArgs else args == callArgs ||
                 (call.tool == RisiToolCall.TOOL_CALENDAR_ADD && calendarArgsEqual(args, callArgs)) ||
                 (call.tool == RisiToolCall.TOOL_CALENDAR_ADD && edit != null && edit.keys.all { it in EDIT_KEYS } && calendarArgsEqual(JsonObject(args + edit), callArgs)) ||
                 // Proposal 2026-10-14-send-for-me §42.2/§42.4: the card's args with MY OWN edited `text`, exactly.
