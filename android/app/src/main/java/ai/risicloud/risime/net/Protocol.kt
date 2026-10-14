@@ -333,7 +333,12 @@ data class Signal(val kind: String, val data: JsonObject) {
     fun callTranscribe(): CallTranscribeSession? =
         if (kind == KIND_CALL_TRANSCRIBE) runCatching { ProtocolJson.decodeFromJsonElement<CallTranscribeSession>(data) }.getOrNull() else null
 
+    /** Proposal 2026-10-14 (v1.48 §37.11): Risi transcribing the sender's own voice note (ephemeral). */
+    fun voiceTranscribing(): VoiceTranscribing? =
+        if (kind == KIND_VOICE_TRANSCRIBING) runCatching { ProtocolJson.decodeFromJsonElement<VoiceTranscribing>(data) }.getOrNull() else null
+
     companion object {
+        const val KIND_VOICE_TRANSCRIBING = "voice_transcribing"
         const val KIND_CALL_TRANSCRIBE = "call_transcribe"
         const val KIND_CALL_RISI = "call_risi"
         const val KIND_PRESENCE = "presence"

@@ -335,9 +335,65 @@ fun VoiceFooter(m: MessageEntity, x: ChatMessaging?) {
     if (!m.voice || x == null) return
     // Proposal 2026-10-14: the sender phone's own on-device transcript (inside the E2EE note; any tab). Absent on every
     // note sent without the developer `phone_stt` flag, so nothing changes for those.
-    val phone = remember(m.systemJson) { VoiceMeta.decode(m.systemJson)?.phoneTranscript }
-    if (x.c.voice.place(m.conversationId) != ai.risicloud.risime.voice.VoicePlace.PRIVATE) RisiVoiceFooter(m, x)
-    if (phone != null) PhoneTranscriptBlock(m.clientMsgId, phone.text, mine = m.outgoing)
+    val meta = remember(m.systemJson) { VoiceMeta.decode(m.systemJson) }
+    val phone = meta?.phoneTranscript
+    val place = x.c.voice.place(m.conversationId)
+    // Proposal 2026-10-14 phone-transcript fallback (v1.48): Risi posted the phone's own text (`source: "phone"`):
+    // one "Transcript (sender's phone)" block, not two.
+    val risi = if (place != ai.risicloud.risime.voice.VoicePlace.PRIVATE) remember(m.messageId, x.rows) { transcriptFor(m, x.rows) } else null
+    if (ai.risicloud.risime.voice.VoiceTranscribingStore.shows(place, m.outgoing)) TranscribingLine(m, x, meta?.durationMs)
+    when {
+        risi != null && risi.fromPhone && risi.ok -> PhoneTranscriptBlock(m.clientMsgId, phone?.text ?: risi.text.orEmpty(), mine = m.outgoing)
+        else -> {
+            if (risi != null) RisiVoiceFooter(m, x, risi)
+            if (phone != null) PhoneTranscriptBlock(m.clientMsgId, phone.text, mine = m.outgoing)
+        }
+    }
+}
+
+/**
+ * Proposal 2026-10-14 (v1.48 §37.11): under the sender's own Official / Risi-chat note, "Transcribing (Sinhala)… [Stop]",
+ * "Transcription stopped [Try again]" or "Couldn't transcribe [Try again]" from the `voice_transcribing` signal.
+ */
+@Composable
+private fun TranscribingLine(m: MessageEntity, x: ChatMessaging, durationMs: Long?) {
+    val store = x.c.voiceTranscribing
+    val lines by store.lines.collectAsStateWithLifecycle()
+    // Re-check the quiet timeout once a second while a line shows.
+    var tick by remember(m.messageId) { mutableStateOf(0L) }
+    val id = m.messageId ?: return
+    val line = remember(lines, tick) { store.lineFor(id, durationMs) }
+    androidx.compose.runtime.LaunchedEffect(line?.state, line?.atMs) {
+        if (line?.state == ai.risicloud.risime.net.VoiceTranscribing.WORKING) {
+            while (true) { kotlinx.coroutines.delay(1_000); tick = System.currentTimeMillis() }
+        }
+    }
+    val l = line ?: return
+    val view = ai.risicloud.risime.voice.VoiceTranscribingStore.view(l) ?: return
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    Row(
+        Modifier.widthIn(max = 320.dp).padding(top = Spacing.xxs, end = Spacing.sm).testTag("voice_transcribing"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (l.state == ai.risicloud.risime.net.VoiceTranscribing.WORKING) {
+            CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+            Spacer(Modifier.width(Spacing.xxs))
+        }
+        Text(view.text, style = MaterialTheme.typography.labelMedium, color = LocalContentColor.current.copy(alpha = 0.75f), modifier = Modifier.testTag("voice_transcribing_text"))
+        view.button?.let { b ->
+            Spacer(Modifier.width(Spacing.sm))
+            Text(
+                b, style = MaterialTheme.typography.labelMedium,
+                color = if (l.busy) LocalContentColor.current.copy(alpha = 0.4f) else MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag("voice_transcribing_button").clickable(enabled = !l.busy) {
+                    scope.launch {
+                        if (b == ai.risicloud.risime.voice.TranscribingStrings.STOP) store.stop(x.c.api, m.conversationId, id)
+                        else store.retry(x.c.api, m.conversationId, id)
+                    }
+                },
+            )
+        }
+    }
 }
 
 /** The sender phone's transcript under the bubble, collapsed to one line, expandable. Never labelled as Risi's. */
@@ -362,8 +418,7 @@ fun PhoneTranscriptBlock(key: String, text: String, mine: Boolean) {
 
 /** §37.6 Risi's transcript under an Official / Risi-chat note (the v1.41 footer, unchanged). */
 @Composable
-private fun RisiVoiceFooter(m: MessageEntity, x: ChatMessaging) {
-    val t = remember(m.messageId, x.rows) { transcriptFor(m, x.rows) } ?: return
+private fun RisiVoiceFooter(m: MessageEntity, x: ChatMessaging, t: RisiVoiceTranscript) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     VoiceTranscriptBlock(
         t, mine = m.outgoing,

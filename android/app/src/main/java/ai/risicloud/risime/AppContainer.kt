@@ -235,7 +235,11 @@ class AppContainer(
         onKeyPackagesLow = { scope.launch { deviceRegistrar.topUp() } },
         onRisiProgress = { p -> if (risiTools.on.value) risiProgress.apply(p) },
         onCallTranscribe = { s -> if (callTranscribeSwitch.on.value) callTranscribe.onSignal(s) },
+        onVoiceTranscribing = { s -> voiceTranscribing.apply(s) },
     )
+
+    /** Proposal 2026-10-14 (v1.48 §37.11) "Transcribing (Sinhala)… [Stop]" under the sender's own notes (in memory). */
+    val voiceTranscribing = ai.risicloud.risime.voice.VoiceTranscribingStore()
 
     // ---- §36 (v1.39) the call-transcription fast path ----
 

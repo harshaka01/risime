@@ -1,5 +1,21 @@
 # Android status — 0.2 nightlies
 
+## "Transcribing (Sinhala)… [Stop]" (14 Oct; Sinhala-slow hotfix, proposals 2026-10-14-transcribe-progress + phone-transcript-fallback)
+- **Signal `voice_transcribing`** (proposed v1.48 §37.11) parsed in `Signal.voiceTranscribing()` → `PresenceTracker` →
+  `VoiceTranscribingStore` (in memory only, keyed by note id; a `seq` not above the applied one is dropped; unknown
+  states ignored; `done` removes the line). No flag needed: old servers never send it.
+- **Under the sender's own note** (Official tab and the Risi chat; never Private; never someone else's note):
+  `working` → "Transcribing (Sinhala)…" / "(Tamil)…" / "Transcribing…" + spinner + **Stop** (when `can_cancel`);
+  `cancelled` → "Transcription stopped" + **Try again** (when `can_retry`); `failed` → "Couldn't transcribe" + **Try
+  again**; a `working` line silent for max(60 s, 4 × duration) disappears.
+- **Stop** → `POST /me/risi/voice/cancel` (200 → stopped line; 404 → line removed). **Try again** →
+  `POST /me/risi/voice/retry` (202/409 → working; 410/404 → "Can't try again. Send the note again.", no button).
+- **`source: "phone"`** on a Risi `voice_transcript` (proposal phone-transcript-fallback): one block, "Transcript
+  (sender's phone)" (the note's own `phone_transcript` text, else the post's text), instead of Risi's block plus the
+  phone's.
+- **Tests:** `VoiceTranscribingTest` (fixture `test/resources/fixtures/voice_transcribing/signal_voice_transcribing.json`;
+  root adds `signal_voice_transcribing.json` to contract/v1/examples when it applies v1.48).
+
 ## Call Risi v1 (14 Oct; decision 090, proposal 2026-10-14-call-risi) — built, behind the developer flag `call_risi` (off)
 - **Flag:** Settings → About → tap the version 7 times → Developer → "Call Risi (voice call with Risi)" (only `risi_dev`
   accounts; a fresh non-developer `GET /me` turns it off). Toggling re-advertises: `call_risi` joins `mls.capabilities`

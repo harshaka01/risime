@@ -51,10 +51,17 @@ data class RisiVoiceTranscript(
     val script: RisiScriptCheck? = null,
     val romanised: Boolean = false,
     val model: String? = null,
+    /** Proposal 2026-10-14-phone-transcript-fallback (v1.48): `"phone"` = Risi posted the sender phone's transcript. */
+    val source: String? = null,
 ) {
     val ok: Boolean get() = status == RisiKinds141.STATUS_OK && !text.isNullOrBlank()
 
+    /** The text is the sender phone's own transcript: shown once, as "Transcript (sender's phone)". */
+    val fromPhone: Boolean get() = source == SOURCE_PHONE
+
     companion object {
+        const val SOURCE_PHONE = "phone"
+
         /** The transcript in a Risi row's [systemJson], or null when the row is something else. */
         fun parse(systemJson: String?): RisiVoiceTranscript? = systemJson?.let { j ->
             runCatching { ProtocolJson.decodeFromString(serializer(), j) }.getOrNull()?.takeIf { it.kind == RisiKinds141.VOICE_TRANSCRIPT }

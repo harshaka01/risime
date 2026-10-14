@@ -155,6 +155,12 @@ class ApiClient(
 
     suspend fun putRisiVoice(settings: RisiVoiceSettings): ApiResult<RisiVoiceSettings> = call("PUT", "me/risi/voice", settings)
 
+    /** Proposal 2026-10-14 (v1.48 §37.11) Stop: 200 cancelled, 404 not_running. */
+    suspend fun cancelVoiceTranscribe(target: VoiceTranscribeTarget): ApiResult<VoiceTranscribeReply> = call("POST", "me/risi/voice/cancel", target)
+
+    /** Try again: 202 working, 409 running, 410 expired, 404 not_found. */
+    suspend fun retryVoiceTranscribe(target: VoiceTranscribeTarget): ApiResult<VoiceTranscribeReply> = call("POST", "me/risi/voice/retry", target)
+
     // ---- §24 (v1.24) chats and their tabs (tabs devices only) ----
 
     suspend fun chats(deviceId: String): ApiResult<ChatsReply> = call<Unit, ChatsReply>("GET", "chats", null, headers = mapOf(DEVICE_HEADER to deviceId))
