@@ -418,6 +418,14 @@ defmodule RisiMe.Agent.Skills do
 
   @doc "A turn chose `need_skill`: the card goes to the asker's Risi chat (§26.5). Oban result."
   def need_skill(ctx, skill_id, call_ref) do
+    # Proposal 2026-10-14-permission-fixit §43: "I need your calendar to do that." [Allow
+    # calendar] for a risi_fixit phone (the original request resumes once allowed).
+    if RisiMe.Agent.PermissionFixit.applies?(ctx, skill_id),
+      do: RisiMe.Agent.PermissionFixit.post(ctx, skill_id, call_ref),
+      else: skill_needed(ctx, skill_id, call_ref)
+  end
+
+  defp skill_needed(ctx, skill_id, call_ref) do
     {body, risi} =
       needed_card(ctx.asker, skill_id, ctx, ctx.request_id, ctx.turn_id, call_ref)
 

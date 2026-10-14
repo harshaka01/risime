@@ -47,6 +47,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_SPEECH_COMPARE_DEV" => :risi_speech_compare_dev,
     # Proposal 2026-10-14-send-for-me (§42.1): "Send a message for me"; canary = Harsha first.
     "RISI_SEND_FOR_ME" => :risi_send_for_me,
+    # Proposal 2026-10-14-permission-fixit (§43.1): "I need your calendar…" [Allow calendar].
+    "RISI_PERMISSION_FIXIT" => :risi_permission_fixit,
     # P1 2026-10-14 (Tamil notes in Sinhala script): the Voice agent's language decision
     # (RisiMe.Agent.SpeechLang); on for everyone, off = today's route.
     "RISI_VOICE_LANG_ID" => :risi_voice_lang_id,
@@ -62,6 +64,7 @@ defmodule RisiMe.Agents.Flags do
     "RISI_VOICE_PHONE_FALLBACK" => "off",
     "RISI_SPEECH_COMPARE_DEV" => "canary",
     "RISI_SEND_FOR_ME" => "canary",
+    "RISI_PERMISSION_FIXIT" => "canary",
     "RISI_VOICE_LANG_ID" => "on",
     "RISI_VOICE_TRANSLATE" => "canary"
   }

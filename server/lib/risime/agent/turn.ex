@@ -765,6 +765,13 @@ defmodule RisiMe.Agent.Turn do
           is_binary(meta[:answer]) ->
             answer_final(st, ctx, meta[:answer])
 
+          # Proposal 2026-10-14-permission-fixit §43.4: the phone says the permission is missing:
+          # one sentence, one button; the request resumes once the user allows it.
+          status == "no_permission" and
+              RisiMe.Agent.PermissionFixit.applies?(ctx, Skills.skill_of(name) || "") ->
+            save_draft(st, ctx)
+            RisiMe.Agent.PermissionFixit.post(ctx, Skills.skill_of(name), st.call_ref)
+
           # §42.2: the send card is the action (§28.3): a short fixed line, no more model calls.
           status == "ok" and name == "send_message" ->
             answer_final(st, ctx, RisiMe.Agent.SendForMe.card_line(ctx, args))
@@ -887,6 +894,19 @@ defmodule RisiMe.Agent.Turn do
     reason = Skills.missing_reason(ctx, "calendar")
     answer = calendar_answer(name, reason)
 
+    cond do
+      # Proposal 2026-10-14-permission-fixit §43: the fix-it card instead of a dead end.
+      reason in ~w(off no_permission) and not String.starts_with?(name, "risi_") and
+          RisiMe.Agent.PermissionFixit.applies?(ctx, "calendar") ->
+        save_draft(st, ctx)
+        RisiMe.Agent.PermissionFixit.post(ctx, "calendar", st.call_ref)
+
+      true ->
+        calendar_unavailable_v126(st, ctx, name, reason, answer)
+    end
+  end
+
+  defp calendar_unavailable_v126(st, ctx, name, reason, answer) do
     if reason == "off" and not String.starts_with?(name, "risi_") do
       save_draft(st, ctx)
 
@@ -1574,8 +1594,14 @@ defmodule RisiMe.Agent.Turn do
 
     if name do
       out = %{"tool" => name, "args" => args}
-      {st, _status, _result, _meta} = exec_step(st, ctx, name, args, out)
-      loop(add_items_source(st), ctx)
+      {st, status, _result, _meta} = exec_step(st, ctx, name, args, out)
+
+      # Proposal 2026-10-14-permission-fixit §43.4: the phone has no calendar permission: the
+      # fix-it card (the question resumes once allowed), never a dead end.
+      if status == "no_permission" and name == "calendar_check" and
+           RisiMe.Agent.PermissionFixit.applies?(ctx, "calendar"),
+         do: RisiMe.Agent.PermissionFixit.post(ctx, "calendar", st.call_ref),
+         else: loop(add_items_source(st), ctx)
     else
       # No read is possible here: exactly why (§29.7 rule 1), never an answer from chat.
       calendar_unavailable(st, Map.put(ctx, :schedule, nil), "calendar_check", %{

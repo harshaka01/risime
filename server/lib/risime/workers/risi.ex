@@ -205,6 +205,13 @@ defmodule RisiMe.Workers.Risi do
     end
   end
 
+  # Proposal 2026-10-14-permission-fixit §43.3: the original request again, once allowed.
+  defp run(%{"kind" => "resume", "conv" => conv, "user_id" => user} = a) do
+    if Secretary.active_human?(conv, user),
+      do: Requests.handle(conv, a["message_id"], a["request_id"], user, nil, a["t0"]),
+      else: :ok
+  end
+
   defp run(%{"kind" => "action", "conv" => conv, "message_id" => id, "user_id" => user}) do
     with true <- Secretary.active_human?(conv, user),
          %{"type" => "risi_action", "__sender" => ^user} = env <- Secretary.envelope(conv, id) do
@@ -212,6 +219,10 @@ defmodule RisiMe.Workers.Risi do
         # v1.25 §25.4: confirm cards (the write runs here, without a model call).
         a when a in ~w(confirm_write cancel_write) ->
           Writes.act(conv, user, env["__device"], env)
+
+        # Proposal 2026-10-14-permission-fixit §43.3: the answer to a needs_permission card.
+        a when a in ~w(permission_granted permission_declined) ->
+          RisiMe.Agent.PermissionFixit.act(conv, user, env)
 
         a when a in ~w(me_too not_me) ->
           RisiMe.Agent.Reminders.act(conv, user, env)
