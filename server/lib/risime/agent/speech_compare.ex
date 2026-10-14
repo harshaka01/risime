@@ -1,66 +1,129 @@
 defmodule RisiMe.Agent.SpeechCompare do
   @moduledoc """
-  Harsha's Sinhala compare mode (Harsha 2026-10-14 08:35 SLT; docs/status/asr-harsha-gold.md).
-  Owned by the Voice agent (its transcription Index learns from his labels).
+  The speech compare mode on real voice notes (Harsha 2026-10-14 08:35 and 09:54 SLT;
+  docs/status/asr-harsha-gold.md). Owned by the Voice agent: its transcription Index learns from
+  the stored CER, its route decision follows the promotion rule.
 
-  * **Who:** only `RISI_DEV_USERS`' **own** voice notes, while `RISI_SPEECH_COMPARE_DEV` is not
-    `off` (default `canary` = the dev users), and only Sinhala / Singlish notes (the note's
-    language, or a `si` hint).
-  * **What:** after the normal path (the Official chat gets only the guarded best transcript), a
-    task runs every candidate on the same in-memory audio: `qwen3-asr-0.6b-sinhala` and
-    `omnilingual-ctc-1b` on the speech service, `omniasr-llm-7b` (streamed) on the omniASR compare
-    service only while MemAvailable ≥ `RISI_COMPARE_7B_MIN_MB` (default 12 000; else "skipped:
-    memory"), and the note's phone transcript when present. Each is run through the hallucination
-    guard (`SpeechQuality`) and labelled with its code.
-  * **Where:** **his own Risi chat only** (never the Official chat: other members never see a
-    compare dump), one numbered message. He replies `1`…`n` for the right one or
-    `fix: <the right words>`; the next such reply within 2 h labels the newest unlabelled note.
-  * **Gold:** the audio and the candidates are stored sealed (`SpeechGold`, eval only, a
-    `NO_TRAINING` marker); his label is added, and every candidate's CER / WER against it.
-  * **Default route for him** (`route_decision/1`, the promotion rule, recorded as a
-    `risi_agent_runs` row, agent `voice`, mode `route`, and a line in his Risi chat): from 5
-    labelled notes, the server model with the lowest mean CER (≤ 60 %, else "none" = show nothing);
-    before that, `omnilingual-ctc-1b` when it is clearly (15 points) less wrong than every other,
-    "none" when every model is over 60 % CER, else Auto. It is his per-user override
-    (`SpeechRoutes.user_choice/2`), never anyone else's route.
+  * **Whose notes:** a `RISI_DEV_USERS` user's own notes, and the notes of a sender with **compare
+    consent** (`consent?/1`: a per-user admin setting, default none, audit-logged; Harsha grants it
+    once that person agrees: nobody is enabled automatically). Flag `RISI_SPEECH_COMPARE_DEV`
+    (`off` switches it off for everyone).
+  * **Language first:** the candidates follow the note's language (the normal path's decision):
+    Sinhala (Qwen3-ASR Sinhala, Whisper small Sinhala, omniASR-CTC-1B, omniASR-LLM-7B), Tamil
+    (tamil-asr-qwen3, Whisper Tamil medium, omniASR-CTC-1B, omniASR-LLM-7B) or English
+    (large-v3, omniASR-CTC-1B). Plus the phone transcript ("Google" for his opt-in online recogniser).
+  * **Option 0** is always what the chat actually got, so "0" confirms it.
+  * **Who sees it:** for a dev user's own note, that user; for a consenting sender's note, every dev
+    user who is a member of the same conversation. Each gets one numbered message in **their own
+    Risi chat** (never the Official chat), unless they said "compare off".
+  * **Skipped for memory:** never dropped. The models are queued on the sealed audio for the night
+    run (`RisiMe.Agent.SpeechCompareNight`, after 16:30 UTC, holding the `scripts/heavy` lock and
+    honouring the eval guard). Results reach the recipients in a follow-up right after the 07:00
+    brief.
+  * **Labels:** a recipient replies `0`…`n` or `fix: <the right words>`. The sender may correct
+    their own note with `fix: …` in their Risi chat; **the sender's correction beats a dev user's**.
+    Without a label the reference is the Google transcript, in shadow.
+  * **Gold:** the audio and the candidates sealed (`SpeechGold`), only for a dev user's own notes or
+    a consenting sender; eval only, `NO_TRAINING`.
+  * **Route decision:** per sender and language over that sender's scored notes. It is applied as
+    the per-user override for dev users, and recorded as a recommendation for consenting senders.
   * Logs: ids, codes and numbers only.
   """
   require Logger
 
-  alias RisiMe.Agent.{Lang, Out, SpeechGold, SpeechQuality, SpeechRoutes}
+  alias RisiMe.Agent.{Out, SpeechGold, SpeechQuality, SpeechRoutes}
   alias RisiMe.Agents.Flags
+  alias RisiMe.Admin.Settings
 
   @flag "RISI_SPEECH_COMPARE_DEV"
-  @models [
-    {"Qwen3-ASR Sinhala", :service, "qwen3-asr-0.6b-sinhala"},
-    {"Whisper small Sinhala", :service, "whisper-small-sinhala"},
-    {"omniASR-CTC-1B", :service, "omnilingual-ctc-1b"},
-    {"omniASR-LLM-7B", :extra, "omniasr-llm-7b"}
-  ]
+  @sets %{
+    "si" => [
+      {"Qwen3-ASR Sinhala", :service, "qwen3-asr-0.6b-sinhala"},
+      {"Whisper small Sinhala", :service, "whisper-small-sinhala"},
+      {"omniASR-CTC-1B", :service, "omnilingual-ctc-1b"},
+      {"omniASR-LLM-7B", :extra, "omniasr-llm-7b"}
+    ],
+    "ta" => [
+      {"Tamil ASR (Qwen3)", :service, "tamil-asr-qwen3"},
+      {"Whisper Tamil medium", :service, "whisper-tamil-medium"},
+      {"omniASR-CTC-1B", :service, "omnilingual-ctc-1b"},
+      {"omniASR-LLM-7B", :extra, "omniasr-llm-7b"}
+    ],
+    "en" => [
+      {"Whisper large-v3", :service, "faster-whisper-large-v3"},
+      {"omniASR-CTC-1B", :service, "omnilingual-ctc-1b"}
+    ]
+  }
   @label_window_s 7_200
 
-  @doc "True when the compare mode runs for `user`'s notes."
+  @doc "The candidate models of a language (`si` | `ta` | `en`)."
+  def models(lang), do: Map.get(@sets, lang, [])
+
+  ## Who
+
+  @doc "True when the compare mode runs for `user`'s notes (a dev user, or compare consent)."
   def enabled_for?(user) do
-    is_binary(user) and dev_user?(user) and Flags.feature(@flag) != :off
+    is_binary(user) and Flags.feature(@flag) != :off and (dev_user?(user) or consent?(user))
   rescue
     _ -> false
   end
 
-  defp dev_user?(user),
+  @doc false
+  def dev_user?(user) when is_binary(user),
     do:
       String.downcase(user) in Enum.map(
         Application.get_env(:risime, :risi_dev_users, []),
         &String.downcase/1
       )
 
+  def dev_user?(_), do: false
+
+  @doc "A sender's compare consent (admin setting `speech_compare_consent_user_<uuid>`, default none)."
+  def consent?(user) when is_binary(user), do: Settings.get(consent_key(user)) == "on"
+  def consent?(_), do: false
+
+  @doc "Grants or revokes `user`'s compare consent (an admin's action, audit-logged as `by`)."
+  def put_consent(user, true, by), do: Settings.put(consent_key(user), "on", by)
+  def put_consent(user, false, by), do: Settings.clear(consent_key(user), by)
+
+  @doc "The users with compare consent (ids)."
+  def consented do
+    for {"speech_compare_consent_user_" <> u, "on"} <- Settings.all(), do: u
+  rescue
+    _ -> []
+  end
+
+  defp consent_key(user), do: "speech_compare_consent_user_" <> String.downcase(user)
+
   @doc """
-  After the normal transcription (`Voice`): starts the compare task for a dev user's Sinhala note.
-  `primary` is `Speech.transcribe_note/2`'s result. Never blocks the caller.
+  Who receives the compare of `sender`'s note in `conv`: the dev user themselves, or the dev users
+  who are members of the conversation (for a consenting sender).
+  """
+  def recipients(conv, sender) do
+    if dev_user?(sender) do
+      [sender]
+    else
+      for u <- Application.get_env(:risime, :risi_dev_users, []),
+          String.downcase(u) != String.downcase(sender),
+          RisiMe.Agent.Secretary.active_human?(conv, u),
+          do: u
+    end
+  rescue
+    _ -> []
+  end
+
+  ## Start
+
+  @doc """
+  After the normal transcription (`Voice`): starts the compare task. `primary` is
+  `Speech.transcribe_note/2`'s result (its language decides the candidates). Never blocks.
   """
   def maybe_start(conv, note_id, sender, audio, note, primary, hint) do
-    if enabled_for?(sender) and sinhala?(primary, hint) and is_binary(note_id) do
+    lang = language(primary, hint)
+
+    if enabled_for?(sender) and lang != nil and is_binary(note_id) do
       Task.Supervisor.start_child(RisiMe.Agent.Voice.TaskSup, fn ->
-        run(conv, note_id, sender, audio, note, primary)
+        run(conv, note_id, sender, audio, note, primary, lang)
       end)
     end
 
@@ -69,87 +132,104 @@ defmodule RisiMe.Agent.SpeechCompare do
     _ -> :ok
   end
 
-  defp sinhala?({:ok, %{language: "si"}}, _hint), do: true
-  defp sinhala?(_, hint), do: "si" in List.wrap(hint)
+  defp language({:ok, %{language: l}}, _hint) when l in ["si", "ta", "en"], do: l
+
+  defp language(_, hint) do
+    Enum.find(List.wrap(hint), &(&1 in ["si", "ta"]))
+  end
 
   @doc false
-  def run(conv, note_id, sender, audio, note, primary) do
+  def run(conv, note_id, sender, audio, note, primary, lang \\ "si") do
     dur = note.duration_ms
     phone = phone_text(note)
 
     cands =
-      Enum.map(@models, fn {label, where, model} ->
-        candidate(label, where, model, audio, dur, phone)
-      end) ++
-        if(phone,
-          do: [
-            %{
-              label: phone_label(note),
-              model: RisiMe.Agent.Speech.phone_model_of(Map.get(note, :phone_transcript)),
-              status: "ok",
-              text: phone,
-              ms: 0,
-              guard: nil
-            }
-          ],
-          else: []
-        )
+      [chat_option(primary)] ++
+        Enum.map(models(lang), fn {label, where, model} ->
+          candidate(label, where, model, audio, dur, phone, lang)
+        end) ++ phone_option(note, phone)
 
-    posted =
-      case primary do
-        {:ok, %{rejected: code} = r} when is_binary(code) -> "#{r.model} (rejected: #{code})"
-        {:ok, r} -> "#{r.model}#{if r[:fallback], do: " (fallback #{r.fallback})", else: ""}"
-        _ -> "nothing (failed)"
-      end
+    pending = for c <- cands, c.status == "skipped: memory", do: c.model
+    to = recipients(conv, sender)
 
     SpeechGold.put(note_id, audio, %{
       "at" => DateTime.to_iso8601(DateTime.utc_now()),
       "conversation_id" => conv,
+      "sender" => String.downcase(sender),
+      "recipients" => Enum.map(to, &String.downcase/1),
+      "lang" => lang,
       "duration_ms" => dur,
-      "posted" => posted,
-      # Our models against his opt-in Google transcript (his own correction, when he gives one,
-      # is the label and wins; these are the interim scores).
-      "vs_google" =>
-        if(RisiMe.Agent.Speech.phone_model_of(Map.get(note, :phone_transcript)) == "phone-google",
-          do:
-            cands
-            |> Enum.reject(&(&1.model == "phone-google"))
-            |> Enum.map(&Map.new(&1, fn {k, v} -> {to_string(k), v} end))
-            |> scores(phone)
-        ),
-      "candidates" => Enum.map(cands, &Map.new(&1, fn {k, v} -> {to_string(k), v} end))
+      "posted" => posted(primary),
+      "pending_models" => pending,
+      "vs_google" => vs_google(note, cands, phone),
+      "candidates" => Enum.map(cands, &stringify/1)
     })
 
-    if post_on?(sender), do: post_compare(sender, dur, posted, cands)
-    # Shadow (Harsha 2026-10-14): the Voice agent re-scores on every note (Google as the
-    # reference until he corrects one) and applies the promotion rule; no output but the line
-    # in his Risi chat when the route changes (and only while his compare posts are on).
-    decision = route_decision(sender)
-
-    case decision do
-      {:changed, choice, why} ->
-        if post_on?(sender) do
-          with rc when is_binary(rc) <- RisiMe.RisiChat.active_id(sender),
-               do: post(rc, sender, "Your Sinhala notes now use #{label(choice)} (#{why}).")
-        end
-
-      _ ->
-        :ok
-    end
+    for r <- to, post_on?(r), do: post_compare(r, sender, dur, lang, cands, pending)
+    decide_and_tell(sender, lang)
 
     Logger.info(
-      "speech compare: note #{note_id} " <>
-        Enum.map_join(
-          cands,
-          " ",
-          &"#{&1.model}=#{&1.status}#{if &1.guard, do: "/" <> &1.guard, else: ""}"
-        )
+      "speech compare: note #{note_id} lang=#{lang} to=#{length(to)} " <>
+        Enum.map_join(cands, " ", &"#{&1.model}=#{&1.status}#{if &1.guard, do: "/" <> &1.guard}")
     )
   rescue
     e -> Logger.warning("speech compare failed: #{inspect(e.__struct__)}")
   end
 
-  # Harsha's opt-in Google online recogniser is "Google"; the on-device one "Phone (on-device)".
+  defp stringify(c), do: Map.new(c, fn {k, v} -> {to_string(k), v} end)
+
+  # Option 0: what the chat actually got.
+  defp chat_option(primary) do
+    base = %{label: "What the chat got", model: "chat", ms: 0, guard: nil}
+
+    case primary do
+      {:ok, %{rejected: code} = r} when is_binary(code) ->
+        Map.merge(base, %{status: "nothing (#{r.model} rejected: #{code})", text: nil})
+
+      {:ok, %{text: t} = r} when is_binary(t) and t != "" ->
+        Map.merge(base, %{
+          status: "ok",
+          text: String.trim(t),
+          label: "What the chat got (#{r.model})"
+        })
+
+      _ ->
+        Map.merge(base, %{status: "nothing (failed)", text: nil})
+    end
+  end
+
+  defp posted({:ok, %{rejected: code} = r}) when is_binary(code),
+    do: "#{r.model} (rejected: #{code})"
+
+  defp posted({:ok, r}),
+    do: "#{r.model}#{if r[:fallback], do: " (fallback #{r.fallback})", else: ""}"
+
+  defp posted(_), do: "nothing (failed)"
+
+  defp phone_option(_note, nil), do: []
+
+  defp phone_option(note, phone),
+    do: [
+      %{
+        label: phone_label(note),
+        model: RisiMe.Agent.Speech.phone_model_of(Map.get(note, :phone_transcript)),
+        status: "ok",
+        text: phone,
+        ms: 0,
+        guard: nil
+      }
+    ]
+
+  # Our models against the Google transcript (his correction, when given, wins).
+  defp vs_google(note, cands, phone) do
+    if RisiMe.Agent.Speech.phone_model_of(Map.get(note, :phone_transcript)) == "phone-google",
+      do:
+        cands
+        |> Enum.reject(&(&1.model in ["phone-google", "chat"]))
+        |> Enum.map(&stringify/1)
+        |> scores(phone)
+  end
+
   defp phone_label(note) do
     if RisiMe.Agent.Speech.phone_model_of(Map.get(note, :phone_transcript)) == "phone-google",
       do: "Google",
@@ -163,17 +243,25 @@ defmodule RisiMe.Agent.SpeechCompare do
     end
   end
 
-  defp candidate(label, where, model, audio, dur, phone) do
+  @doc false
+  def candidate(label, where, model, audio, dur, phone, lang, opts \\ []) do
     t0 = System.monotonic_time(:millisecond)
+    night? = Keyword.get(opts, :night, false)
 
     r =
       cond do
-        where == :extra and mem_available_mb() < min_7b_mb() -> {:skip, "skipped: memory"}
-        where == :extra -> impl().extra_transcribe(audio, model, language: "si", timeout: 180_000)
-        true -> impl().transcribe_model(audio, model, language: "si", timeout: 60_000)
+        where == :extra and not night? and mem_available_mb() < min_7b_mb() ->
+          {:error, :unavailable}
+
+        where == :extra ->
+          impl().extra_transcribe(audio, model, language: lang, timeout: 600_000)
+
+        true ->
+          impl().transcribe_model(audio, model, language: lang, timeout: 120_000)
       end
 
     ms = System.monotonic_time(:millisecond) - t0
+    base = %{label: label, model: model, ms: ms, guard: nil, text: nil}
 
     case r do
       {:ok, res} ->
@@ -183,35 +271,21 @@ defmodule RisiMe.Agent.SpeechCompare do
             {:reject, code, _} -> code
           end
 
-        %{
-          label: label,
-          model: model,
-          status: "ok",
-          text: String.trim(res.text || ""),
-          ms: ms,
-          guard: guard
-        }
-
-      {:skip, why} ->
-        %{label: label, model: model, status: why, text: nil, ms: 0, guard: nil}
+        %{base | guard: guard, text: String.trim(res.text || "")} |> Map.put(:status, "ok")
 
       {:error, :unavailable} ->
-        %{label: label, model: model, status: "skipped: memory", text: nil, ms: ms, guard: nil}
+        Map.put(base, :status, "skipped: memory")
 
       {:error, :off} ->
-        %{
-          label: label,
-          model: model,
-          status: "skipped: not configured",
-          text: nil,
-          ms: 0,
-          guard: nil
-        }
+        Map.merge(base, %{status: "skipped: not configured", ms: 0})
 
       {:error, e} ->
-        %{label: label, model: model, status: to_string(e), text: nil, ms: ms, guard: nil}
+        Map.put(base, :status, to_string(e))
     end
   end
+
+  @doc "The candidate spec of `model` in `lang` (label, where), or nil."
+  def spec(lang, model), do: Enum.find(models(lang), fn {_, _, m} -> m == model end)
 
   defp impl, do: Application.get_env(:risime, :risi_speech_compare_impl, RisiMe.Agent.Speech.Http)
 
@@ -222,7 +296,8 @@ defmodule RisiMe.Agent.SpeechCompare do
     end
   end
 
-  defp mem_available_mb do
+  @doc false
+  def mem_available_mb do
     case File.read("/proc/meminfo") do
       {:ok, s} ->
         case Regex.run(~r/MemAvailable:\s+(\d+)/, s) do
@@ -235,11 +310,13 @@ defmodule RisiMe.Agent.SpeechCompare do
     end
   end
 
-  defp post_compare(sender, dur, posted, cands) do
-    with rc when is_binary(rc) <- RisiMe.RisiChat.active_id(sender) do
+  @lang_names %{"si" => "Sinhala", "ta" => "Tamil", "en" => "English"}
+
+  defp post_compare(recipient, sender, dur, lang, cands, pending) do
+    with rc when is_binary(rc) <- RisiMe.RisiChat.active_id(recipient) do
       lines =
         cands
-        |> Enum.with_index(1)
+        |> Enum.with_index(0)
         |> Enum.map(fn {c, i} ->
           head = "#{i}. #{c.label}"
 
@@ -255,22 +332,36 @@ defmodule RisiMe.Agent.SpeechCompare do
           end
         end)
 
+      whose =
+        if String.downcase(recipient) == String.downcase(sender),
+          do: "your voice note",
+          else: "a consenting member's voice note"
+
+      night =
+        if pending != [],
+          do: [
+            "Skipped for memory, queued for tonight's run: #{Enum.join(pending, ", ")}. Results come after your morning brief."
+          ],
+          else: []
+
       body =
         Enum.join(
           [
-            "Sinhala compare for your voice note (#{secs(dur)}). The chat got: #{posted}.",
+            "#{@lang_names[lang]} compare for #{whose} (#{secs(dur)}).",
             lines,
-            "Reply with the number of the right one, or \"fix: <the right words>\". Only you see this; it's kept sealed for evaluation only."
+            night,
+            "Reply 0 if the chat got it right, the number of the right one, or \"fix: <the right words>\". Only you see this; it's kept sealed for evaluation only. \"compare off\" stops these messages."
           ]
           |> List.flatten(),
           "\n"
         )
 
-      post(rc, sender, body)
+      post(rc, recipient, body)
     end
   end
 
-  defp post(rc, sender, body) do
+  @doc false
+  def post(rc, user, body) do
     risi = %{
       "kind" => "answer",
       "request_id" => nil,
@@ -281,7 +372,7 @@ defmodule RisiMe.Agent.SpeechCompare do
       "next_steps" => [],
       "call_ref" => nil,
       "made_by" => RisiMe.Agent.MadeBy.rule(),
-      "notify" => [sender]
+      "notify" => [user]
     }
 
     Out.post(rc, body, risi, memory: false)
@@ -293,8 +384,8 @@ defmodule RisiMe.Agent.SpeechCompare do
   ## Labels
 
   @doc """
-  A Risi-chat request of a dev user (`Workers.Risi`): `:handled` when it labels the newest
-  unlabelled compared note (`1`…`n` or `fix: …`), else `:pass` (the normal request path).
+  A Risi-chat request (`Workers.Risi`): `:handled` when it is "compare off/on" or labels a compared
+  note, else `:pass` (the normal request path).
   """
   def label_reply(conv, user, text) when is_binary(text) do
     case String.downcase(String.trim(text)) do
@@ -306,9 +397,9 @@ defmodule RisiMe.Agent.SpeechCompare do
   def label_reply(_, _, _), do: :pass
 
   defp switch_posts(conv, user, c) do
-    if enabled_for?(user) and conv == RisiMe.RisiChat.active_id(user) do
+    if (dev_user?(user) or consent?(user)) and conv == RisiMe.RisiChat.active_id(user) do
       v = if c == "compare off", do: "off", else: "on"
-      RisiMe.Admin.Settings.put(post_key(user), v, RisiMe.Risi.user_id())
+      Settings.put(post_key(user), v, RisiMe.Risi.user_id())
 
       post(
         conv,
@@ -327,25 +418,26 @@ defmodule RisiMe.Agent.SpeechCompare do
   end
 
   defp label_reply_text(conv, user, text) do
-    with true <- enabled_for?(user),
+    with true <- enabled_for?(user) or dev_user?(user),
          true <- conv == RisiMe.RisiChat.active_id(user),
          {:ok, kind, value} <- parse(text),
-         %{} = meta <- pending() do
+         %{} = meta <- pending(user, kind) do
       label_text =
         case kind do
           :pick ->
-            meta |> Map.get("candidates", []) |> Enum.at(value - 1) |> then(&(&1 && &1["text"]))
+            meta |> Map.get("candidates", []) |> Enum.at(value) |> then(&(&1 && &1["text"]))
 
           :typed ->
             value
         end
 
       if is_binary(label_text) and label_text != "" do
+        by = if String.downcase(user) == meta["sender"], do: "sender", else: "dev"
         source = if kind == :pick, do: "pick:#{value}", else: "typed"
         scores = scores(meta["candidates"], label_text)
-        SpeechGold.label(meta["note_id"], label_text, source)
+        SpeechGold.label(meta["note_id"], label_text, source, by)
         SpeechGold.put_scores(meta["note_id"], scores)
-        decision = route_decision(user)
+        decision = decide_and_tell(meta["sender"], meta["lang"] || "si", false)
         post(conv, user, saved_text(scores, decision))
         :handled
       else
@@ -358,9 +450,7 @@ defmodule RisiMe.Agent.SpeechCompare do
         :handled
       end
     else
-      other ->
-        Logger.debug("speech compare: no label (#{inspect(other)})")
-        :pass
+      _ -> :pass
     end
   rescue
     e ->
@@ -374,7 +464,7 @@ defmodule RisiMe.Agent.SpeechCompare do
       m = Regex.run(~r/^\s*(\d{1,2})\s*$/u, text) ->
         {:ok, :pick, String.to_integer(Enum.at(m, 1))}
 
-      m = Regex.run(~r/^\s*(?:fix|correct|නිවැරදි)\s*[:：]\s*(.+)$/isu, text) ->
+      m = Regex.run(~r/^\s*(?:fix|correct|නිවැරදි|திருத்தம்)\s*[:：]\s*(.+)$/isu, text) ->
         {:ok, :typed, String.trim(Enum.at(m, 1))}
 
       true ->
@@ -382,23 +472,32 @@ defmodule RisiMe.Agent.SpeechCompare do
     end
   end
 
-  defp pending do
+  # The note `user` may label now: a recipient picks or corrects an unlabelled note they were sent;
+  # the sender corrects (typed only: they never saw the list) their own note, also over a dev
+  # user's label (the sender's correction wins); nobody overwrites the sender's label.
+  defp pending(user, kind) do
+    u = String.downcase(user)
     cutoff = DateTime.add(DateTime.utc_now(), -@label_window_s, :second)
 
-    SpeechGold.unlabelled()
+    SpeechGold.all_meta()
     |> Enum.filter(fn m ->
-      case DateTime.from_iso8601(m["at"] || "") do
-        {:ok, at, _} -> DateTime.compare(at, cutoff) == :gt
-        _ -> false
-      end
+      fresh? =
+        case DateTime.from_iso8601(m["at"] || "") do
+          {:ok, at, _} -> DateTime.compare(at, cutoff) == :gt
+          _ -> false
+        end
+
+      recipient? = u in (m["recipients"] || []) and not is_binary(m["label"])
+      sender? = kind == :typed and m["sender"] == u and m["label_by"] != "sender"
+      fresh? and (recipient? or sender?)
     end)
     |> Enum.max_by(& &1["at"], fn -> nil end)
   end
 
-  @doc "Every candidate's CER / WER against the label (numbers only)."
-  def scores(cands, label) do
+  @doc "Every candidate's CER / WER against the reference (numbers only)."
+  def scores(cands, ref) do
     for c <- cands || [], is_binary(c["text"]), c["status"] == "ok", into: %{} do
-      {c["model"], %{"cer" => cer(c["text"], label), "wer" => wer(c["text"], label)}}
+      {c["model"], %{"cer" => cer(c["text"], ref), "wer" => wer(c["text"], ref)}}
     end
   end
 
@@ -422,17 +521,24 @@ defmodule RisiMe.Agent.SpeechCompare do
   defp saved_text(scores, decision) do
     s =
       scores
+      |> Enum.reject(fn {m, _} -> m == "chat" end)
       |> Enum.sort_by(fn {_, v} -> v["cer"] end)
       |> Enum.map_join(", ", fn {m, v} -> "#{m} CER #{pct(v["cer"])}" end)
 
     "Saved as the right transcript (sealed, evaluation only). #{s}." <>
       case decision do
-        {:changed, choice, why} -> " Your Sinhala notes now use #{label(choice)} (#{why})."
-        _ -> ""
+        {:changed, choice, why} ->
+          " The route for these notes now uses #{label(choice)} (#{why})."
+
+        {:recommended, choice, why} ->
+          " Recommended route: #{label(choice)} (#{why})."
+
+        _ ->
+          ""
       end
   end
 
-  defp label("phone"), do: "your Google transcript (until one of our models beats it)"
+  defp label("phone"), do: "the Google transcript (until one of our models beats it)"
 
   defp label("none"),
     do: "nothing (Risi shows \"couldn't hear clearly\" until a model is good enough)"
@@ -443,70 +549,94 @@ defmodule RisiMe.Agent.SpeechCompare do
   defp pct(x) when is_number(x), do: "#{round(x * 100)}%"
   defp pct(_), do: "-"
 
-  ## The route decision (promotion rule, his notes only)
+  ## The route decision (promotion rule, per sender and language)
 
-  # The route candidates: our server models and his opt-in Google transcript (route "phone":
-  # the phone's transcript is shown; ours takes over once it beats Google on his notes).
-  @server_models [
-    "qwen3-asr-0.6b-sinhala",
-    "omnilingual-ctc-1b",
-    "omniasr-llm-7b",
-    "phone-google"
-  ]
+  defp decide_and_tell(sender, lang, tell? \\ true) do
+    decision = route_decision(sender, lang)
 
-  @doc """
-  Recomputes `user`'s Sinhala route from the labelled notes; `{:changed, choice, why}` or
-  `{:same, choice}`. Recorded in `risi_agent_runs` (agent voice, mode route) and the settings audit.
-  """
-  def route_decision(user) do
-    {n, means} = means()
-
-    {choice, why} = decide(n, means)
-    current = SpeechRoutes.user_choice(user, "si")
-
-    if choice != current do
-      SpeechRoutes.put_user(user, "si", choice, RisiMe.Risi.user_id())
-
-      RisiMe.Agents.Runs.record(%{
-        agent: "voice",
-        mode: "route",
-        decision: choice,
-        status: "ok",
-        reason: String.slice(why, 0, 120),
-        lang: "si",
-        user: user
-      })
-
-      Logger.info("speech compare: route for a dev user si -> #{choice} (#{why})")
-      {:changed, choice, why}
-    else
-      {:same, choice}
+    with true <- tell?,
+         {kind, choice, why} when kind in [:changed, :recommended] <- decision,
+         true <- dev_user?(sender) and post_on?(sender),
+         rc when is_binary(rc) <- RisiMe.RisiChat.active_id(sender) do
+      post(rc, sender, "Your #{@lang_names[lang]} notes now use #{label(choice)} (#{why}).")
     end
+
+    decision
   end
 
   @doc """
-  `{n, %{model => {mean_cer, notes}}}` over the scored notes: each note's reference is his label
-  when he gave one (a correction beats Google), else his Google transcript (`vs_google`).
+  Recomputes `user`'s route for `lang` from their scored notes: `{:changed, choice, why}` (a dev
+  user's per-user override), `{:recommended, choice, why}` (a consenting sender: recorded only), or
+  `{:same, choice}`. Recorded in `risi_agent_runs` (agent voice, mode route).
   """
-  def means do
-    notes = for m <- SpeechGold.all_meta(), (sc = ref_scores(m)) != %{}, do: sc
-    n = length(notes)
+  def route_decision(user, lang \\ "si") do
+    {n, means} = means(user, lang)
+    {choice, why} = decide(n, means)
+    current = SpeechRoutes.user_choice(user, lang)
+
+    cond do
+      choice == current ->
+        {:same, choice}
+
+      dev_user?(user) ->
+        SpeechRoutes.put_user(user, lang, choice, RisiMe.Risi.user_id())
+        record_route(user, lang, choice, "ok", why)
+        {:changed, choice, why}
+
+      true ->
+        record_route(user, lang, choice, "recommended", why)
+        {:recommended, choice, why}
+    end
+  end
+
+  defp record_route(user, lang, choice, status, why) do
+    RisiMe.Agents.Runs.record(%{
+      agent: "voice",
+      mode: "route",
+      decision: choice,
+      status: status,
+      reason: String.slice(why, 0, 120),
+      lang: lang,
+      user: user
+    })
+
+    Logger.info("speech compare: route #{lang} -> #{choice} (#{status}: #{why})")
+  end
+
+  @doc """
+  `{n, %{model => {mean_cer, notes}}}` over `user`'s scored notes in `lang` (all users and
+  languages without arguments): each note's reference is the label when given, else the Google
+  transcript (`vs_google`).
+  """
+  def means(user \\ nil, lang \\ nil) do
+    notes =
+      for m <- SpeechGold.all_meta(),
+          user == nil or m["sender"] == String.downcase(user),
+          lang == nil or (m["lang"] || "si") == lang,
+          (sc = ref_scores(m)) != %{},
+          do: sc
+
+    models =
+      Enum.uniq(for {_, _, m} <- Enum.flat_map(Map.values(@sets), & &1), do: m) ++
+        ["phone-google"]
 
     means =
-      for m <- @server_models,
+      for m <- models,
           cers = for(sc <- notes, c = get_in(sc, [m, "cer"]), is_number(c), do: c),
           cers != [],
           into: %{},
           do: {m, {Enum.sum(cers) / length(cers), length(cers)}}
 
-    {n, means}
+    {length(notes), means}
   end
 
-  defp ref_scores(%{"label" => l, "scores" => %{} = sc}) when is_binary(l), do: sc
+  defp ref_scores(%{"label" => l, "scores" => %{} = sc}) when is_binary(l),
+    do: Map.delete(sc, "chat")
+
   defp ref_scores(%{"vs_google" => %{} = sc}), do: sc
   defp ref_scores(_), do: %{}
 
-  @doc "The Speech page's scores: `%{n, models: [%{model, mean_cer, notes}], route}` per dev user."
+  @doc "The Speech page's scores (numbers only)."
   def scoreboard do
     {n, means} = means()
 
@@ -525,16 +655,15 @@ defmodule RisiMe.Agent.SpeechCompare do
             si: SpeechRoutes.user_choice(u, "si"),
             posts: post_on?(u)
           }
-        )
+        ),
+      consented: Enum.map(consented(), &String.slice(&1, 0, 8))
     }
   rescue
-    _ -> %{n: 0, labelled: 0, models: [], routes: []}
+    _ -> %{n: 0, labelled: 0, models: [], routes: [], consented: []}
   end
 
-  ## His off switch for the compare posts ("compare off" / "compare on" in his Risi chat)
-
-  @doc "True while the numbered compare message is posted in `user`'s Risi chat (default on)."
-  def post_on?(user), do: RisiMe.Admin.Settings.get(post_key(user), "on") != "off"
+  @doc "True while compare messages are posted in `user`'s Risi chat (default on)."
+  def post_on?(user), do: Settings.get(post_key(user), "on") != "off"
 
   defp post_key(user), do: "speech_compare_post_user_" <> String.downcase(user)
 
@@ -581,17 +710,19 @@ defmodule RisiMe.Agent.SpeechCompare do
   def decide(_n, _means), do: {"auto", "no labelled notes"}
 
   @doc """
-  The table of the labelled notes (newest `limit`): per note and model, CER / WER against his
-  label and right (CER ≤ 20 %) or wrong. Numbers, model names and ids only, never text.
+  The table of the labelled notes (newest `limit`): per note and model, CER / WER against the
+  label, right (CER ≤ 20 %) or wrong. Numbers, model names and ids only, never text.
   """
   def report(limit \\ 5) do
     for m <- SpeechGold.labelled() |> Enum.take(limit) do
       %{
         note_id: m["note_id"],
+        lang: m["lang"],
         at: m["labelled_at"],
         duration_ms: m["duration_ms"],
         posted: m["posted"],
         label_source: m["label_source"],
+        label_by: m["label_by"],
         models:
           for c <- m["candidates"] || [] do
             s = get_in(m, ["scores", c["model"]])
@@ -608,7 +739,4 @@ defmodule RisiMe.Agent.SpeechCompare do
       }
     end
   end
-
-  @doc "The language hint helper for callers without one (the sender's spoken language)."
-  def hint(sender, conv), do: Lang.speech_hint([sender], conv)
 end

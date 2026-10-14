@@ -1353,8 +1353,21 @@ defmodule RisiMe.Agent.VoiceTest do
       def transcribe_model(_audio, "qwen3-asr-0.6b-sinhala", _opts),
         do: {:ok, %{text: "මම ඒක " <> String.duplicate("කරන්නේ ", 20), model: "q"}}
 
-      def transcribe_model(_audio, "whisper-small-sinhala", _opts),
-        do: {:ok, %{text: "ගෙදර යන්න බස් එකක් නැහැ", model: "w"}}
+      def transcribe_model(_audio, "whisper-small-sinhala", _opts) do
+        # `:compare_fake_memory` true: refused for memory (the night run gets it).
+        if Application.get_env(:risime, :compare_fake_memory, false),
+          do: {:error, :unavailable},
+          else: {:ok, %{text: "ගෙදර යන්න බස් එකක් නැහැ", model: "w"}}
+      end
+
+      def transcribe_model(_audio, "faster-whisper-large-v3", _opts),
+        do: {:ok, %{text: "see you tomorrow", model: "l"}}
+
+      def transcribe_model(_audio, "tamil-asr-qwen3", _opts),
+        do: {:ok, %{text: "நாளை சந்திப்போம்", model: "t"}}
+
+      def transcribe_model(_audio, "whisper-tamil-medium", _opts),
+        do: {:ok, %{text: "நாளை பார்ப்போம்", model: "tm"}}
 
       def transcribe_model(_audio, "omnilingual-ctc-1b", _opts),
         do: {:ok, %{text: "හෙට උදේ දහයට හමුවෙමු", model: "c"}}
@@ -1394,6 +1407,7 @@ defmodule RisiMe.Agent.VoiceTest do
 
       {body, _} = await_post(w.rc, "answer", fn _ -> true end)
       assert body =~ "Sinhala compare for your voice note"
+      assert body =~ "0. What the chat got (whisper-small-sinhala)"
       assert body =~ "1. Qwen3-ASR Sinhala" and body =~ "guard: repeat_token"
       assert body =~ "2. Whisper small Sinhala"
       assert body =~ "3. omniASR-CTC-1B"
@@ -1480,6 +1494,106 @@ defmodule RisiMe.Agent.VoiceTest do
       Process.sleep(200)
       refute_post(w.rc, "answer")
       assert File.ls(w.dir) in [{:error, :enoent}, {:ok, []}]
+    end
+
+    test "option 0 confirms what the chat got", w do
+      text = "හෙට උදේ දහයට හමුවෙමු"
+      {env, _, _} = note!(w.a.user.id, w.og, "si:" <> text)
+      {_, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      _ = await_post(w.rc, "answer", fn _ -> true end)
+      assert RisiMe.Agent.SpeechCompare.label_reply(w.rc, w.a.user.id, "0") == :handled
+      [gold] = RisiMe.Agent.SpeechGold.labelled()
+      assert gold["label"] == text and gold["label_source"] == "pick:0"
+      assert gold["scores"]["omnilingual-ctc-1b"]["cer"] == 0.0
+    end
+
+    test "language first: an English note gets the English candidates, no Sinhala models", w do
+      {env, _, _} = note!(w.a.user.id, w.og, "en:see you tomorrow")
+      {_, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      {body, _} = await_post(w.rc, "answer", fn _ -> true end)
+      assert body =~ "English compare"
+      assert body =~ "1. Whisper large-v3" and body =~ "2. omniASR-CTC-1B"
+      refute body =~ "Sinhala"
+    end
+
+    test "skipped for memory: queued for the night run, run on the sealed audio, delivered after the brief",
+         w do
+      Application.put_env(:risime, :compare_fake_memory, true)
+      on_exit(fn -> Application.delete_env(:risime, :compare_fake_memory) end)
+      {env, _, _} = note!(w.a.user.id, w.og, "si:හෙට උදේ දහයට හමුවෙමු")
+      {id, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      {body, _} = await_post(w.rc, "answer", fn _ -> true end)
+      assert body =~ "2. Whisper small Sinhala: skipped: memory"
+      assert body =~ "queued for tonight's run: whisper-small-sinhala"
+
+      assert {:ok, %{"pending_models" => pending}} = RisiMe.Agent.SpeechGold.get(id)
+      assert "whisper-small-sinhala" in pending
+
+      # Labelled before the night (his pick of CTC).
+      assert RisiMe.Agent.SpeechCompare.label_reply(w.rc, w.a.user.id, "3") == :handled
+      _ = await_post(w.rc, "answer", &(&1["answer"] =~ "Saved"))
+
+      # Night: memory is back; the model runs on the sealed audio.
+      Application.put_env(:risime, :compare_fake_memory, false)
+      assert :ok = perform_job(RisiMe.Agent.SpeechCompareNight, %{"kind" => "run"})
+      {:ok, m} = RisiMe.Agent.SpeechGold.get(id)
+      assert m["pending_models"] == []
+      assert "whisper-small-sinhala" in m["night"]["models"] and m["night_delivered"] == false
+      assert is_number(m["scores"]["whisper-small-sinhala"]["cer"])
+
+      # Morning: one post after the brief, then delivered.
+      assert :ok = perform_job(RisiMe.Agent.SpeechCompareNight, %{"kind" => "deliver"})
+      {morning, _} = await_post(w.rc, "answer", &(&1["answer"] =~ "Overnight"))
+      assert morning =~ "whisper-small-sinhala CER" and morning =~ "vs your correction"
+      assert {:ok, %{"night_delivered" => true}} = RisiMe.Agent.SpeechGold.get(id)
+    end
+
+    test "a consenting Tamil sender: compared with the ta models, shown only to the dev user in the chat; their correction wins",
+         w do
+      rcb = RisiMe.RisiHelpers.own_risi_chat!(w.b.user)
+      intervals!(rcb, [w.b.user.id])
+
+      # No consent: nothing is compared or stored.
+      {env, _, _} = note!(w.b.user.id, w.og, "ta:நாளை சந்திப்போம்")
+      {_, s} = receive_note(w.og, w.b.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      Process.sleep(200)
+      refute_post(w.rc, "answer")
+      assert RisiMe.Agent.SpeechGold.all_meta() == []
+
+      # Harsha grants consent (an admin action, audit-logged).
+      :ok = RisiMe.Agent.SpeechCompare.put_consent(w.b.user.id, true, w.a.user.id)
+      assert RisiMe.Agent.SpeechCompare.consent?(w.b.user.id)
+      {env, _, _} = note!(w.b.user.id, w.og, "ta:நாளை சந்திப்போம்")
+      {id, s} = receive_note(w.og, w.b.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      {body, _} = await_post(w.rc, "answer", fn _ -> true end)
+      assert body =~ "Tamil compare for a consenting member's voice note"
+      assert body =~ "1. Tamil ASR (Qwen3)" and body =~ "2. Whisper Tamil medium"
+      refute body =~ "Qwen3-ASR Sinhala"
+      # Not to the sender, never to the Official chat.
+      refute_post(rcb, "answer")
+      refute_post(w.og, "answer")
+
+      # The sender's own correction (typed in their Risi chat) beats the dev user's pick.
+      assert RisiMe.Agent.SpeechCompare.label_reply(rcb, w.b.user.id, "fix: நாளை பார்ப்போம்") ==
+               :handled
+
+      assert {:ok, %{"label" => "நாளை பார்ப்போம்", "label_by" => "sender"}} =
+               RisiMe.Agent.SpeechGold.get(id)
+
+      assert RisiMe.Agent.SpeechCompare.label_reply(w.rc, w.a.user.id, "1") == :pass
+      assert {:ok, %{"label_by" => "sender"}} = RisiMe.Agent.SpeechGold.get(id)
+      # A consenting sender's route is only recommended, never applied.
+      assert RisiMe.Agent.SpeechRoutes.user_choice(w.b.user.id, "ta") == "auto"
     end
 
     test "parse, cer/wer and the decision rule" do

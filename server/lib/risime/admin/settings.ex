@@ -45,6 +45,9 @@ defmodule RisiMe.Admin.Settings do
     end
   end
 
+  @doc "Every stored setting (`%{key => value}`, the table only)."
+  def all, do: table()
+
   @doc "Where `key`'s value comes from: `:table`, `:env` or `:default`."
   def source(key) when is_binary(key) do
     cond do

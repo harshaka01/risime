@@ -77,6 +77,23 @@ defmodule RisiMeWeb.Admin.SpeechLive do
   end
 
   @impl true
+  # Harsha 2026-10-14: a sender's compare consent (default none; granted only once they agree).
+  def handle_event("consent", %{"user" => user, "grant" => grant}, socket) do
+    notice =
+      case Ecto.UUID.cast(String.trim(user)) do
+        {:ok, u} ->
+          :ok = RisiMe.Agent.SpeechCompare.put_consent(u, grant == "on", socket.assigns.admin_id)
+
+          {:ok,
+           "Compare consent #{if grant == "on", do: "granted to", else: "removed from"} #{String.slice(u, 0, 8)}…"}
+
+        :error ->
+          {:error, "That isn't a user id."}
+      end
+
+    {:noreply, socket |> assign(:notice, notice) |> load_audit() |> assign(:stt, stt_today())}
+  end
+
   def handle_event("save", %{"lang" => lang, "model" => model}, socket)
       when is_binary(lang) and is_binary(model) do
     installed =
@@ -346,6 +363,20 @@ defmodule RisiMeWeb.Admin.SpeechLive do
         <p :for={r <- @stt.compare.routes} class="muted">
           Dev user {r.user}…: Sinhala route <strong>{r.si}</strong>; compare messages {if r.posts, do: "on", else: "off"}
         </p>
+        <p class="muted">
+          Compare consent (other senders, e.g. a Tamil speaker who agreed): {if @stt.compare.consented == [],
+            do: "nobody",
+            else: Enum.map_join(@stt.compare.consented, ", ", &(&1 <> "…"))}.
+          Their notes are compared and stored sealed only while consent is on; results go only to dev users in the same chat.
+        </p>
+        <form phx-submit="consent" class="row">
+          <input type="text" name="user" placeholder="user id" aria-label="User id" />
+          <select name="grant" aria-label="Consent">
+            <option value="on">Grant consent</option>
+            <option value="off">Remove consent</option>
+          </select>
+          <button class="btn" type="submit">Save</button>
+        </form>
       </div>
 
       <div class="card">

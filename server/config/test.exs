@@ -156,6 +156,10 @@ config :risime, :risi_tts_lab,
 config :risime, :risi_speech_pause_file, false
 # Harsha's sealed Sinhala gold set (RisiMe.Agent.SpeechGold): tests set a temp dir themselves.
 config :risime, :risi_asr_gold_dir, false
+# The compare night run (RisiMe.Agent.SpeechCompareNight): no heavy lock, no floor, any hour.
+config :risime, :risi_heavy_lock, false
+config :risime, :risi_night_min_mb, 0
+config :risime, :risi_night_any_time, true
 
 # Risi's own post limit is global (15 per 10 s); tests post faster than that.
 config :risime, :risi_send_limit, 10_000

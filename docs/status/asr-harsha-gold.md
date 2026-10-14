@@ -67,6 +67,29 @@ choice for his notes):
 - **Server default for si:** the winner, through the rule above (his per-user route first). When nothing passes the
   hallucination guard, no transcript is shown (srv3).
 
+## Update (Harsha 09:54 SLT)
+- **Language first:** the candidates follow the note's language from the normal path. Sinhala: Qwen3-ASR Sinhala,
+  Whisper small Sinhala, CTC-1B, LLM-7B. Tamil: tamil-asr-qwen3, Whisper Tamil medium, CTC-1B, LLM-7B. English:
+  large-v3, CTC-1B. An English note never runs the Sinhala models.
+- **Option 0** is always what the chat actually got; "0" confirms it.
+- **Skipped for memory → night run** (`RisiMe.Agent.SpeechCompareNight`):
+  - Oban cron 16:45 UTC. It runs only between 16:30 and 00:30 UTC, while the eval guard says go (no pause file, live
+    service healthy, MemAvailable ≥ 5 GB). It holds the `scripts/heavy` flock while it works and snoozes 20 min otherwise.
+  - It runs the queued models on the sealed audio, with the 7B streamed.
+  - Delivery: cron 01:35 UTC (07:05 SLT), one "Overnight speech compare results" post per recipient right after the
+    07:00 brief.
+- **Other senders (e.g. the Tamil speaker), only with compare consent:**
+  - The admin setting `speech_compare_consent_user_<uuid>`: default none, granted on the console's Speech page,
+    audit-logged. Nobody is enabled automatically: Harsha adds the person once they agree.
+  - Their notes are compared and stored sealed only while consent is on.
+  - The numbered message goes only to dev users who are members of the same conversation, in their own Risi chats.
+    Never to the sender, never to the Official chat.
+  - The sender may correct their own note with `fix: …` (also `திருத்தம்:`) in their Risi chat. **Their correction
+    beats a dev user's label**, and nobody overwrites it.
+  - A consenting sender's route decision is recorded as a recommendation only (`risi_agent_runs` status
+    `recommended`), never applied.
+- The route decision is per sender and per language, over that sender's own notes.
+
 ## Report
 `RisiMe.Agent.SpeechCompare.report(5)` (rpc on the pilot) gives the table of his last 5 labelled notes: per model,
 status, guard code, CER, WER and right/wrong. Numbers only.

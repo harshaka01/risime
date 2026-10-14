@@ -63,20 +63,39 @@ defmodule RisiMe.Agent.SpeechGold do
   end
 
   @doc "Sets the note's gold label (`text`, `source`: `pick:<n>` or `typed`)."
-  def label(note_id, text, source) do
+  def label(note_id, text, source, by \\ "dev") do
+    update(note_id, fn meta ->
+      Map.merge(meta, %{
+        "label" => text,
+        "label_source" => source,
+        "label_by" => by,
+        "labelled_at" => DateTime.to_iso8601(DateTime.utc_now())
+      })
+    end)
+  end
+
+  @doc "Rewrites the note's sealed meta with `fun`. `{:ok, meta}` or `{:error, :not_found}`."
+  def update(note_id, fun) do
     with {:ok, meta} <- get(note_id),
          {:ok, key} <- Seal.data() do
-      meta =
-        Map.merge(meta, %{
-          "label" => text,
-          "label_source" => source,
-          "labelled_at" => DateTime.to_iso8601(DateTime.utc_now())
-        })
-
+      meta = meta |> fun.() |> Map.delete("note_id")
       write(dir(), note_id, "json", meta, key)
       {:ok, meta}
     else
       _ -> {:error, :not_found}
+    end
+  end
+
+  @doc "The note's sealed audio (for the night run), `{:ok, binary}` or `:error`."
+  def audio(note_id) do
+    with d when is_binary(d) <- dir(),
+         {:ok, key} <- Seal.data(),
+         {:ok, bin} <- File.read(path(d, note_id, "audio")),
+         {:ok, %{"ogg_b64" => b64}} <- Seal.open(key, aad(note_id, "audio"), bin),
+         {:ok, audio} <- Base.decode64(b64) do
+      {:ok, audio}
+    else
+      _ -> :error
     end
   end
 

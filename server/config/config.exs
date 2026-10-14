@@ -103,7 +103,11 @@ config :risime, Oban,
        # Decision 084: yesterday's deep-agents scoreboard (counts and timings only).
        {"20 0 * * *", RisiMe.Agents.ScoreboardJob},
        # Decision 088 (v1.46 §12.12.9): the Health agent's sweep of stuck conversations.
-       {"*/5 * * * *", RisiMe.Workers.HealthSweep}
+       {"*/5 * * * *", RisiMe.Workers.HealthSweep},
+       # Harsha 2026-10-14: compare candidates skipped for memory run at night on the sealed
+       # audio (eval guard + heavy lock), delivered after the 07:00 SLT brief.
+       {"45 16 * * *", RisiMe.Agent.SpeechCompareNight, args: %{"kind" => "run"}},
+       {"35 1 * * *", RisiMe.Agent.SpeechCompareNight, args: %{"kind" => "deliver"}}
      ]}
   ]
 
