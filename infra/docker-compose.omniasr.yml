@@ -35,7 +35,9 @@ services:
       OMNI_MODELS_ROOT: /models
       OMNI_MIN_AVAILABLE_MB: ${OMNI_MIN_AVAILABLE_MB:-4096}
       OMNI_IDLE_UNLOAD_S: ${OMNI_IDLE_UNLOAD_S:-180}
-      OMNI_COMPARE: ${OMNI_COMPARE:-omniasr-llm-1b}
+      OMNI_COMPARE: ${OMNI_COMPARE:-omniasr-llm-1b,omniasr-llm-7b}
+      # Served with the encoder streamed per request (not resident; slow, compare only).
+      OMNI_STREAMED: ${OMNI_STREAMED:-omniasr-llm-7b,omniasr-ctc-7b}
       OMNI_DTYPE: ${OMNI_DTYPE:-bf16}
       HF_HUB_OFFLINE: "1"
       DO_NOT_TRACK: "1"

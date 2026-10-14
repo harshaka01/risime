@@ -93,4 +93,25 @@ defmodule RisiMe.Agent.Speech do
   def healthy?, do: impl().healthy?()
   def transcribe(audio, opts \\ []), do: impl().transcribe(audio, opts)
   def compare(audio, opts \\ []), do: impl().compare(audio, opts)
+
+  @doc """
+  The extra compare service's models (compare only, never a route; `Speech.Http`):
+  `{:ok, [%{id, streamed}]}` or `{:error, :off | :unavailable}`. An impl without it is off.
+  """
+  def extra_models do
+    m = impl()
+
+    if Code.ensure_loaded?(m) and function_exported?(m, :extra_models, 0),
+      do: m.extra_models(),
+      else: {:error, :off}
+  end
+
+  @doc "The extra compare models asked by default (`[]` when off)."
+  def extra_default_models do
+    m = impl()
+
+    if Code.ensure_loaded?(m) and function_exported?(m, :extra_default_models, 0),
+      do: m.extra_default_models(),
+      else: []
+  end
 end

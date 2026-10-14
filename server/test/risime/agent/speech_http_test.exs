@@ -392,10 +392,60 @@ defmodule RisiMe.Agent.SpeechHttpTest do
       with_extra(compare_extra_url: "http://127.0.0.1:8210")
       assert {:ok, c} = Http.compare("x")
 
+      # Default list: the 1B and the (streamed, slow) 7B.
       assert [
                %{model: "qwen3-asr-0.6b-sinhala", error: nil},
-               %{model: "omniasr-llm-1b", text: nil, error: "failed"}
+               %{model: "omniasr-llm-1b", text: nil, error: "failed"},
+               %{model: "omniasr-llm-7b", text: nil, error: "failed"}
              ] = c.results
+    end
+
+    test "extra_models per call overrides the list ([] = none); extra_models/0 lists the service" do
+      rec =
+        stub(fn conn, body ->
+          case {conn.port, conn.request_path} do
+            {8200, _} ->
+              main_compare(conn)
+
+            {8210, "/v1/models"} ->
+              Req.Test.json(conn, %{
+                "data" => [
+                  %{"id" => "omniasr-llm-1b", "streamed" => false},
+                  %{"id" => "omniasr-llm-7b", "streamed" => true}
+                ]
+              })
+
+            {8210, "/v1/audio/compare"} ->
+              assert field(body, "models") == "omniasr-llm-7b"
+
+              Req.Test.json(conn, %{
+                "results" => [
+                  %{"model" => "omniasr-llm-7b", "text" => "ඉ", "processing_s" => 9.5}
+                ]
+              })
+          end
+        end)
+
+      with_extra(compare_extra_url: "http://127.0.0.1:8210")
+
+      assert {:ok,
+              [%{id: "omniasr-llm-1b", streamed: false}, %{id: "omniasr-llm-7b", streamed: true}]} =
+               Http.extra_models()
+
+      assert Http.extra_default_models() == ["omniasr-llm-1b", "omniasr-llm-7b"]
+
+      assert {:ok, c} = Http.compare("x", extra_models: ["omniasr-llm-7b"])
+      assert [_, %{model: "omniasr-llm-7b", text: "ඉ", elapsed_ms: 9500}] = c.results
+
+      Agent.update(rec, fn _ -> [] end)
+      assert {:ok, %{results: [_]}} = Http.compare("x", extra_models: [])
+      assert [{"/v1/audio/compare", _, _}] = Agent.get(rec, & &1)
+    end
+
+    test "extra_models/0 is off without the extra URL" do
+      with_extra(compare_extra_url: nil)
+      assert {:error, :off} = Http.extra_models()
+      assert Http.extra_default_models() == []
     end
 
     test "a non-loopback extra URL is never asked; a failed main compare skips it" do

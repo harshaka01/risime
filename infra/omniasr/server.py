@@ -28,9 +28,13 @@ import hmac
 import io
 import logging
 import os
+import sys
 import threading
 import time
 import unicodedata
+
+# python3 -I leaves the script's own directory off sys.path; ckpt_reader lives next to it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 import soundfile as sf
@@ -73,6 +77,15 @@ CATALOGUE = {
 }
 COMPARE = [n.strip() for n in os.environ.get("OMNI_COMPARE", "omniasr-llm-1b").split(",")
            if n.strip()]
+# Models served with the encoder streamed layer by layer per request (they can't be resident next
+# to risi-l1: LLM-7B is 15.6 GB in bf16). Only the decoder, frontend and projection stay loaded
+# (~2.8 GB CUDA for the LLM-7B); each request reads the 128 encoder layers from the checkpoint
+# (ckpt_reader: one tensor at a time, pages dropped). Slow by design: compare only.
+STREAMED = {n.strip() for n in os.environ.get("OMNI_STREAMED", "omniasr-llm-7b,omniasr-ctc-7b")
+            .split(",") if n.strip()}
+# Measured for the streamed LLM-7B: -2.8 GB MemAvailable at load, ~3.3 GB CUDA peak, plus the
+# torch/CUDA runtime on the host side.
+STREAMED_EST_MB = int(os.environ.get("OMNI_STREAMED_EST_MB", "5000"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("omniasr")
@@ -86,8 +99,11 @@ def served():
     for alias, (rel, fam, arch, tok, params) in CATALOGUE.items():
         path, tok_path = os.path.join(MODELS_ROOT, rel), os.path.join(TOKENIZERS, tok)
         if os.path.isfile(path) and os.path.isfile(tok_path) and complete(path):
+            streamed = alias in STREAMED
             out[alias] = dict(path=path, family=fam, arch=arch, tokenizer=tok_path,
-                              est_mb=int(params * 1e9 * 2 / 2**20) + LOAD_OVERHEAD_MB)
+                              streamed=streamed,
+                              est_mb=STREAMED_EST_MB if streamed
+                              else int(params * 1e9 * 2 / 2**20) + LOAD_OVERHEAD_MB)
     return out
 
 
@@ -187,6 +203,16 @@ class Pool:
             _fs2 = True
         t0 = time.monotonic()
         dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if spec["streamed"]:
+            pipe = Streamed(name, spec, dev)
+            trim()
+            self.name, self.pipe, self.used_at = name, pipe, time.monotonic()
+            self.load_s = time.monotonic() - t0
+            log.info("loaded %s (streamed encoder, %d layers) in %.1fs (CUDA allocated %d MB, "
+                     "MemAvailable %d -> %d MB)", name, pipe.n_layers, self.load_s,
+                     torch.cuda.memory_allocated() // 2**20 if torch.cuda.is_available() else 0,
+                     avail, mem_available_mb())
+            return pipe, self.load_s
         model = load_model(name, device=dev, dtype=DTYPE, mmap=True, progress=False)
         tok = load_tokenizer(name)
         pipe = make_pipeline(model, tok, spec["tokenizer"], dev)
@@ -203,7 +229,14 @@ class Pool:
     def _unload(self):
         if self.pipe is not None:
             log.info("unloading %s", self.name)
+            ck = getattr(self.pipe, "ck", None)
             self.name, self.pipe = None, None
+            gc.collect()
+            if ck is not None:
+                try:
+                    ck.close()
+                except Exception:  # an exported buffer still alive: GC closes it later
+                    pass
             trim()
 
     def unload_idle(self):
@@ -313,6 +346,90 @@ def infer(pipe, audio, lang):
     return pipe._apply_model(batch)[0]
 
 
+class _PrecomputedEncoder(torch.nn.Module):
+    """Stands in for the encoder: returns the streamed encoder output of the current piece."""
+
+    def __init__(self):
+        super().__init__()
+        self.out = None
+
+    def forward(self, seqs, seqs_layout):
+        assert self.out is not None and self.out.shape[1] == seqs.shape[1], "frame mismatch"
+        return self.out
+
+
+class Streamed:
+    """A model whose wav2vec2 encoder is streamed layer by layer from the checkpoint on every
+    request (validated in stream_eval.py: identical text to the resident model). Resident: the
+    model built with zero encoder layers (frontend, encoder layer norm, projection, decoder) and
+    one encoder-layer module that receives layer i's weights in turn."""
+
+    def __init__(self, name, spec, dev):
+        import copy
+        from ckpt_reader import Checkpoint
+        from fairseq2.data.tokenizers.hub import load_tokenizer
+        llm = spec["family"] == "wav2vec2_llama"
+        if llm:
+            from omnilingual_asr.models.wav2vec2_llama.hub import get_wav2vec2_llama_model_hub as G
+        else:
+            from fairseq2.models.wav2vec2.asr.hub import get_wav2vec2_asr_model_hub as G
+        hub = G()
+        cfg = hub.get_arch_config(spec["arch"])
+        enc = lambda c: (c.wav2vec2_asr_config if llm else c).encoder_config  # noqa: E731
+        self.n_layers = enc(cfg).num_encoder_layers
+        self.dev = dev
+        self.ck = Checkpoint(spec["path"])
+        cfg0 = copy.deepcopy(cfg)
+        enc(cfg0).num_encoder_layers = 0
+        model = hub.create_new_model(cfg0, device=dev, dtype=DTYPE)
+        rest = {k: self.ck.get(k, dev, DTYPE) for k in self.ck.keys()
+                if not k.startswith("encoder.layers.")}
+        missing, unexpected = model.load_state_dict(rest, strict=False, assign=True)
+        assert not missing and not unexpected, (missing, unexpected)
+        del rest
+        cfg1 = copy.deepcopy(cfg)
+        enc(cfg1).num_encoder_layers = 1
+        layer = hub.create_new_model(cfg1, device=dev, dtype=DTYPE, meta=True).encoder.layers[0]
+        self.layer = layer.to_empty(device=dev).to(DTYPE).eval()
+        self.enc_norm = model.encoder.layer_norm
+        self.stand_in = _PrecomputedEncoder()
+        model.encoder = self.stand_in
+        model.eval()
+        self.model = model
+        self.pipe = make_pipeline(model, load_tokenizer(name), spec["tokenizer"], dev)
+
+    @torch.inference_mode()
+    def transcribe(self, pieces, lang):
+        from fairseq2.models.transformer.attention_bias import AttentionBiasCache
+        from fairseq2.nn.batch_layout import BatchLayout
+        from omnilingual_asr.datasets.utils.audio import postprocess_waveform
+        hs, lays = [], []
+        for audio in pieces:
+            wav = postprocess_waveform(torch.from_numpy(np.ascontiguousarray(audio)),
+                                       normalize_audio=True, dtype=DTYPE, spec_aug_p=None,
+                                       spec_aug_freq_mask_param=0, spec_aug_time_mask_param=0)
+            seqs = wav[None, :].to(self.dev, DTYPE)
+            lay = BatchLayout.of(batch=seqs, seq_lens=[seqs.shape[1]])
+            h, hl, _ = self.model.encoder_frontend.extract_features(seqs, lay)
+            h, _ = self.model.encoder_frontend.process_features(h, hl, None)
+            hs.append(h)
+            lays.append(hl)
+        for li in range(self.n_layers):
+            if mem_available_mb() < MIN_AVAILABLE_MB:
+                raise NoMemory(f"MemAvailable under the floor during layer {li}")
+            pre = f"encoder.layers.{li}."
+            self.layer.load_state_dict(self.ck.subset(pre, self.dev, DTYPE), strict=True,
+                                       assign=True)
+            for j in range(len(hs)):
+                hs[j] = self.layer(hs[j], lays[j], AttentionBiasCache())
+        texts = []
+        for h, audio in zip(hs, pieces):
+            self.stand_in.out = self.enc_norm(h) if self.enc_norm is not None else h
+            texts.append(infer(self.pipe, audio, lang))
+        self.stand_in.out = None
+        return texts
+
+
 def run(name, audio, language):
     """-> dict(text, processing_s, load_s, peak_mb). Splits audio longer than MAX_SECONDS."""
     with pool.lock:
@@ -323,7 +440,10 @@ def run(name, audio, language):
         step = int(30 * 16000) if len(audio) > MAX_SECONDS * 16000 else len(audio)
         pieces = [audio[i:i + step] for i in range(0, len(audio), step)] or [audio]
         lang = LANG.get(language)
-        texts = [infer(pipe, p, lang) for p in pieces]
+        if isinstance(pipe, Streamed):
+            texts = pipe.transcribe(pieces, lang)
+        else:
+            texts = [infer(pipe, p, lang) for p in pieces]
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         dt = time.monotonic() - t0
@@ -347,6 +467,7 @@ def models(request: Request):
             "peak_cuda_mb": pool.peak_mb, "min_available_mb": MIN_AVAILABLE_MB,
             "mem_available_mb": mem_available_mb(), "compare": [n for n in COMPARE if n in s],
             "data": [{"id": n, "object": "model", "owned_by": "local", "est_mb": v["est_mb"],
+                      "streamed": v["streamed"],
                       "arch": v["arch"]} for n, v in sorted(s.items())]}
 
 

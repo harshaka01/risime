@@ -255,9 +255,32 @@ defmodule RisiMeWeb.AdminConsoleTest do
           installed: installed,
           clips: ["a.ogg"],
           test: nil,
+          extra: [],
+          extra_picked: [],
           flash: %{}
         }
       }
+    end
+
+    test "compare-only omniASR candidates: labels, ticking limited to served models, never a route" do
+      {a, _} = admin("speech3@example.com")
+      extra = [%{id: "omniasr-llm-1b", streamed: false}, %{id: "omniasr-llm-7b", streamed: true}]
+      s = socket(a.id, :loading)
+      s = %{s | assigns: %{s.assigns | extra: extra}}
+
+      {:noreply, s} =
+        SpeechLive.handle_event(
+          "pick_clip",
+          %{"clip" => "a.ogg", "extra" => ["omniasr-llm-7b", "not-served"]},
+          s
+        )
+
+      assert s.assigns.extra_picked == ["omniasr-llm-7b"]
+      assert SpeechLive.extra_label(Enum.at(extra, 1)) == "omniASR 7B (compare only, slow)"
+      assert SpeechLive.extra_label(Enum.at(extra, 0)) == "omniASR 1B (compare only)"
+      # A route is only ever one of the speech service's own models.
+      assert {:error, :not_installed} =
+               SpeechRoutes.put("si", "omniasr-llm-7b", a.id, ["qwen3-asr-0.6b-sinhala"])
     end
 
     test "save applies a manual model at once and Auto clears it; audit-logged" do
