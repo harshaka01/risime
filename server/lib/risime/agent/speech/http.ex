@@ -495,6 +495,28 @@ defmodule RisiMe.Agent.Speech.Http do
   end
 
   @doc """
+  The service's language detection only (`POST /v1/audio/detect`, no hint: large-v3's own
+  probabilities, incident 2026-10-14-tamil-script): `{:ok, body}` (`probs`, `raw_probs`,
+  `whisper_top`, `reason`) or `{:error, :unavailable}`. `opts[:timeout]` (default 5 s),
+  `opts[:priority]`.
+  """
+  @impl true
+  def detect(audio, opts \\ []) when is_binary(audio) do
+    fields =
+      with_priority([file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"}], opts)
+
+    with {:ok, base} <- base_url(),
+         {:ok, %{status: 200, body: %{} = b}} <-
+           Req.post(req(base <> "/v1/audio/detect", Keyword.get(opts, :timeout, 5_000)),
+             form_multipart: fields
+           ) do
+      {:ok, b}
+    else
+      _ -> {:error, :unavailable}
+    end
+  end
+
+  @doc """
   The fast fallback (incident 2026-10-14): `fallback_model` (else `RISI_SPEECH_FALLBACK_MODEL`,
   default `omnilingual-ctc-1b`: omniASR-CTC-1B, ONNX int8 on the CPU) by name, no language, no
   hint; `opts[:timeout]` (default 10 s), `priority` live.

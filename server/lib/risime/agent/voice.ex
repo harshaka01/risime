@@ -873,7 +873,7 @@ defmodule RisiMe.Agent.Voice do
   defp note_speech(conv, sender, t, note) do
     if t.language in ~w(si ta en) and t.reason not in ["no_speech", "low_confidence"] and
          is_integer(note.duration_ms) and RisiMe.Agent.Memory.learning_enabled?(sender, conv),
-       do: Lang.note_speech(sender, %{t.language => note.duration_ms})
+       do: RisiMe.Agent.SpeechLang.learn(sender, t.language, note.duration_ms)
 
     :ok
   rescue

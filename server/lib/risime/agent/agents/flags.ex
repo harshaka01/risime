@@ -46,7 +46,10 @@ defmodule RisiMe.Agents.Flags do
     # Harsha 2026-10-14: the Sinhala compare mode on dev users' own notes (SpeechCompare).
     "RISI_SPEECH_COMPARE_DEV" => :risi_speech_compare_dev,
     # Proposal 2026-10-14-send-for-me (§42.1): "Send a message for me"; canary = Harsha first.
-    "RISI_SEND_FOR_ME" => :risi_send_for_me
+    "RISI_SEND_FOR_ME" => :risi_send_for_me,
+    # P1 2026-10-14 (Tamil notes in Sinhala script): the Voice agent's language decision
+    # (RisiMe.Agent.SpeechLang); on for everyone, off = today's route.
+    "RISI_VOICE_LANG_ID" => :risi_voice_lang_id
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
@@ -56,7 +59,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_VOICE_PROGRESS" => "off",
     "RISI_VOICE_PHONE_FALLBACK" => "off",
     "RISI_SPEECH_COMPARE_DEV" => "canary",
-    "RISI_SEND_FOR_ME" => "canary"
+    "RISI_SEND_FOR_ME" => "canary",
+    "RISI_VOICE_LANG_ID" => "on"
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000

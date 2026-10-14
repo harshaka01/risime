@@ -66,7 +66,9 @@ defmodule RisiMe.Agent.Speech do
   @doc "The fast fallback model (incident 2026-10-14: omniASR-CTC-1B, CPU int8) on one chunk."
   @callback fallback_transcribe(audio :: binary, opts :: keyword) ::
               {:ok, result} | {:error, :timeout | :unavailable | :failed}
-  @optional_callbacks fallback_transcribe: 2
+  @doc "Language detection only (incident 2026-10-14-tamil-script, `RisiMe.Agent.SpeechLang`)."
+  @callback detect(audio :: binary, opts :: keyword) :: {:ok, map} | {:error, :unavailable}
+  @optional_callbacks fallback_transcribe: 2, detect: 2
 
   require Logger
 
@@ -130,6 +132,15 @@ defmodule RisiMe.Agent.Speech do
   def healthy?, do: impl().healthy?()
   def transcribe(audio, opts \\ []), do: impl().transcribe(audio, opts)
   def compare(audio, opts \\ []), do: impl().compare(audio, opts)
+
+  @doc "Language detection only (`{:error, :unavailable}` for an impl without it)."
+  def detect(audio, opts \\ []) do
+    m = impl()
+
+    if Code.ensure_loaded?(m) and function_exported?(m, :detect, 2),
+      do: m.detect(audio, opts),
+      else: {:error, :unavailable}
+  end
 
   ## Voice notes: the live budget and the fallbacks (incident 2026-10-14, Sinhala slow)
 
@@ -200,7 +211,7 @@ defmodule RisiMe.Agent.Speech do
         RisiMe.Agent.SpeechRoutes.user_choice(opts[:sender], "si") == "phone"
 
     {result, why} =
-      case if(route_phone?, do: :route_phone, else: primary(audio, primary_opts, t0, budget)) do
+      case if(route_phone?, do: :route_phone, else: routed(audio, primary_opts, t0, budget)) do
         :route_phone ->
           # The Voice agent's route decision for this user: the phone's (Google) transcript wins
           # on his notes until one of our models beats it (SpeechCompare's promotion rule).
@@ -232,6 +243,14 @@ defmodule RisiMe.Agent.Speech do
     RisiMe.Agent.SpeechGuard.observe_live(result, elapsed, dur)
     record_run(result, why, elapsed, budget, opts)
     result
+  end
+
+  # P1 2026-10-14 (Tamil in Sinhala script): the Voice agent's language decision around the
+  # routed model (`RisiMe.Agent.SpeechLang`, flag RISI_VOICE_LANG_ID; off = today's path).
+  defp routed(audio, opts, t0, budget) do
+    if RisiMe.Agent.SpeechLang.enabled?(opts[:sender]),
+      do: RisiMe.Agent.SpeechLang.transcribe(audio, opts, &primary(&1, &2, t0, budget)),
+      else: primary(audio, opts, t0, budget)
   end
 
   defp primary(audio, opts, t0, budget) do
@@ -348,8 +367,25 @@ defmodule RisiMe.Agent.Speech do
              priority: "live"
            ) do
         {:ok, r} ->
-          # The CTC model is not language-conditioned: the language is its output's script.
-          language = if r.speech, do: script_lang(r.text), else: r.language
+          # The CTC model is not language-conditioned: the language is its output's script, and
+          # a Sinhala-script text that is clearly Tamil sounds is written in Tamil letters
+          # (P1 2026-10-14, `SpeechLang.fallback_script/2`).
+          {text, language} =
+            cond do
+              not r.speech ->
+                {r.text, r.language}
+
+              RisiMe.Agent.SpeechLang.enabled?(opts[:sender]) ->
+                RisiMe.Agent.SpeechLang.fallback_script(
+                  r.text,
+                  RisiMe.Agent.SpeechLang.profile(opts[:sender])
+                )
+
+              true ->
+                {r.text, script_lang(r.text)}
+            end
+
+          r = %{r | text: text}
 
           {:ok,
            Map.merge(r, %{

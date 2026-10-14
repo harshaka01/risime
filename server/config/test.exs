@@ -154,6 +154,11 @@ config :risime, :risi_tts_lab,
 
 # Incident 2026-10-14: tests never write the shared eval pause file (RisiMe.Agent.SpeechGuard).
 config :risime, :risi_speech_pause_file, false
+# P1 2026-10-14: the Voice agent's language decision (SpeechLang) is on in prod by default; the
+# older speech tests keep today's route, SpeechLangTest turns it on, and risi-l1's likelihood is
+# only ever a Req.Test stub there.
+config :risime, :risi_voice_lang_id, false
+config :risime, :risi_speech_lang, lm: false
 # Harsha's sealed Sinhala gold set (RisiMe.Agent.SpeechGold): tests set a temp dir themselves.
 config :risime, :risi_asr_gold_dir, false
 # The compare night run (RisiMe.Agent.SpeechCompareNight): no heavy lock, no floor, any hour.
