@@ -814,6 +814,225 @@ defmodule RisiMe.Agent.VoiceTest do
     end
   end
 
+  describe "§37.11 spoken @Risi (proposal 2026-10-14-spoken-risi)" do
+    alias RisiMe.Agent.SpokenMention
+
+    setup w do
+      old = Application.fetch_env(:risime, :risi_spoken_mention)
+
+      on_exit(fn ->
+        case old do
+          {:ok, v} -> Application.put_env(:risime, :risi_spoken_mention, v)
+          :error -> Application.delete_env(:risime, :risi_spoken_mention)
+        end
+      end)
+
+      # Default canary: Harsha (A) is the dev user.
+      Application.delete_env(:risime, :risi_spoken_mention)
+      Application.put_env(:risime, :risi_dev_users, [String.downcase(w.a.user.id)])
+      :ok
+    end
+
+    defp spoken!(w, user, audio) do
+      {env, _, _} = note!(user.id, w.og, audio)
+      {id, s} = receive_note(w.og, user, env)
+      assert {:started, _} = s
+      _ = await_post(w.og, "voice_transcript", &(&1["message_id"] == id))
+      await_done(s)
+      id
+    end
+
+    defp runs,
+      do:
+        RisiMe.Repo.all(
+          from r in "risi_agent_runs",
+            where: r.agent == "spoken_mention",
+            select: %{mode: r.mode, decision: r.decision, by: r.by, reason: r.reason}
+        )
+
+    defp requests(conv),
+      do: all_enqueued(worker: Job, args: %{"kind" => "request", "conv" => conv})
+
+    test "canary, dev user: an addressed note is an ask (once), not extracted", w do
+      assert SpokenMention.mode() == :canary
+      id = spoken!(w, w.a.user, "en:Risi, remind me to send the quotation on Friday.")
+      rid = SpokenMention.request_id(id)
+
+      assert [job] = requests(w.og)
+
+      assert job.args["request_id"] == rid and job.args["message_id"] == id and
+               job.args["user_id"] == w.a.user.id
+
+      # The working copy carries the request: the text after the vocative.
+      assert %{
+               "type" => "voice_transcript",
+               "spoken_request" => %{
+                 "request_id" => ^rid,
+                 "text" => "remind me to send the quotation on Friday."
+               }
+             } = Secretary.envelope(w.og, id)
+
+      # A request, so (as §37.8) no extraction and no quiet-rule count.
+      assert jobs("extract", w.og) == [] and jobs("discussion_quiet", w.og) == []
+      assert [%{mode: "canary", decision: "addressed", by: "rules"}] = runs()
+
+      # A repeat is the same request (unique request_id): still one job.
+      :ok = Secretary.spoken_request(w.og, id, w.a.user.id, rid)
+      assert [_] = requests(w.og)
+
+      # Never text in the run rows.
+      raw =
+        RisiMe.Repo.all(from r in "risi_agent_runs", select: fragment("row_to_json(?)::text", r))
+
+      refute Enum.any?(raw, &(&1 =~ "quotation"))
+    end
+
+    test "the request job answers with voice_ref and the note in refs", w do
+      Application.put_env(:risime, :risi_tools, true)
+
+      RisiMe.RisiHelpers.fake_llm!(fn "risi_next_action", _ ->
+        %{"tool" => "final", "answer" => "On Friday.", "sources" => [], "next_steps" => []}
+      end)
+
+      id = spoken!(w, w.a.user, "en:Risi, when is the quotation due?")
+      [job] = requests(w.og)
+      assert :ok = perform_job(Job, job.args)
+      rid = job.args["request_id"]
+      {_, answer} = await_post(w.og, "answer", &(&1["request_id"] == rid))
+
+      assert answer["voice_ref"] == %{"message_id" => id, "speaker" => w.a.user.id}
+      assert answer["notify"] == [w.a.user.id]
+
+      # The model got the question after the vocative.
+      [req | _] = Agent.get(Process.get(:risi_llm_rec), & &1)
+      assert Jason.encode!(req["messages"]) =~ "when is the quotation due?"
+    end
+
+    test "merely mentioned: an ordinary note (extraction as before), no request", w do
+      _ = spoken!(w, w.a.user, "en:I told Risi yesterday to remind me about the quotation.")
+      _ = spoken!(w, w.a.user, "en:Risi said the meeting is at three.")
+      assert requests(w.og) == []
+      assert [_] = jobs("extract", w.og)
+      assert Enum.sort(Enum.map(runs(), & &1.decision)) == ["mentioned", "mentioned"]
+    end
+
+    test "canary for a non-dev user and shadow: logged, never a request", w do
+      _ = spoken!(w, w.b.user, "en:Risi, remind me to call the bank.")
+      assert requests(w.og) == []
+      assert [%{mode: "shadow", decision: "addressed"}] = runs()
+      assert [_] = jobs("extract", w.og)
+
+      Application.put_env(:risime, :risi_spoken_mention, :shadow)
+      _ = spoken!(w, w.a.user, "en:Risi, remind me to call the bank.")
+      assert requests(w.og) == []
+      assert length(runs()) == 2 and Enum.all?(runs(), &(&1.mode == "shadow"))
+    end
+
+    test "off: no detection, no run row; addressed but unclear: Risi asks back (never silent)",
+         w do
+      Application.put_env(:risime, :risi_spoken_mention, false)
+      _ = spoken!(w, w.a.user, "en:Risi, remind me to call the bank.")
+      assert requests(w.og) == [] and runs() == []
+
+      Application.put_env(:risime, :risi_spoken_mention, true)
+      id = spoken!(w, w.a.user, "en:Risi, the venue is booked.")
+      assert requests(w.og) == []
+      assert [%{decision: "unsure_ask", reason: "vocative_no_request"}] = runs()
+
+      {body, ask} = await_post(w.og, "answer", &(&1["voice_ref"]["message_id"] == id))
+      assert body =~ "Did you want me to"
+      assert ask["notify"] == [w.a.user.id] and ask["refs"] == [id]
+      assert ask["request_id"] == SpokenMention.request_id(id)
+      # Still an ordinary note for the chat (the Ledger sees it).
+      assert [_] = jobs("extract", w.og)
+    end
+
+    test "the @Risi chip (request_id on the note): a request without the name, even with transcribe off",
+         w do
+      RisiMe.Messaging.subscribe(w.a.user.id)
+      {:ok, _} = Voice.put_setting(w.a.user.id, %{"transcribe" => false, "action_items" => true})
+      rid = Ecto.UUID.generate()
+
+      {env, _, _} =
+        note!(w.a.user.id, w.og, "si:හෙට මගේ meetings මොනවද", %{
+          "request_id" => rid,
+          "transcribe" => false
+        })
+
+      {id, s} = receive_note(w.og, w.a.user, env)
+
+      assert_receive {:signal,
+                      %{
+                        kind: "risi_progress",
+                        data: %{"request_id" => ^rid, "state" => "working"}
+                      }},
+                     500
+
+      _ = await_post(w.og, "voice_transcript", &(&1["message_id"] == id))
+      await_done(s)
+      assert [job] = requests(w.og)
+      assert job.args["request_id"] == rid and job.args["message_id"] == id
+
+      assert %{"spoken_request" => %{"request_id" => ^rid, "text" => "හෙට මගේ meetings මොනවද"}} =
+               Secretary.envelope(w.og, id)
+
+      assert [%{decision: "chip", by: "chip"}] = runs()
+
+      # A chip note Risi couldn't hear gets the "couldn't hear" answer, never silence.
+      rid2 = Ecto.UUID.generate()
+      {env, _, _} = note!(w.a.user.id, w.og, "silence", %{"request_id" => rid2})
+      {id2, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", &(&1["message_id"] == id2))
+      {body, a} = await_post(w.og, "answer", &(&1["request_id"] == rid2))
+      await_done(s)
+      assert body =~ "couldn't hear"
+      assert a["voice_ref"] == %{"message_id" => id2, "speaker" => w.a.user.id}
+
+      # Kamal is not in the canary: his chip note is an ordinary note (and his opt-out holds).
+      {env, _, _} =
+        note!(w.b.user.id, w.og, "en:what is on tomorrow", %{
+          "request_id" => Ecto.UUID.generate(),
+          "transcribe" => false
+        })
+
+      assert {_, :skip} = receive_note(w.og, w.b.user, env)
+    end
+
+    test "never Private or a dm, and the Risi chat keeps §37.8 only (one request)", w do
+      Application.put_env(:risime, :risi_spoken_mention, true)
+      private = private_group!([w.a.user.id, w.b.user.id])
+      dm = RisiMe.Messaging.conversation_id(w.a.user.id, w.b.user.id)
+      t = %{status: "ok", text: "Risi, remind me to call the bank.", language: "en"}
+
+      for conv <- [private, dm] do
+        assert SpokenMention.check(conv, TimeUUID.generate(), w.a.user.id, t) == nil
+
+        assert :ok =
+                 Secretary.spoken_request(
+                   conv,
+                   TimeUUID.generate(),
+                   w.a.user.id,
+                   Ecto.UUID.generate()
+                 )
+      end
+
+      rc = RisiMe.RisiHelpers.own_risi_chat!(w.a.user)
+      intervals!(rc, [w.a.user.id])
+      assert SpokenMention.check(rc, TimeUUID.generate(), w.a.user.id, t) == nil
+
+      rid = Ecto.UUID.generate()
+
+      {env, _, _} =
+        note!(w.a.user.id, rc, "en:Risi, remind me to call the bank.", %{"request_id" => rid})
+
+      {_, s} = receive_note(rc, w.a.user, env)
+      _ = await_post(rc, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert [%{args: %{"request_id" => ^rid}}] = requests(rc)
+      assert runs() == []
+    end
+  end
+
   describe "PART 9: canary switches (RISI_VOICE_TRANSCRIBE, RISI_ACTION_ITEMS)" do
     test "canary transcribes only RISI_DEV_USERS' notes; /auth/config says off", w do
       Application.put_env(:risime, :risi_test_pid, self())

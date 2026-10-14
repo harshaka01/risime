@@ -36,8 +36,14 @@ defmodule RisiMe.Agents.Flags do
     "RISI_VOICE_TRANSCRIBE" => :risi_voice_transcribe,
     "RISI_ACTION_ITEMS" => :risi_action_items,
     # Decision 090: "Call Risi" (a voice call Risi answers); canary = Harsha first.
-    "RISI_CALL_RISI" => :risi_call_risi
+    "RISI_CALL_RISI" => :risi_call_risi,
+    # Proposal 2026-10-14-spoken-risi (§37.11): a spoken "Risi, …" in an Official voice note.
+    "RISI_SPOKEN_MENTION" => :risi_spoken_mention
   }
+  # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
+  # from the OS environment, with their own default (Harsha 2026-10-14: canary).
+  @feature_extra_modes %{"RISI_SPOKEN_MENTION" => ~w(shadow)}
+  @feature_defaults %{"RISI_SPOKEN_MENTION" => "canary"}
   @masters ~w(on legacy)
   @ttl_ms 5_000
   @ets :risime_agent_flags
@@ -102,13 +108,26 @@ defmodule RisiMe.Agents.Flags do
     v =
       case Application.get_env(:risime, :risi_agent_flags) do
         %{} = forced when is_map_key(forced, name) -> forced[name]
-        _ -> Map.get(table(), name) || if(env(name) == "canary", do: "canary")
+        _ -> Map.get(table(), name) || feature_env(name)
       end
 
-    case v do
-      v when v in @feature_modes -> String.to_existing_atom(v)
-      nil -> app_feature(@features[name])
-      _ -> :off
+    cond do
+      v in feature_modes(name) -> String.to_existing_atom(v)
+      v == nil and is_map_key(@feature_defaults, name) -> app_feature(@features[name], name)
+      v == nil -> app_feature(@features[name])
+      true -> :off
+    end
+  end
+
+  @doc "The values feature `name` takes (`off | canary | on`, plus `shadow` for some)."
+  def feature_modes(name), do: @feature_modes ++ Map.get(@feature_extra_modes, name, [])
+
+  # The env is read directly for the features with their own default (any valid value), else only
+  # its `canary` (the others' `on`/`off` come from the application env set by runtime.exs).
+  defp feature_env(name) do
+    case env(name) do
+      nil -> nil
+      v -> if is_map_key(@feature_defaults, name) or v == "canary", do: v
     end
   end
 
@@ -117,11 +136,23 @@ defmodule RisiMe.Agents.Flags do
     case feature(name) do
       :on -> true
       :canary -> Enum.any?(users, &dev_user?/1)
-      :off -> false
+      # `shadow` acts for nobody.
+      _ -> false
     end
   end
 
   def feature_for(name, user), do: feature_for(name, [user])
+
+  # A feature with its own default: the application env when set (tests), else the default.
+  defp app_feature(key, name) do
+    case Application.get_env(:risime, key) do
+      nil -> String.to_existing_atom(@feature_defaults[name])
+      v when v in [true, :on, "on"] -> :on
+      v when v in [:canary, "canary"] -> :canary
+      v when v in [:shadow, "shadow"] -> :shadow
+      _ -> :off
+    end
+  end
 
   defp app_feature(key) do
     case Application.get_env(:risime, key, false) do
@@ -228,7 +259,9 @@ defmodule RisiMe.Agents.Flags do
 
   defp validate("RISI_AGENT_" <> _, v) when v in @modes, do: :ok
 
-  defp validate(name, v) when is_map_key(@features, name) and v in @feature_modes, do: :ok
+  defp validate(name, v) when is_map_key(@features, name) do
+    if v in feature_modes(name), do: :ok, else: {:error, :invalid_flag}
+  end
 
   # The router's model alias (`off` = rules only), e.g. `risi-l1`, later `risi-l2`.
   defp validate("RISI_ROUTER_MODEL", v),

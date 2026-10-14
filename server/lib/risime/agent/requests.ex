@@ -47,7 +47,7 @@ defmodule RisiMe.Agent.Requests do
   end
 
   defp dispatch(conv, message_id, request_id, user) do
-    case Secretary.envelope(conv, message_id) do
+    case conv |> Secretary.envelope(message_id) |> spoken(message_id, request_id, user) do
       # v1.25 §25.1: with RISI_TOOLS=on an `ask` is a turn of the tool loop.
       %{"type" => "risi_request", "request_id" => ^request_id, "action" => action} = env ->
         # v1.35 §34.3: an error card of this request re-asks its original text.
@@ -62,6 +62,30 @@ defmodule RisiMe.Agent.Requests do
         :ok
     end
   end
+
+  # §37.11: a voice note that addressed Risi is an `ask` with the text after the vocative, in the
+  # transcript's language (as §37.8); Risi's posts for it carry `voice_ref` (`Out.risi/2`).
+  defp spoken(
+         %{"type" => "voice_transcript", "spoken_request" => %{"request_id" => rid} = sr} = env,
+         note_id,
+         rid,
+         user
+       ) do
+    Process.put(:risi_voice_ref, {rid, %{"message_id" => note_id, "speaker" => user}})
+
+    env
+    |> Map.drop(["spoken_request", "parts", "status", "reason", "p", "romanised", "model"])
+    |> Map.merge(%{
+      "type" => "risi_request",
+      "request_id" => rid,
+      "action" => "ask",
+      "text" => sr["text"],
+      "lang" => env["language"],
+      "via" => "voice"
+    })
+  end
+
+  defp spoken(env, _note_id, _rid, _user), do: env
 
   defp valid_question?(q) when is_binary(q), do: String.length(String.trim(q)) in 1..1000
   defp valid_question?(_q), do: false

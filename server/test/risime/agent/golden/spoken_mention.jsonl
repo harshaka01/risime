@@ -1,0 +1,67 @@
+{"id":"sm-en-01","lang":"en","text":"Risi, can you remind me to call Kamal tomorrow at ten?","expect":"request"}
+{"id":"sm-en-02","lang":"en","text":"Risi, remind me to send the invoice on Friday.","expect":"request"}
+{"id":"sm-en-03","lang":"en","text":"Hey Risi, what did we decide about the venue?","expect":"request"}
+{"id":"sm-en-04","lang":"en","text":"Risi can you summarise today's discussion","expect":"request"}
+{"id":"sm-en-05","lang":"en","text":"Okay so the site visit is moved to Monday. Risi, please add that to my calendar.","expect":"request"}
+{"id":"sm-en-06","lang":"en","text":"Risi? When is the next meeting with the supplier?","expect":"request"}
+{"id":"sm-en-07","lang":"en","text":"Rishi, could you tell me who owes us the deposit?","expect":"request"}
+{"id":"sm-en-08","lang":"en","text":"Risi what is pending with Nimal","expect":"request"}
+{"id":"sm-en-09","lang":"en","text":"Risi: list my promises for this week.","expect":"request"}
+{"id":"sm-en-10","lang":"en","text":"Hi Risi, do you know when the cement arrives?","expect":"request"}
+{"id":"sm-en-11","lang":"en","text":"I told Risi yesterday to remind me about the invoice.","expect":"none"}
+{"id":"sm-en-12","lang":"en","text":"Risi said the meeting is at three.","expect":"none"}
+{"id":"sm-en-13","lang":"en","text":"Kamal, did you ask Risi about the venue?","expect":"none"}
+{"id":"sm-en-14","lang":"en","text":"Thanks Risi.","expect":"none"}
+{"id":"sm-en-15","lang":"en","text":"Risi's summary was wrong about the dates.","expect":"none"}
+{"id":"sm-en-16","lang":"en","text":"Risi is really useful for the site team.","expect":"none"}
+{"id":"sm-en-17","lang":"en","text":"Can you check with Risi later? It knows the numbers.","expect":"none"}
+{"id":"sm-en-18","lang":"en","text":"Risi was down this morning, so I wrote it on paper.","expect":"none"}
+{"id":"sm-en-19","lang":"en","text":"Risi and Kamal both have the list.","expect":"none"}
+{"id":"sm-en-20","lang":"en","text":"Rishi, can you send me the drawings?","expect":"none","members":["Rishi Perera"]}
+{"id":"sm-en-21","lang":"en","text":"We should ask Risi to summarise this chat.","expect":"none"}
+{"id":"sm-en-22","lang":"en","text":"Risi will remind us anyway.","expect":"none"}
+{"id":"sm-en-23","lang":"en","text":"Risi, the venue is booked.","expect":"ask"}
+{"id":"sm-en-24","lang":"en","text":"Okay Risi, can you check if the payment from Lanka Hardware came in today","expect":"request","src":"realistic"}
+{"id":"sm-en-25","lang":"en","text":"Risi remind me tomorrow morning at nine to call the bank about the loan","expect":"request","src":"realistic"}
+{"id":"sm-en-26","lang":"en","text":"Risi um what did Nimal say about the delivery","expect":"request","src":"realistic"}
+{"id":"sm-en-27","lang":"en","text":"So I already told Risi to set the reminder, don't worry about it.","expect":"none","src":"realistic"}
+{"id":"sm-en-28","lang":"en","text":"Hey Risi.","expect":"ask","src":"realistic"}
+{"id":"sm-en-29","lang":"en","text":"Ask Risi, it knows the numbers.","expect":"none","src":"realistic"}
+{"id":"sm-en-30","lang":"en","text":"Risi, summarise what we discussed today.","expect":"request","src":"realistic"}
+{"id":"sm-en-31","lang":"en","text":"Can you remind me about the invoice tomorrow, Risi?","expect":"ask","src":"realistic"}
+{"id":"sm-si-01","lang":"si","text":"රිසි, මට හෙට දහයට කමල්ට කෝල් කරන්න මතක් කරන්න.","expect":"request"}
+{"id":"sm-si-02","lang":"si","text":"රිසි, අද meeting එකේ තීරණ මොනවද?","expect":"request"}
+{"id":"sm-si-03","lang":"si","text":"රිසි මට ඉන්වොයිස් එක ගැන මතක් කරන්න","expect":"request"}
+{"id":"sm-si-04","lang":"si","text":"අනේ රිසි, ඊළඟ meeting එක කවදාද?","expect":"request"}
+{"id":"sm-si-05","lang":"si","text":"රිසි, කරුණාකර අද කතා කරපු දේවල් කෙටියෙන් කියන්න.","expect":"request"}
+{"id":"sm-si-06","lang":"si","text":"මම ඊයේ රිසිට කිව්වා මට මතක් කරන්න කියලා.","expect":"none"}
+{"id":"sm-si-07","lang":"si","text":"රිසි කිව්වා meeting එක තුනට කියලා.","expect":"none"}
+{"id":"sm-si-08","lang":"si","text":"රිසි ගැන කමල් කිව්ව දේ හරි.","expect":"none"}
+{"id":"sm-si-09","lang":"si","text":"රිසිගේ summary එකේ දින වැරදියි.","expect":"none"}
+{"id":"sm-si-10","lang":"si","text":"කමල්, ඔයා රිසිගෙන් ඇහුවද?","expect":"none"}
+{"id":"sm-si-11","lang":"si","text":"රිසි, අද දවසේ කතා කරපු දේවල් summary එකක් දෙන්න","expect":"request","src":"realistic"}
+{"id":"sm-si-12","lang":"si","text":"රිසි මට හෙට උදේ නවයට bank එකට call කරන්න මතක් කරන්න","expect":"request","src":"realistic"}
+{"id":"sm-si-13","lang":"si","text":"රිසි, නිමල් delivery එක ගැන මොකක්ද කිව්වේ?","expect":"request","src":"realistic"}
+{"id":"sm-si-14","lang":"si","text":"අපි රිසිගෙන් අහමු.","expect":"none","src":"realistic"}
+{"id":"sm-si-15","lang":"si","text":"රිසි කියපු විදියට payment එක හෙට.","expect":"none","src":"realistic"}
+{"id":"sm-si-16","lang":"si","text":"රිසි, හලෝ","expect":"ask","src":"realistic"}
+{"id":"sm-si-17","lang":"si","text":"රිසි හෙට meeting එක මතක් කරන්න","expect":"ask","src":"realistic"}
+{"id":"sm-ta-01","lang":"ta","text":"ரிசி, நாளைக்கு கமலை அழைக்க எனக்கு நினைவூட்டு.","expect":"request"}
+{"id":"sm-ta-02","lang":"ta","text":"ரிசி, அடுத்த கூட்டம் எப்போது?","expect":"request"}
+{"id":"sm-ta-03","lang":"ta","text":"ரிசி எனக்கு இன்றைய பேச்சை சுருக்கமாக சொல்லு","expect":"request"}
+{"id":"sm-ta-04","lang":"ta","text":"ஹலோ ரிசி, தயவு செய்து இதை என் நாட்காட்டியில் சேர்.","expect":"request"}
+{"id":"sm-ta-05","lang":"ta","text":"நேற்று ரிசிக்கு நான் சொன்னேன்.","expect":"none"}
+{"id":"sm-ta-06","lang":"ta","text":"ரிசி சொன்னது சரி தான்.","expect":"none"}
+{"id":"sm-ta-07","lang":"ta","text":"ரிசி பற்றி கமல் கேட்டார்.","expect":"none"}
+{"id":"sm-ta-08","lang":"ta","text":"கமல், ரிசியிடம் கேட்டீர்களா?","expect":"none"}
+{"id":"sm-ta-09","lang":"ta","text":"ரிசி, இன்றைய கூட்டத்தின் சுருக்கம் தருவாயா?","expect":"request","src":"realistic"}
+{"id":"sm-sl-01","lang":"singlish","text":"Risi, mata heta dahayata Kamal ta call karanna mathak karanna.","expect":"request"}
+{"id":"sm-sl-02","lang":"singlish","text":"Risi ada meeting eke decisions monada?","expect":"request"}
+{"id":"sm-sl-03","lang":"singlish","text":"Aney Risi, next meeting eka kawadada?","expect":"request"}
+{"id":"sm-sl-04","lang":"singlish","text":"Risi mata invoice eka gana mathak karanna","expect":"request"}
+{"id":"sm-sl-05","lang":"singlish","text":"Mama iye Risi ta kiwwa mathak karanna kiyala.","expect":"none"}
+{"id":"sm-sl-06","lang":"singlish","text":"Risi kiwwa meeting eka thunata kiyala.","expect":"none"}
+{"id":"sm-sl-07","lang":"singlish","text":"Risi gana Kamal kiwwa eka hari.","expect":"none"}
+{"id":"sm-sl-08","lang":"singlish","text":"Machan, Risi ekka katha karala balanna.","expect":"none"}
+{"id":"sm-sl-09","lang":"singlish","text":"Rishi, mata drawings tika yawanna.","expect":"none","members":["Rishi"]}
+{"id":"sm-sl-10","lang":"singlish","text":"Risi, ada kathawe summary ekak denna","expect":"request","src":"realistic"}

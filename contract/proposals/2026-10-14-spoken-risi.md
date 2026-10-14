@@ -6,8 +6,10 @@ as a new **§37.11** plus one-line amendments to §24.11, §25.0 and §37.6. It 
 The server is implemented against this text **behind `RISI_SPOKEN_MENTION`** (default `canary`: only
 `RISI_DEV_USERS` act; everybody else is shadow-logged). Root applies the PROTOCOL.md text.
 
-**Wire change: none is required.** No new envelope, `kind` or `risi_request` field. One **optional, additive** field
-(`voice_ref`) is added on Risi's reply so a phone can draw the reply as an answer to the note. Phones that ignore it
+**Wire change: none is required for the spoken name.** No new envelope, `kind` or `risi_request` field. One **optional,
+additive** field (`voice_ref`) is added on Risi's reply so a phone can draw the reply as an answer to the note. The **@Risi
+chip on a voice note** reuses the existing §37.2 `request_id` field in Official (a meaning change of an optional field; old
+servers ignore it there, old phones never send it there). Phones that ignore it
 render the reply exactly as today (an ordinary `answer` card with `refs` that hold the note). No capability, no
 readiness, no `/auth/config` switch.
 
@@ -55,7 +57,28 @@ or of a sentence, followed by a request. Merely mentioning Risi never counts. De
    ≤ 40-token yes/no prompt; it counts as addressed only with **confidence ≥ 0.9**. No model configured, an error, a timeout
    (1.5 s) or a lower confidence: **not @Risi**.
 
-When unsure, the answer is always **not @Risi**: the note stays an ordinary Official message.
+When unsure, the note is **never treated as a request**, but Risi is **never silent** to a note that addresses it (Harsha
+2026-10-14 07:41, see "Never silent" below). A note that merely mentions Risi is never acted on at all (zero false positives).
+
+**The @Risi chip on a voice note (Harsha 2026-10-14 07:41; uses an existing field, no new one).** In Official, when the @Risi
+chip is on while the user records, the app stamps the note's §37.2 **`request_id`** (a fresh UUIDv4), exactly as it already
+does for every note in the Risi chat (§37.8). §37.2 is amended: `request_id` is meaningful in the Risi chat **and** on an
+Official note recorded with the chip (still absent everywhere else; dropped on forward, as today). The server then handles the
+note as that user's `ask` with that `request_id` **whatever its words** (no name needed; a leading "Risi, …" is dropped from
+the question), and:
+- sends `risi_progress` `working` with that `request_id` as soon as the note arrives ("Risi is typing…" under the note);
+- transcribes it even with `transcribe: false` or the sender's §37.7 `transcribe` off: the chip is the sender's explicit
+  request for this note (as §37.8);
+- a note over 5 min gets the fixed "too long" answer; an `unclear`/`failed` transcript gets "I couldn't hear that clearly.
+  Please try again or type it." Never silence.
+The app keeps a chip note's `request_id` on resend; phones that don't know the Official meaning ignore it (unchanged display).
+
+**Never silent (Harsha 2026-10-14 07:41).** When a note is addressed to Risi but the request is unclear (step 4 with nothing
+asked: "Hey Risi.", "Risi, the venue is booked.") or the address is borderline (step 6 and the model is below 0.9 or absent),
+Risi posts a rule-made `answer` in the same Official conversation (`notify: [sender]`, `voice_ref`, `refs: [note]`,
+`request_id` = the derived id) asking back, in the note's language, e.g. "Did you want me to do something with this? Tell me
+what you need: start a voice note with "Risi, …" or use @Risi." The note itself stays an ordinary message (§27/§38 as usual).
+A later §38.9-style clarifying question with options is a follow-up.
 
 **Effect when addressed (and the flag is on for the sender).** The note is handled as a §24.11 `risi_request` `ask` from its
 sender, exactly as if the @Risi chip had been used: the same §24.13/§25.6 limits and queue, the §25 loop, §34 routing and the
@@ -81,7 +104,8 @@ note's `message_id`.
 - `voice_ref` is honoured only from a leaf whose attested kind is `agent` and only in Official (§24.11 rule for `risi`).
 
 **Learning log and shadow.** One run row per decision (`risi_agent_runs`, agent `spoken_mention`): mode
-(`shadow`/`canary`/`on`), decision (`addressed`/`mentioned`/`unsure_no`/`unsure_yes`), by (`rules`/`model`), language,
+(`shadow`/`canary`/`on`), decision (`addressed`/`unsure_yes`/`chip` → request; `ask`/`unsure_ask` → ask back;
+`mentioned`), by (`rules`/`model`/`chip`), language,
 latency, reason code, hashed user. **Never text** (the no-raw-prompt-text rule, §24.12). The model check, when it runs, is an
 ordinary `RisiMe.Agent.LLM` call (task `spoken_mention`): its learning-log row holds the prompt's SHA-256 and the note id,
 never the transcript.
@@ -94,7 +118,8 @@ never the transcript.
 - `on`: everybody acts.
 
 **Eval.** Golden set `spoken_mention` (`server/test/risime/agent/golden/spoken_mention.jsonl`): addressed and merely
-mentioned examples in English, Sinhala, Tamil and Singlish (romanised forms included), each labelled `addressed: true|false`.
+mentioned examples in English, Sinhala, Tamil and Singlish (romanised forms included, realistic speech with fillers and mixed
+script), each labelled `expect: "request" | "ask" | "none"`.
 Gate: **zero false positives** (a mention never becomes @Risi) and ≥ 85 % recall on the addressed cases by rules alone; the
 model path is scored with `scripts/risi-eval --live`.
 

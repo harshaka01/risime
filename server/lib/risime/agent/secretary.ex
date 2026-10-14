@@ -15,7 +15,9 @@ defmodule RisiMe.Agent.Secretary do
       over 20 a minute), or (more than 50 pending, §25.6) an `error` `queue_overflow` reply.
       Every decision logs `risi limit: user=<hash8> chat=<id8> decision=… reason=…`;
     * `risi_action` → an action job (queue `risi_timers`);
-    * anything else → nothing. Free text is never parsed for intent.
+    * anything else → nothing. Free text is never parsed for intent (the one server-side
+      exception, §37.11, is Risi's own transcript of an Official voice note that addresses Risi:
+      `RisiMe.Agent.SpokenMention`, which calls `spoken_request/4`).
 
   The jobs read the text back from the sealed buffer by message id.
 
@@ -163,6 +165,17 @@ defmodule RisiMe.Agent.Secretary do
     else
       _ -> :ok
     end
+  end
+
+  @doc """
+  §37.11 (proposal 2026-10-14-spoken-risi): `user`'s Official voice note `note_id` addressed Risi
+  ("Risi, …"). It is queued as that user's `ask` with `request_id`, through the same limits as a
+  typed @Risi; the request job reads the question back from the note's working copy.
+  """
+  def spoken_request(conv, note_id, user, request_id) do
+    if RisiMe.Agent.official?(conv) and not risi_chat?(conv),
+      do: request(conv, note_id, user, %{"request_id" => request_id, "action" => "ask"}),
+      else: :ok
   end
 
   # One `queue_overflow` reply per user per minute; further ones are dropped silently.

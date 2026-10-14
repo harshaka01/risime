@@ -46,7 +46,19 @@ defmodule RisiMe.Agent.Voice do
 
   require Logger
 
-  alias RisiMe.Agent.{Clock, Lang, LearningLog, MadeBy, Media, Out, Secretary, Speech, Transcript}
+  alias RisiMe.Agent.{
+    Clock,
+    Lang,
+    LearningLog,
+    MadeBy,
+    Media,
+    Out,
+    Secretary,
+    Speech,
+    SpokenMention,
+    Transcript
+  }
+
   alias RisiMe.{Blobs, Repo, Risi, TimeUUID}
 
   @max_transcribe_ms 300_000
@@ -185,6 +197,11 @@ defmodule RisiMe.Agent.Voice do
             typing(sender, env["request_id"], conv)
             start(conv, id, sender, env, note, :risi_chat)
 
+          {:ok, :official} ->
+            # §37.11: the @Risi chip was on: a request, so "Risi is typing…" right away.
+            if official_chip?(sender, env), do: typing(sender, env["request_id"], conv)
+            start(conv, id, sender, env, note, :official)
+
           {:ok, mode} ->
             start(conv, id, sender, env, note, mode)
 
@@ -210,13 +227,22 @@ defmodule RisiMe.Agent.Voice do
       RisiMe.Groups.Tabs.risi_chat?(conv) -> decide_risi_chat(conv, sender, env, note)
       not listening_for?(sender) -> :skip
       Map.has_key?(env, "forwarded") -> :skip
-      note.duration_ms > @max_transcribe_ms -> :skip
       not Secretary.active_human?(conv, sender) -> :skip
+      # §37.11: a note recorded with the @Risi chip is the sender's request: never silent, and
+      # its own consent to be transcribed (as the Risi chat, §37.8).
+      official_chip?(sender, env) and note.duration_ms > @max_transcribe_ms -> {:reply, :too_long}
+      note.duration_ms > @max_transcribe_ms -> :skip
+      official_chip?(sender, env) -> {:ok, :official}
       env["transcribe"] == false -> :skip
       not setting(sender).transcribe -> :skip
       true -> {:ok, :official}
     end
   end
+
+  # §37.11: an Official note with a `request_id` (the @Risi chip) from a sender the
+  # `RISI_SPOKEN_MENTION` switch acts for.
+  defp official_chip?(sender, env),
+    do: SpokenMention.chip?(env["request_id"]) and SpokenMention.acts_for?(sender)
 
   # §37.8 + PART 4d "never silent": in the user's Risi chat a note is a request, so it is always
   # answered. The switch off or a note over 5 min get a fixed answer (no transcript); a speech
@@ -486,7 +512,7 @@ defmodule RisiMe.Agent.Voice do
   end
 
   # The 24-h working copy (sealed): a `voice_transcript` in Official, the request in a Risi chat.
-  defp buffer(conv, note_id, sender, t, :official, _rid, duration_ms) do
+  defp buffer(conv, note_id, sender, t, :official, rid, duration_ms) do
     env = %{
       "v" => 1,
       "type" => "voice_transcript",
@@ -505,10 +531,34 @@ defmodule RisiMe.Agent.Voice do
     # The note may have been deleted for everyone while it was being transcribed: then nothing
     # of it is kept or learned.
     unless note_gone?(note_id) do
+      # §37.11 (proposal 2026-10-14-spoken-risi): a note that addresses Risi ("Risi, …") is a
+      # request; its working copy carries the request so the request job can read it back.
+      # A `request_id` on the note = the @Risi chip was on while recording (no name needed).
+      chip = if SpokenMention.chip?(rid), do: rid
+      spoken = SpokenMention.check(conv, note_id, sender, t, chip)
+
+      env =
+        if match?(%{action: :request}, spoken),
+          do:
+            Map.put(env, "spoken_request", %{
+              "request_id" => spoken.request_id,
+              "text" => spoken.text
+            }),
+          else: env
+
       m = put_buffer(conv, note_id, sender, env)
-      understood(conv, m)
-      # v1.42 §38.2: the action items of the note (a job; ids only).
-      RisiMe.Agent.ActionItems.voice_transcribed(conv, note_id, sender, t.status, duration_ms)
+
+      case spoken do
+        %{action: :request} ->
+          # A request (as §37.8): no §38 extraction and no quiet-rule count, never twice.
+          Secretary.spoken_request(conv, note_id, sender, spoken.request_id)
+
+        _ ->
+          understood(conv, m)
+          # v1.42 §38.2: the action items of the note (a job; ids only).
+          RisiMe.Agent.ActionItems.voice_transcribed(conv, note_id, sender, t.status, duration_ms)
+          never_silent(conv, note_id, sender, t, chip, spoken)
+      end
     end
 
     :ok
@@ -529,6 +579,44 @@ defmodule RisiMe.Agent.Voice do
   end
 
   defp buffer(_conv, _note_id, _sender, _t, :risi_chat, _rid, _duration_ms), do: :ok
+
+  # §37.11 never silent: addressed to Risi but unclear (or borderline) → Risi asks back; the chip
+  # on a note Risi couldn't hear → the "couldn't hear" answer.
+  defp never_silent(conv, note_id, sender, t, _chip, %{action: :ask, request_id: rid}),
+    do: fixed_answer(conv, sender, rid, ask_back(conv, sender, t), voice_ref(note_id, sender))
+
+  defp never_silent(conv, note_id, sender, %{status: s}, chip, nil)
+       when is_binary(chip) and s != "ok" do
+    if SpokenMention.acts_for?(sender),
+      do: fixed_answer(conv, sender, chip, @unclear_answer, voice_ref(note_id, sender)),
+      else: :ok
+  end
+
+  defp never_silent(_conv, _note_id, _sender, _t, _chip, _spoken), do: :ok
+
+  defp voice_ref(note_id, sender), do: %{"message_id" => note_id, "speaker" => sender}
+
+  @ask_back %{
+    "en" =>
+      "Did you want me to do something with this? Tell me what you need: start a voice note with \"Risi, …\" or use @Risi.",
+    "si" =>
+      "මම මේ ගැන මොකක් හරි කරන්න ඕනද? ඕන දේ කියන්න: \"රිසි, …\" කියලා voice note එකක් පටන් ගන්න, නැත්නම් @Risi පාවිච්චි කරන්න.",
+    "ta" =>
+      "இதைப் பற்றி நான் ஏதாவது செய்ய வேண்டுமா? என்ன வேண்டும் என்று சொல்லுங்கள்: \"ரிசி, …\" என்று voice note ஐத் தொடங்குங்கள், அல்லது @Risi ஐப் பயன்படுத்துங்கள்."
+  }
+
+  # The ask-back in the note's language (else the sender's, else English).
+  defp ask_back(conv, sender, t) do
+    lang =
+      t[:language] ||
+        try do
+          Lang.speech_hint([sender], conv) |> List.first()
+        rescue
+          _ -> nil
+        end
+
+    Map.get(@ask_back, lang, @ask_back["en"])
+  end
 
   defp put_buffer(conv, note_id, sender, env) do
     m = %{
@@ -580,12 +668,12 @@ defmodule RisiMe.Agent.Voice do
 
   # A rule-made `answer` to the note's request (notifies the asker only); it ends the typing
   # bubble (the answer and a `done` signal).
-  defp fixed_answer(conv, sender, rid, text) do
+  defp fixed_answer(conv, sender, rid, text, voice_ref \\ nil) do
     risi = %{
       "kind" => "answer",
       "request_id" => rid,
       "answer" => text,
-      "refs" => [],
+      "refs" => if(voice_ref, do: [voice_ref["message_id"]], else: []),
       "confidence" => 1.0,
       "sources" => [],
       "next_steps" => [],
@@ -594,6 +682,7 @@ defmodule RisiMe.Agent.Voice do
       "notify" => [sender]
     }
 
+    risi = if voice_ref, do: Map.put(risi, "voice_ref", voice_ref), else: risi
     send_post(conv, text, risi, [])
     RisiMe.Agent.Progress.send(sender, rid, conv, "done")
     :ok

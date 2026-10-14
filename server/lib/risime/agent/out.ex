@@ -89,9 +89,19 @@ defmodule RisiMe.Agent.Out do
 
   defp remember(_conv, _sent, _body, _risi), do: :ok
 
+  # §37.11: a post for a spoken request (the request job set the note) links back to the note.
+  defp voice_ref(%{"request_id" => rid} = risi) when is_binary(rid) do
+    case Process.get(:risi_voice_ref) do
+      {^rid, ref} -> Map.put_new(risi, "voice_ref", ref)
+      _ -> risi
+    end
+  end
+
+  defp voice_ref(risi), do: risi
+
   @doc "The complete `risi` object of a post (defaults and `made_by` filled in)."
   def risi(risi, opts \\ []) do
-    risi = Map.merge(%{"v" => 1, "call_ref" => nil, "notify" => []}, risi)
+    risi = Map.merge(%{"v" => 1, "call_ref" => nil, "notify" => []}, risi) |> voice_ref()
 
     Map.put_new_lazy(risi, "made_by", fn ->
       if MadeBy.rule_kind?(risi["kind"]),

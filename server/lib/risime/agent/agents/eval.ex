@@ -31,7 +31,7 @@ defmodule RisiMe.Agents.Eval do
   @tz "Asia/Colombo"
 
   @doc "The golden sets."
-  def sets, do: ~w(router ledger summary)
+  def sets, do: ~w(router ledger summary spoken_mention)
 
   @doc "Loads a golden set from `dir`."
   def load(dir, set) do
@@ -91,6 +91,49 @@ defmodule RisiMe.Agents.Eval do
         }
       end
     )
+  end
+
+  # §37.11 (proposal 2026-10-14-spoken-risi): each case `expect`s `request` (an @Risi ask), `ask`
+  # (addressed but unclear: Risi asks back) or `none` (merely mentioned). `ok` = the action
+  # matches; `halluc` counts false positives (a mention acted on), the expensive error; `recall`
+  # is over the `request` cases. Live: the model decides the rules' unsure cases.
+  def run("spoken_mention", cases, opts) do
+    live = Keyword.get(opts, :live, false)
+
+    results =
+      for c <- cases do
+        members =
+          for n <- c["members"] || [], do: n |> String.split(~r/\s+/u, trim: true) |> hd()
+
+        t0 = System.monotonic_time(:microsecond)
+
+        r =
+          RisiMe.Agent.SpokenMention.decide(c["text"], c["lang"],
+            members: members,
+            model: if(live, do: Router.model() || "risi-l1", else: false)
+          )
+
+        ms = (System.monotonic_time(:microsecond) - t0) / 1000
+
+        expect = c["expect"]
+
+        %{
+          id: c["id"],
+          lang: c["lang"],
+          addressed: expect == "request",
+          ok: Atom.to_string(r.action) == expect,
+          got: r.decision,
+          ms: ms,
+          # A mention is never acted on (no request, no ask-back).
+          halluc: if(expect == "none" and r.action != :none, do: 1, else: 0)
+        }
+      end
+
+    addressed = Enum.filter(results, & &1.addressed)
+
+    summary("spoken_mention", results, live)
+    |> Map.put(:false_positives, Enum.sum(Enum.map(results, & &1.halluc)))
+    |> Map.put(:recall, Enum.count(addressed, & &1.ok) / max(length(addressed), 1))
   end
 
   def run("ledger", cases, opts) do
