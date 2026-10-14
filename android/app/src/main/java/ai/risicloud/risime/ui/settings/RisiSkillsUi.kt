@@ -288,7 +288,19 @@ fun RisiSkillsRoute(c: AppContainer, skillId: String?, onBack: () -> Unit, onRis
         )
     }
     RisiSkillsScreen(model, permissions, skillId, onBack, calendar = c.calendarPort, google = google, openRisiItems = onRisiItems?.takeIf { c.risiItemsOn() },
-        autoSend = c.autoSendStore.takeIf { c.risiSendOn() }, openSettings = {
+        autoSend = c.autoSendStore.takeIf { c.risiSendOn() },
+        // Proposal 2026-10-14-permission-fixit §43.5: the one line and [Allow calendar] (only on a `risi_fixit` phone).
+        fixit = if (!c.risiFixitOn()) null else SkillFixit(
+            askedBefore = c::fixitAskedBefore, markAsked = c::fixitMarkAsked,
+            onGranted = { s ->
+                c.scope.launch {
+                    ai.risicloud.risime.data.tabs.PermissionFixit.patchChange(s.id, turnOn = true, localState = c.risiSkillsStore.localState(s.id))
+                        ?.let { c.risiSkillsStore.reportGrant(it) }
+                }
+            },
+            devDetails = c.skillDiagnosticsFlag.on.value,
+        ),
+        openSettings = {
         runCatching { ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }, openClock = {
         runCatching { ctx.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -311,6 +323,8 @@ fun RisiSkillsScreen(
     openRisiItems: (() -> Unit)? = null,
     /** Proposal 2026-10-14-send-for-me §42.3: the contacts Risi sends to without asking (null: not a `risi_send` phone). */
     autoSend: ai.risicloud.risime.data.tabs.AutoSendStore? = null,
+    /** Proposal 2026-10-14-permission-fixit §43.5: the fix-it rows (null: the v1.26 page). */
+    fixit: SkillFixit? = null,
 ) {
     val skills by model.store.skills.collectAsStateWithLifecycle()
     val error by model.store.error.collectAsStateWithLifecycle()
@@ -359,6 +373,7 @@ fun RisiSkillsScreen(
                         calendar = calendar.takeIf { s.id == RisiSkillIds.CALENDAR },
                         google = google.takeIf { s.id == RisiSkillIds.CALENDAR },
                         openRisiItems = openRisiItems.takeIf { s.id == RisiSkillIds.CALENDAR },
+                        fixit = fixit,
                     )
                 }
             }
@@ -387,9 +402,43 @@ private fun SkillCard(
     calendar: ai.risicloud.risime.data.tabs.RisiCalendarPort? = null,
     google: GcalSettingsModel? = null,
     openRisiItems: (() -> Unit)? = null,
+    fixit: SkillFixit? = null,
 ) {
+    // Proposal 2026-10-14-permission-fixit §43.5: a skill with a phone permission gets one line and one button.
+    val need = if (fixit != null && s.available) ai.risicloud.risime.data.tabs.PermissionFixit.forSkill(s.id) else null
     Card(Modifier.fillMaxWidth().testTag("risi_skill_${s.id}")) {
         Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            if (need != null && fixit != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(s.title.ifBlank { s.id }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(SkillPlainText.stateLine(s), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("risi_skill_state_${s.id}"))
+                    }
+                    if (busy) CircularProgressIndicator(Modifier.padding(end = Spacing.sm))
+                    Switch(
+                        checked = s.on, onCheckedChange = onSwitch, enabled = !busy,
+                        modifier = Modifier.semantics { contentDescription = "${s.title} skill" }.testTag("risi_skill_switch_${s.id}"),
+                    )
+                }
+                FixitSkillBody(s, need, fixit, busy, onMode)
+                if (google != null) {
+                    HorizontalDivider()
+                    GoogleCalendarSection(google)
+                }
+                if (openRisiItems != null) {
+                    OutlinedButton(onClick = openRisiItems, modifier = Modifier.fillMaxWidth().testTag("risi_skill_risi_items")) {
+                        Text(ai.risicloud.risime.data.tabs.RisiItems.TITLE, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    }
+                }
+                // Developer details (permission names, sync, window, counts, errors, Copy diagnostics): developer mode only.
+                if (!fixit.devDetails) return@Column
+                HorizontalDivider()
+                Text("Developer details", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("risi_skill_dev_${s.id}"))
+                s.permissions.forEach { p -> Text(p.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                s.client?.let { Text("Reported: ${it.permission}", style = MaterialTheme.typography.bodySmall) }
+                if (calendar != null) CalendarSourcesBlock(calendar)
+                return@Column
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f).clickable(onClick = onToggleOpen)) {
                     Text(s.title.ifBlank { s.id }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -511,6 +560,46 @@ private fun ModeRow(title: String, sub: String, selected: Boolean, enabled: Bool
 }
 
 fun permissionText(p: String): String = SkillPlainText.permissionLine(p)
+
+/** Proposal 2026-10-14-permission-fixit §43.5: what the fix-it rows of Risi skills need from the app. */
+class SkillFixit(
+    val askedBefore: (String) -> Boolean,
+    val markAsked: (String) -> Unit,
+    /** Granted from this page: the PATCH (`client_permission: granted`, `state: ask` when the skill was off). */
+    val onGranted: (RisiSkill) -> Unit,
+    /** Settings → Developer "Risi skills: show developer details". */
+    val devDetails: Boolean,
+)
+
+/**
+ * §43.5 not granted: "Risi can't see your calendar yet." [Allow calendar]; granted: "✓ Risi can see your calendar"
+ * and the "Show me first" / "Do it without asking" choice. Nothing else.
+ */
+@Composable
+private fun FixitSkillBody(s: RisiSkill, need: ai.risicloud.risime.data.tabs.PermissionFixit.Need, fixit: SkillFixit, busy: Boolean, onMode: (String) -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var granted by remember { mutableStateOf(ai.risicloud.risime.ui.tabs.fixitGranted(context, need)) }
+    var refused by remember { mutableStateOf(false) }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { granted = ai.risicloud.risime.ui.tabs.fixitGranted(context, need) }
+    if (!granted) {
+        Text(ai.risicloud.risime.data.tabs.PermissionFixit.notGrantedLine(need.id), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_fixit_line_${s.id}"))
+        ai.risicloud.risime.ui.tabs.AllowPermissionButton(
+            need.id, askedBefore = fixit.askedBefore, markAsked = fixit.markAsked, tag = "risi_fixit_allow_${s.id}",
+            onResult = { g ->
+                granted = g
+                refused = !g
+                if (g) fixit.onGranted(s)
+            },
+        )
+        if (refused) Text(ai.risicloud.risime.data.tabs.PermissionFixit.NOT_ALLOWED, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_fixit_state_${s.id}"))
+    } else {
+        Text(ai.risicloud.risime.data.tabs.PermissionFixit.grantedLine(need.id), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("risi_fixit_state_${s.id}"))
+        if (s.on && s.allowsAllowed) {
+            ModeRow(ASK_EACH_TIME, SkillPlainText.SHOW_ME_FIRST_HELP, s.state == RisiSkillStates.ASK, !busy) { onMode(RisiSkillStates.ASK) }
+            ModeRow(ALLOWED, SkillPlainText.WITHOUT_ASKING_HELP, s.state == RisiSkillStates.ALLOWED, !busy) { onMode(RisiSkillStates.ALLOWED) }
+        }
+    }
+}
 
 const val SEND_FOR_ME_TITLE = "Send a message for me"
 const val SEND_FOR_ME_SENTENCE = "Risi writes the message and shows it to you with Send and Edit. Your phone sends it, encrypted, as you. No skill to turn on."

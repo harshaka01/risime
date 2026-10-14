@@ -217,6 +217,12 @@ data class RisiMeta(
     val to: RisiSendTo? = null,
     /** §42.2 `message_sent`: "private" | "official". */
     val tab: String? = null,
+    /** Proposal 2026-10-14-permission-fixit §43.2 `needs_permission`: the server's record of the original request. */
+    @SerialName("resume_id") val resumeId: String? = null,
+    /** §43.2: "calendar" | "contacts" | "microphone" | "notifications" | "location" | "alarms" (others: "Open Risi skills"). */
+    val permission: String? = null,
+    /** §43.2: the skill is off; the tap also turns it on (`ask`). */
+    @SerialName("turn_on") val turnOn: Boolean? = null,
 ) {
     /** The §27 summary this row belongs to: `summary_id`, else a note's `note_id` (§30.3: the same id). */
     val summaryKey: String? get() = summaryId ?: noteId

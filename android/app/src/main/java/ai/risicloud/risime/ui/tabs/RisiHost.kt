@@ -102,6 +102,20 @@ interface RisiHost {
     /** §42.3 write ids this phone confirmed on the user's standing choice (the card says "Sent without asking"). */
     fun autoSent(writeId: String): Boolean = false
 
+    /** Proposal 2026-10-14-permission-fixit §43.3: the PATCH (when granted), then `permission_granted` / `permission_declined`. */
+    fun answerFixit(card: ai.risicloud.risime.net.RisiMeta, granted: Boolean) {}
+
+    /** §43.5 this phone showed the Android prompt for that permission before (the "blocked" check). */
+    fun fixitAskedBefore(permission: String): Boolean = false
+
+    fun fixitMarkAsked(permission: String) {}
+
+    /** §43.5 ask at first need: the calendar permission was never asked on this phone and isn't granted. */
+    fun calendarNeverAsked(): Boolean = false
+
+    /** §43.5 the user allowed the calendar at first need: the PATCH (`client_permission: granted`). */
+    fun reportCalendarGranted(turnOn: Boolean = false) {}
+
     /** §42.2 `message_sent`: open the chat the message went to. */
     fun openConversation(conversationId: String) = openChat(conversationId, null)
 

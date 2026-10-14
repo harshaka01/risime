@@ -652,6 +652,32 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
         override fun autoSent(writeId: String): Boolean = c.autoSent(writeId)
 
+        // Proposal 2026-10-14-permission-fixit §43.3/§43.5: the PATCH first, then the answer in this (the Risi) chat.
+        override fun answerFixit(card: ai.risicloud.risime.net.RisiMeta, granted: Boolean) {
+            c.scope.launch {
+                ai.risicloud.risime.data.tabs.PermissionFixit.answer(
+                    card, granted, localState = { c.risiSkillsStore.localState(it) },
+                    patch = { c.risiSkillsStore.reportGrant(it) },
+                    send = { target, action -> requests.act(target, action) },
+                )
+            }
+        }
+
+        override fun fixitAskedBefore(permission: String): Boolean = c.fixitAskedBefore(permission)
+
+        override fun fixitMarkAsked(permission: String) = c.fixitMarkAsked(permission)
+
+        override fun calendarNeverAsked(): Boolean = c.risiFixitOn() && c.calendarNeverAsked()
+
+        override fun reportCalendarGranted(turnOn: Boolean) {
+            c.scope.launch {
+                ai.risicloud.risime.data.tabs.PermissionFixit.patchChange(
+                    ai.risicloud.risime.net.RisiSkillIds.CALENDAR, turnOn = turnOn,
+                    localState = c.risiSkillsStore.localState(ai.risicloud.risime.net.RisiSkillIds.CALENDAR),
+                )?.let { c.risiSkillsStore.reportGrant(it) }
+            }
+        }
+
         override val calendar: ai.risicloud.risime.data.tabs.RisiCalendarPort get() = c.calendarPort
 
         // §29: only on a risi_events device (else the cards render from their own data, without buttons).

@@ -71,7 +71,11 @@ fun RisiDevSection(c: AppContainer) {
             // Proposal 2026-10-14-send-for-me: `send_for_me` (on by default for a developer account) follows it too.
             val sendBefore = c.sendForMeFlag.on.value
             c.sendForMeFlag.setDeveloper(dev == true)
-            if (sendBefore != c.sendForMeFlag.on.value) c.refreshCapabilities()
+            // Proposal 2026-10-14-permission-fixit §43.1: `permission_fixit` too; the skill diagnostics stay off by default.
+            val fixitBefore = c.fixitFlag.on.value
+            c.fixitFlag.setDeveloper(dev == true)
+            c.skillDiagnosticsFlag.setDeveloper(dev == true)
+            if (sendBefore != c.sendForMeFlag.on.value || fixitBefore != c.fixitFlag.on.value) c.refreshCapabilities()
         }
         if (dev == true) {
             when (val r = c.api.risiDev()) {
@@ -122,7 +126,27 @@ fun RisiDevSection(c: AppContainer) {
             PhoneTtsSection()
             CallRisiDevRow(c)
             SendForMeDevRow(c)
+            DevFlagRow(c.fixitFlag, FIXIT_FLAG_LABEL, FIXIT_FLAG_HELP, "dev_permission_fixit", reAdvertise = { c.refreshCapabilities() })
+            DevFlagRow(c.skillDiagnosticsFlag, SKILL_DIAGNOSTICS_LABEL, SKILL_DIAGNOSTICS_HELP, "dev_skill_diagnostics")
         }
+    }
+}
+
+const val FIXIT_FLAG_LABEL = "Permission fix-it buttons (\"Allow calendar\")"
+const val FIXIT_FLAG_HELP = "When Risi needs a permission it shows one button that asks for it, then finishes your request. On by default for developer accounts."
+const val SKILL_DIAGNOSTICS_LABEL = "Risi skills: show developer details"
+const val SKILL_DIAGNOSTICS_HELP = "Android permission names, sync, the calendar window and counts, error text and Copy diagnostics on the Risi skills page."
+
+/** A developer flag's switch (proposal 2026-10-14-permission-fixit §43). */
+@Composable
+fun DevFlagRow(flag: ai.risicloud.risime.data.tabs.DevDefaultFlag, label: String, help: String, tag: String, reAdvertise: () -> Unit = {}) {
+    val on by flag.on.collectAsStateWithLifecycle()
+    Row(Modifier.fillMaxWidth().testTag(tag), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(help, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = { flag.set(it); reAdvertise() }, modifier = Modifier.testTag("${tag}_switch"))
     }
 }
 

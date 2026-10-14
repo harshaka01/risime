@@ -20,15 +20,44 @@ import kotlinx.coroutines.flow.StateFlow
  * RISI_DEV_USERS), off for everyone else; a switch in Settings → Developer. While it is off this phone never
  * advertises `risi_send`, and the server keeps the Phase 1 draft card.
  */
-class SendForMeFlag(private val prefs: SharedPreferences?) {
+class SendForMeFlag(prefs: SharedPreferences?) : DevDefaultFlag(prefs, NAME) {
+    companion object {
+        const val NAME = "send_for_me"
+    }
+}
+
+/** Proposal 2026-10-14-permission-fixit §43.1: the developer flag `permission_fixit` (advertises `risi_fixit`). */
+class FixitFlag(prefs: SharedPreferences?) : DevDefaultFlag(prefs, NAME) {
+    companion object {
+        const val NAME = "permission_fixit"
+    }
+}
+
+/**
+ * §43.5: Risi skills' developer details (READ_CALENDAR/WRITE_CALENDAR, sync, the window, calendar counts, error
+ * text, Copy diagnostics): off by default, even for developer accounts; a switch in Settings → Developer.
+ */
+class SkillDiagnosticsFlag(prefs: SharedPreferences?) : DevDefaultFlag(prefs, NAME, defaultOn = false) {
+    companion object {
+        const val NAME = "risi_skill_diagnostics"
+    }
+}
+
+/**
+ * A developer flag (keys `dev_<name>_risi_dev` / `dev_<name>_choice`): only for a `risi_dev` account; [defaultOn]
+ * true = on until the developer switches it off, false = off until switched on.
+ */
+open class DevDefaultFlag(private val prefs: SharedPreferences?, val name: String, private val defaultOn: Boolean = true) {
+    private val keyDev = "dev_${name}_risi_dev"
+    private val keyChoice = "dev_${name}_choice"
     private val _on = MutableStateFlow(read(false))
 
-    /** The effective flag (updated by [setDeveloper] / [set]). */
+    /** The effective flag (updated by [setDeveloper] / [set] / [effective]). */
     val on: StateFlow<Boolean> = _on
 
     private fun read(sessionDev: Boolean): Boolean = SendForMeRules.flagOn(
-        dev = sessionDev || (prefs?.getBoolean(KEY_DEV, false) ?: false),
-        choice = prefs?.getString(KEY_CHOICE, null),
+        dev = sessionDev || (prefs?.getBoolean(keyDev, false) ?: false),
+        choice = prefs?.getString(keyChoice, null) ?: if (defaultOn) null else "off",
     )
 
     /** The effective flag given the signed-in user's `risi_dev` from the session (no network). */
@@ -36,20 +65,14 @@ class SendForMeFlag(private val prefs: SharedPreferences?) {
 
     /** From a fresh `GET /me`: a non-developer account turns it off. */
     fun setDeveloper(dev: Boolean) {
-        runCatching { prefs?.edit()?.putBoolean(KEY_DEV, dev)?.apply() }
+        runCatching { prefs?.edit()?.putBoolean(keyDev, dev)?.apply() }
         _on.value = read(false)
     }
 
     /** The Developer switch (only meaningful for a developer account). */
     fun set(on: Boolean) {
-        runCatching { prefs?.edit()?.putString(KEY_CHOICE, if (on) "on" else "off")?.apply() }
+        runCatching { prefs?.edit()?.putString(keyChoice, if (on) "on" else "off")?.apply() }
         _on.value = read(false)
-    }
-
-    companion object {
-        const val NAME = "send_for_me"
-        private const val KEY_DEV = "dev_send_for_me_risi_dev"
-        private const val KEY_CHOICE = "dev_send_for_me_choice"
     }
 }
 

@@ -83,6 +83,8 @@ class DeviceRegistrar(
     private val callRisiSupported: () -> Boolean = { false },
     /** Proposal 2026-10-14-send-for-me §42.1: the developer flag `send_for_me` is on (advertised only with `risi_tools`). */
     private val risiSendSupported: () -> Boolean = { false },
+    /** Proposal 2026-10-14-permission-fixit §43.1: the developer flag `permission_fixit` is on (advertised only with `risi_skills`). */
+    private val risiFixitSupported: () -> Boolean = { false },
     /** The capabilities a successful MLS `PUT` advertised. */
     private val onAdvertised: (List<String>) -> Unit = {},
 ) {
@@ -150,6 +152,8 @@ class DeviceRegistrar(
             DeviceMls.CAP_CALL_TRANSCRIBE.takeIf {
                 mls.deletesSupported && imagesSupported() && callsSupported() && mls.tabsSupported && tabsSupported() && callTranscribeSupported()
             },
+            // Proposal 2026-10-14-permission-fixit §43.1: only with `risi_skills`, while the developer flag `permission_fixit` is on.
+            DeviceMls.CAP_RISI_FIXIT.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSkillsSupported() && risiFixitSupported() },
             // Proposal 2026-10-14-send-for-me §42.1: only with `risi_tools`, while the developer flag `send_for_me` is on.
             DeviceMls.CAP_RISI_SEND.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSendSupported() },
             // Proposal 2026-10-14-call-risi §41.1: only with `group_calls` and `risi_tools`, while the developer flag is on.

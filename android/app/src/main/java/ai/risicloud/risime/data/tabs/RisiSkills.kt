@@ -180,6 +180,17 @@ class RisiSkillsStore(
         }
     }
 
+    /**
+     * Proposal 2026-10-14-permission-fixit §43.5: the user allowed a permission from a fix-it button: the PATCH
+     * (`client_permission: granted`, and `state: ask` when the skill was off) before Risi is told. True on success.
+     */
+    suspend fun reportGrant(change: RisiSkillChange): Boolean = lock.withLock {
+        when (val r = patch(RisiSkillsPatch(listOf(change)))) {
+            is ApiResult.Ok -> { merge(r.value.skills); reportedAtMs = now(); true }
+            else -> { log("risi skills: fix-it grant not reported"); false }
+        }
+    }
+
     /** "Ask me each time" / "Allowed" (only where the skill's `modes` allow it). */
     suspend fun setMode(id: String, state: String): String? = lock.withLock {
         val skill = skill(id) ?: return@withLock skillsErrorText(null)

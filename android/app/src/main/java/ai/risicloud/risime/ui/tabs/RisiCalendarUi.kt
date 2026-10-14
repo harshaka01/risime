@@ -78,6 +78,8 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
     var editing by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var pendingEdit by remember { mutableStateOf<kotlinx.serialization.json.JsonObject?>(null) }
+    // §43.5: this phone never asked for the calendar permission (only on a `risi_fixit` device).
+    var firstNeed by remember(r.writeId) { mutableStateOf(ctx.host.calendarNeverAsked()) }
     val hint = r.calendarHint()
     // The phone's remembered pick, else the server's hint (proposal 2026-10-09 §1) if it names a calendar here.
     LaunchedEffect(port, chosenId) { chosen = port?.chosen() ?: port?.matchHint(hint) }
@@ -152,9 +154,29 @@ internal fun CalendarActionCard(row: MessageEntity, r: RisiMeta, ctx: RisiCardCo
             RisiToolCards.ConfirmState.OPEN -> Unit
         }
         note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("risi_calendar_note")) }
+        if (firstNeed && buttons.isNotEmpty() && wid != null) {
+            Text(ai.risicloud.risime.data.tabs.PermissionFixit.whyLine(ai.risicloud.risime.net.RisiFixit143.CALENDAR, "to add this"), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("risi_fixit_why"))
+        }
         if (buttons.isNotEmpty() && wid != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                if ("add" in buttons) {
+                if ("add" in buttons && firstNeed) {
+                    // Proposal 2026-10-14-permission-fixit §43.5 ask at first need: the prompt right here, then the add.
+                    AllowPermissionButton(
+                        ai.risicloud.risime.net.RisiFixit143.CALENDAR, askedBefore = ctx.host::fixitAskedBefore, markAsked = ctx.host::fixitMarkAsked,
+                        label = "Add", tag = "risi_confirm_add",
+                        onResult = { granted ->
+                            firstNeed = false
+                            if (granted) {
+                                ctx.host.reportCalendarGranted()
+                                pendingEdit = null
+                                if (port != null && chosen == null) openPicker(true) else confirmNow(chosen)
+                            } else {
+                                note = "Not allowed: Risi can't add it to your calendar. You can change this in Risi skills."
+                            }
+                        },
+                    )
+                    OutlinedButton(onClick = { editing = true }, modifier = Modifier.testTag("risi_calendar_edit")) { Text("Edit", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                } else if ("add" in buttons) {
                     FilledTonalButton(onClick = {
                         // First use: the picker, then the add. Otherwise straight to confirm_write (the phone adds it).
                         pendingEdit = null

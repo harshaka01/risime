@@ -61,5 +61,22 @@ object RisiSend149 {
     const val MAX_TEXT_GRAPHEMES = 4096
 }
 
+/** Proposal 2026-10-14-permission-fixit (v1.49 §43): "I need your calendar to do that." [Allow calendar]. */
+object RisiFixit143 {
+    const val KIND_NEEDS_PERMISSION = "needs_permission"
+    const val ACTION_GRANTED = "permission_granted"
+    const val ACTION_DECLINED = "permission_declined"
+    const val BUTTON_ALLOW = "allow"
+
+    const val CALENDAR = "calendar"
+    const val CONTACTS = "contacts"
+    const val MICROPHONE = "microphone"
+    const val NOTIFICATIONS = "notifications"
+    const val LOCATION = "location"
+    const val ALARMS = "alarms"
+
+    val ACTIONS = setOf(ACTION_GRANTED, ACTION_DECLINED)
+}
+
 fun RisiToolCall.sendMessageArgs(): SendMessageArgs? =
     runCatching { ProtocolJson.decodeFromJsonElement(SendMessageArgs.serializer(), args) }.getOrNull()

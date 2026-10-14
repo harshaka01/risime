@@ -18,7 +18,9 @@ object RisiControl {
     const val TYPE_ACTION = "risi_action"
 
     val REQUEST_ACTIONS = setOf("ask", "summarise", "report")
-    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + ai.risicloud.risime.net.RisiActions129.ALL + ai.risicloud.risime.net.RisiActions130.ALL + ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE + ai.risicloud.risime.net.RisiActions142.ALL + ai.risicloud.risime.net.RisiActions143.ITEM_CLAIM
+    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + ai.risicloud.risime.net.RisiActions129.ALL + ai.risicloud.risime.net.RisiActions130.ALL + ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE + ai.risicloud.risime.net.RisiActions142.ALL + ai.risicloud.risime.net.RisiActions143.ITEM_CLAIM +
+        // Proposal 2026-10-14-permission-fixit §43.3: the answers to a `needs_permission` card (target = resume_id).
+        ai.risicloud.risime.net.RisiFixit143.ACTIONS
 
     /** §25.4 (v1.25): on a confirm card (`write_id`) or a group reminder (`reminder_id`). */
     val V125_ACTIONS: Set<String> get() = setOf("confirm_write", "cancel_write", "me_too", "not_me")

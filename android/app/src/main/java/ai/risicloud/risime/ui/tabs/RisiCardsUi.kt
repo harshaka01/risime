@@ -145,8 +145,12 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.REMINDER -> ReminderCard(row, r, ctx)
                     RisiKinds.ESCALATION -> EscalationCard(row, r, ctx)
                     // Hotfix 2026-10-14: the §35.4 brief (scope "brief"), an unknown scope or an empty card shows `body` (= the list preview).
-                    RisiKinds.DIGEST -> if (ai.risicloud.risime.data.tabs.RisiRender.digestShowsBody(r)) ai.risicloud.risime.ui.common.RisiMarkdownText(ai.risicloud.risime.data.tabs.RisiRender.bodyOrFallback(row.body), modifier = Modifier.testTag("risi_digest_body"))
+                    RisiKinds.DIGEST -> {
+                        if (ai.risicloud.risime.data.tabs.RisiRender.digestShowsBody(r)) ai.risicloud.risime.ui.common.RisiMarkdownText(ai.risicloud.risime.data.tabs.RisiRender.bodyOrFallback(row.body), modifier = Modifier.testTag("risi_digest_body"))
                         else if (r.scope == "personal") PersonalDigestCard(r, ctx) else DigestCard(r, ctx)
+                        // Proposal 2026-10-14-permission-fixit §43.5 ask at first need: the brief's calendar read, right here.
+                        if (r.scope == "brief" && !ctx.readOnly) BriefCalendarAsk(ctx)
+                    }
                     RisiKinds.ANSWER -> if (r.clarify != null) RisiClarifyCard(row, r, ctx) else AnswerCard(row, r, ctx)
                     RisiKinds.SUMMARY -> SummaryCard(r, ctx)
                     RisiKinds.REPORT -> ReportCard(r)
@@ -161,6 +165,8 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.SKILL_DONE -> SkillDoneCard(row, r, ctx)
                     RisiKinds.SKILL_NEEDED -> SkillNeededCard(row, r, ctx)
                     ai.risicloud.risime.net.RisiSend149.KIND_MESSAGE_SENT -> MessageSentLine(row, r, ctx)
+                    // Proposal 2026-10-14-permission-fixit §43.2: "I need your calendar to do that." [Allow calendar].
+                    ai.risicloud.risime.net.RisiFixit143.KIND_NEEDS_PERMISSION -> NeedsPermissionCard(row, r, ctx)
                     ai.risicloud.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> DiscussionSummaryCard(r, ctx)
                     ai.risicloud.risime.net.RisiKinds127.DISCUSSION_CARD -> DiscussionCard(row, r, ctx)
                     ai.risicloud.risime.net.RisiKinds127.ITEM_DUE, ai.risicloud.risime.net.RisiKinds127.ITEM_OVERDUE, ai.risicloud.risime.net.RisiKinds127.ITEM_NUDGE -> ItemReminderCard(row, r, ctx)
@@ -206,6 +212,7 @@ private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
     RisiKinds.SKILL_DONE -> "Risi · Done"
     RisiKinds.SKILL_NEEDED -> "Risi · Skill needed"
     ai.risicloud.risime.net.RisiSend149.KIND_MESSAGE_SENT -> "Risi"
+    ai.risicloud.risime.net.RisiFixit143.KIND_NEEDS_PERMISSION -> "Risi"
     ai.risicloud.risime.net.RisiKinds127.DISCUSSION_SUMMARY -> "Risi · Follow-ups"
     ai.risicloud.risime.net.RisiKinds127.DISCUSSION_CARD -> "Risi · Discussion summary"
     ai.risicloud.risime.net.RisiKinds127.ITEM_DUE, ai.risicloud.risime.net.RisiKinds127.ITEM_OVERDUE, ai.risicloud.risime.net.RisiKinds127.ITEM_NUDGE ->

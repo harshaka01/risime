@@ -1203,6 +1203,45 @@ class AppContainer(
     /** Proposal 2026-10-14-send-for-me: the developer flag `send_for_me` (on by default for `risi_dev` accounts). */
     val sendForMeFlag by lazy { ai.risicloud.risime.data.tabs.SendForMeFlag(voicePrefs) }
 
+    /** Proposal 2026-10-14-permission-fixit §43.1: the developer flag `permission_fixit` (on by default for `risi_dev`). */
+    val fixitFlag by lazy { ai.risicloud.risime.data.tabs.FixitFlag(voicePrefs) }
+
+    /** §43.5: Risi skills' developer details (off by default; Settings → Developer). */
+    val skillDiagnosticsFlag by lazy { ai.risicloud.risime.data.tabs.SkillDiagnosticsFlag(voicePrefs) }
+
+    /** This device advertises `risi_fixit` (the `needs_permission` card's button works). */
+    fun risiFixitOn(): Boolean = deviceRegistrar.advertised?.contains(ai.risicloud.risime.net.DeviceMls.CAP_RISI_FIXIT) == true
+
+    /** §43.5 this phone has shown the Android prompt for [permission] (the "blocked" check needs it). */
+    private val fixitPrefs by lazy { appContext.getSharedPreferences("risime_fixit", Context.MODE_PRIVATE) }
+
+    fun fixitAskedBefore(permission: String): Boolean = runCatching {
+        if (fixitPrefs.getBoolean("asked_$permission", false)) return@runCatching true
+        // The Risi skills switch's own prompt (AndroidSkillPermissions) counts too.
+        val skillPrefs = appContext.getSharedPreferences("risime_skills", Context.MODE_PRIVATE)
+        ai.risicloud.risime.data.tabs.PermissionFixit.need(permission)?.android.orEmpty().any { skillPrefs.getBoolean("asked_$it", false) }
+    }.getOrDefault(false)
+
+    fun fixitMarkAsked(permission: String) {
+        runCatching {
+            fixitPrefs.edit().putBoolean("asked_$permission", true).apply()
+            // So the skills report says "denied" (not "not_asked") after a refusal here.
+            val e = appContext.getSharedPreferences("risime_skills", Context.MODE_PRIVATE).edit()
+            ai.risicloud.risime.data.tabs.PermissionFixit.need(permission)?.android.orEmpty().forEach { e.putBoolean("asked_$it", true) }
+            e.apply()
+        }
+    }
+
+    /**
+     * §43.5 ask at first need: the calendar permission isn't granted and this phone never showed its prompt (neither
+     * the fix-it button nor the Risi skills switch asked).
+     */
+    fun calendarNeverAsked(): Boolean {
+        val need = ai.risicloud.risime.data.tabs.PermissionFixit.need(ai.risicloud.risime.net.RisiFixit143.CALENDAR) ?: return false
+        if (ai.risicloud.risime.ui.tabs.fixitGranted(appContext, need)) return false
+        return !fixitAskedBefore(need.id)
+    }
+
     /** §42.3 "Send without asking next time", per contact and tab (this phone only, never sent anywhere). */
     val autoSendStore: ai.risicloud.risime.data.tabs.AutoSendStore by lazy {
         ai.risicloud.risime.data.tabs.PrefsAutoSendStore(appContext.getSharedPreferences("risime_send_for_me", Context.MODE_PRIVATE))
@@ -1628,6 +1667,8 @@ class AppContainer(
             callRisiSupported = { callRisiFlag.on.value },
             // Proposal 2026-10-14-send-for-me §42.1: the developer flag `send_for_me` (risi_dev accounts first).
             risiSendSupported = { sendForMeFlag.on.value },
+            // Proposal 2026-10-14-permission-fixit §43.1: the developer flag `permission_fixit` (risi_dev accounts first).
+            risiFixitSupported = { fixitFlag.on.value },
             screenShareSupported = { runCatching { calls.canAdvertiseScreenShare() }.getOrDefault(false) },
             groupsReplacedFor = { sessionStore.groupsKeyPackagesFor() },
             setGroupsReplacedFor = { sessionStore.setGroupsKeyPackagesFor(it) },
@@ -1775,7 +1816,10 @@ class AppContainer(
             runCatching {
                 if (mlsEngine == null || !mlsCore.registered) return@runCatching
                 // Proposal 2026-10-14-send-for-me §42.1: the flag follows the session's `risi_dev` (no network).
-                sendForMeFlag.effective(sessionStore.current()?.user?.risiDev == true)
+                val dev = sessionStore.current()?.user?.risiDev == true
+                sendForMeFlag.effective(dev)
+                fixitFlag.effective(dev)
+                skillDiagnosticsFlag.effective(dev)
                 val r = deviceRegistrar.refreshCapabilities(runCatching { push.currentToken() }.getOrNull()) ?: return@runCatching
                 Log.i("RisiMe", "capabilities changed: re-registered ($r)")
             }
