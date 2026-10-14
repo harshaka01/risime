@@ -364,7 +364,7 @@ defmodule RisiMe.Agent.ToolCalls do
 
   defp valid_ok?("set_alarm", %{"alarm_set" => true} = r) when map_size(r) == 1, do: true
 
-  # Proposal 2026-10-14-send-for-me §41.2: `sent` (the server took it) or `queued` (the outbox).
+  # Proposal 2026-10-14-send-for-me §42.2: `sent` (the server took it) or `queued` (the outbox).
   defp valid_ok?("send_message", %{"state" => st} = r) when map_size(r) == 1,
     do: st in ~w(sent queued)
 

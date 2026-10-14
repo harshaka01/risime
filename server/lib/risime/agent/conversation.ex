@@ -244,7 +244,7 @@ defmodule RisiMe.Agent.Conversation do
       %{} = env ->
         RisiMe.Agent.Voice.received(
           state.conv,
-          # P1 2026-10-14 (proposal send-for-me §41.5): the sending device travels with the note,
+          # P1 2026-10-14 (proposal send-for-me §42.5): the sending device travels with the note,
           # so a Risi-chat voice request is a request from that device (its skills, its tools).
           %{message_id: data["message_id"], sender_id: u, sender_device: d},
           env

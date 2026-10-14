@@ -45,7 +45,7 @@ defmodule RisiMe.Agents.Flags do
     "RISI_VOICE_PHONE_FALLBACK" => :risi_voice_phone_fallback,
     # Harsha 2026-10-14: the Sinhala compare mode on dev users' own notes (SpeechCompare).
     "RISI_SPEECH_COMPARE_DEV" => :risi_speech_compare_dev,
-    # Proposal 2026-10-14-send-for-me (§41.1): "Send a message for me"; canary = Harsha first.
+    # Proposal 2026-10-14-send-for-me (§42.1): "Send a message for me"; canary = Harsha first.
     "RISI_SEND_FOR_ME" => :risi_send_for_me
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight

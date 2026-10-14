@@ -1,6 +1,6 @@
 defmodule RisiMe.Agent.SendForMeTest do
   @moduledoc """
-  Proposal 2026-10-14-send-for-me (§41; Harsha's P1 2026-10-14, nightly.7):
+  Proposal 2026-10-14-send-for-me (§42; Harsha's P1 2026-10-14, nightly.7):
 
     * the P1's false "Scheduled messages permission is off on this phone": a Risi-chat request
       without its device (a voice note) now runs for the asker's Risi device; a `denied` report
@@ -212,7 +212,7 @@ defmodule RisiMe.Agent.SendForMeTest do
 
   ## send_message
 
-  describe "send_message (§41.2)" do
+  describe "send_message (§42.2)" do
     test "off for non-dev users by default (canary); on: offered, non-consequential", ctx do
       scripted_llm!([%{"actions" => [final()]}])
       {_, :ok} = ask!(ctx.rc, ctx.harsha.user, "hi", ctx.dev)
@@ -459,9 +459,9 @@ defmodule RisiMe.Agent.SendForMeTest do
     end
   end
 
-  ## schedule_message only with a time (§41.4)
+  ## schedule_message only with a time (§42.4)
 
-  describe "schedule_message (§41.4)" do
+  describe "schedule_message (§42.4)" do
     setup ctx do
       patch!(ctx, [
         %{"id" => "scheduled_messages", "state" => "ask", "client_permission" => "granted"}

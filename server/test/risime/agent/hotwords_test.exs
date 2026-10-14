@@ -1,6 +1,6 @@
 defmodule RisiMe.Agent.HotwordsTest do
   @moduledoc """
-  Proposal 2026-10-14-send-for-me §41.6: speech hints. "Risi" (and රිසි, ரிசி) always; the
+  Proposal 2026-10-14-send-for-me §42.6: speech hints. "Risi" (and රිසි, ரிசி) always; the
   sender's own contacts only in the sender's own Risi chat; the `hotwords` field sent per request
   (an old service ignores it); never in the logs; "Rishi, …" read as "Risi, …" at the start of a
   Risi-chat request only.

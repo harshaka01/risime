@@ -310,7 +310,7 @@ defmodule RisiMe.Agent.Skills do
       not phone_refused?(ctx, skill_id)
   end
 
-  # P1 2026-10-14 (proposal send-for-me §41.5): "no permission on this phone" only from a FRESH
+  # P1 2026-10-14 (proposal send-for-me §42.5): "no permission on this phone" only from a FRESH
   # report of `denied`/`unsupported` by the request's own `risi_skills` device. Unknown, not
   # asked, a stale report or no device: the tool is offered and the phone decides at run time.
   # Scheduled messages never need SCHEDULE_EXACT_ALARM (§26.1 "optional": WorkManager sends it).
@@ -336,7 +336,7 @@ defmodule RisiMe.Agent.Skills do
   defp fresh?(_), do: false
 
   @doc """
-  P1 2026-10-14 (proposal send-for-me §41.5): the device a request runs for: its own sending
+  P1 2026-10-14 (proposal send-for-me §42.5): the device a request runs for: its own sending
   device, else (a request that lost it, e.g. a voice-queue retry) the asker's `risi_tools`
   device seen most recently, else nil.
   """
@@ -512,7 +512,7 @@ defmodule RisiMe.Agent.Skills do
                 RisiMe.Agent.Clock.user_tz(w.user_id)
               )
 
-            # Proposal 2026-10-14-send-for-me §41.4: "✓ Scheduled for Upali, Thu 15 Oct at
+            # Proposal 2026-10-14-send-for-me §42.4: "✓ Scheduled for Upali, Thu 15 Oct at
             # 09:00" (never the text).
             w.tool == "schedule_message" and RisiMe.Agent.SendForMe.on_for?(w.user_id) ->
               when_text = String.replace_prefix(args["when_text"] || "", "on ", "")

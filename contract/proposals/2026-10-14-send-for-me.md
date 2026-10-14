@@ -1,6 +1,6 @@
 # Proposal: "Send a message for me", scheduled messages only with a time, the skill-state report (2026-10-14)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.49 §41** (amends §25.4, §26.2, §26.3, §26.6,
+**Status:** proposal for root/Harsha, to be applied as **v1.49 §42** (§41 is taken by the Call Risi proposal) (amends §25.4, §26.2, §26.3, §26.6,
 §26.8, §28.4, §37.8). Nothing in PROTOCOL.md changes until root applies it. Server and Android implement it
 **behind flags**: server `RISI_SEND_FOR_ME` = `off | canary | on` (default `canary` = `RISI_DEV_USERS`,
 Harsha first); the app advertises the new capability only while its developer flag `send_for_me` is on
@@ -25,7 +25,7 @@ Two problems:
    Risi skills screen, never when the app comes back to the foreground; and `SCHEDULE_EXACT_ALARM`, which
    §26.1 marks **optional** for scheduled messages (WorkManager fallback), still blocked the skill when denied.
 
-## 41.0 Principles
+## 42.0 Principles
 - **One card, one tap** (§28.0). "Send Upali a message asking him to update" ends in **one** card:
   **To: Upali · the text · [Send] [Edit]**. [Send] is the only confirmation. No skills page, no second card.
 - **The phone sends, as the user, end-to-end encrypted.** The server never sends a message on the user's
@@ -41,7 +41,7 @@ Two problems:
   (server state) or the phone **freshly** reported the permission denied. Unknown or stale: it proceeds with
   the card, and the phone's own answer at run time decides.
 
-## 41.1 Capability and switch
+## 42.1 Capability and switch
 - **Device capability `risi_send`** (in `mls.capabilities`, kept only with `risi_tools`;
   `device_put_risi_send.json`). A device advertises it once it handles everything in this section.
 - **Server switch `RISI_SEND_FOR_ME`** = `off | canary | on` (`RisiMe.Agents.Flags`, runtime; default
@@ -54,7 +54,7 @@ Two problems:
   with it ready, then send." Honest: nothing is claimed sent.
 - **Phase 2 (APK with `risi_send`):** the card, the phone send and the "✓ Sent" reply below.
 
-## 41.2 The tool `send_message` (client tool, write, no skill)
+## 42.2 The tool `send_message` (client tool, write, no skill)
 Model-facing args (server schema, informative): `{"to": str (a friend's name, or "this chat"),
 "text": str (1–4096 graphemes; the message in the user's language and style), "tab": "private" | "official"}`.
 `tab` defaults to `private`.
@@ -96,7 +96,7 @@ body: "Send to Upali Perera (Private): <text>? Update RisiMe to answer."
 
 **[Edit]** = the §28.4 `confirm_write` with **`edit: {"text": str}`** (1–4096 graphemes, trimmed, not
 empty). The server re-seals the args with the edited text and sends the tool call with it, no model call. Any
-other key, or an edit on another tool, runs nothing (unchanged §28.4 rule). The phone's rule (§41.3) accepts the
+other key, or an edit on another tool, runs nothing (unchanged §28.4 rule). The phone's rule (§42.3) accepts the
 card's args merged with **its own user's** `edit`.
 
 **[Send]** = `confirm_write` (no `edit`). The server sends the `risi_tool_call` to the confirming device
@@ -108,7 +108,7 @@ card's args merged with **its own user's** `edit`.
 **Result** (`risi_tool_result_send_message.json`): `{"status": "ok", "result": {"state": "sent" | "queued"}}`
 (exactly this key). `sent`: the server acknowledged the message (it has a `message_id`) within 10 s; `queued`: it
 is in the phone's outbox. Errors (`status: "error"`): `{"code": "not_member"}` (the phone doesn't hold that
-conversation or the user isn't an active member), `{"code": "bad_args"}`. `declined`: the §41.3 rule failed.
+conversation or the user isn't an active member), `{"code": "bad_args"}`. `declined`: the §42.3 rule failed.
 
 **The reply** (new `risi.kind` **`message_sent`**, in the asker's Risi chat, silent for others;
 `envelope_risi_message_sent.json`):
@@ -125,7 +125,7 @@ body: "✓ Sent to Upali Perera" | "Queued for Upali Perera: it goes as soon as 
 - Activity: no §26.4 entry (no skill). No `risi_items` row (nothing pending). Nothing in the learning log
   beyond the hashes-only `risi_turn_steps` row.
 
-## 41.3 The phone's rule for `send_message` (android, normative)
+## 42.3 The phone's rule for `send_message` (android, normative)
 The phone runs a `send_message` call only when **all** hold (the §25.3/§26.5 card rule, rule (a)):
 - this phone holds the agent-leaf `confirm` with the call's `write_id` and `tool: "send_message"`, with its
   own user in `for`, not expired;
@@ -146,7 +146,7 @@ The wire is unchanged: it is the user's own `confirm_write`, sent on the user's 
 never leaves the phone and is listed in Settings → Risi skills → "Send a message for me", where each contact
 can be switched back to "Ask me".
 
-## 41.4 Scheduled messages only with a time (amends §26.6)
+## 42.4 Scheduled messages only with a time (amends §26.6)
 - `schedule_message` is described to the model as "only when the request gives a time or a repeat". The server
   refuses a `schedule_message` step whose `at` resolves to less than 2 minutes ahead or is not a time
   ("now", "") with `failed` reason `no_time: use send_message`; when `send_message` is offered the turn then
@@ -157,7 +157,7 @@ can be switched back to "Ask me".
 - The success line (`skill_done` body, §26.5) reads **"✓ Scheduled for Upali, Thu 09:00"** (or "…, every day at
   09:00"). The activity summary is unchanged (recipient and time, never the text).
 
-## 41.5 The skill and permission state (amends §26.2, §26.8)
+## 42.5 The skill and permission state (amends §26.2, §26.8)
 **Phone (normative):** the app sends the §26.2 `PATCH` with `client_permission` for every skill with an Android
 permission **on start, whenever the app comes to the foreground, and on every change** it sees. A report whose
 values didn't change is sent at most every 30 minutes (so `reported_at` stays fresh); a change is sent at once.
@@ -174,7 +174,7 @@ values didn't change is sent at most every 30 minutes (so `reported_at` stays fr
   `no_permission`; the card says "may be a few minutes late".
 - The skill's own **state** (`off` / `ask` / `allowed`) stays the server's record of the user's choice.
 
-## 41.6 Speech hints (server ↔ speech service, loopback; no client wire change)
+## 42.6 Speech hints (server ↔ speech service, loopback; no client wire change)
 - `POST /v1/audio/transcriptions` gains an optional multipart field **`hotwords`** (comma-separated, at most 60
   entries and 1000 characters). The service passes them to faster-whisper's `hotwords`, appends them to the
   Qwen3 ASR context, and to Whisper's initial prompt after the Sinhala-script prompt (never replacing it). The
@@ -184,11 +184,11 @@ values didn't change is sent at most every 30 minutes (so `reported_at` stays fr
   Risi chat).
 - **The user's own contacts:** for a note in the **sender's own Risi chat** only, the display names the server
   already holds for that user's friends and chat co-members (at most 50, first names and full names) are added,
-  **per request**. They are never logged (the service logs only their count), never stored, never in the
+  **per request**. They are never logged, never stored, never in the
   learning log, never used for another user's note. The phone-side recogniser (the Voice agent's L1) is the
   preferred place for contact names; this is the server fallback.
 
-## 41.7 Agent design (decision 085)
+## 42.7 Agent design (decision 085)
 - **Owner:** the Risi Brain (`RisiMe.Agent.Turn`) chooses the action; `RisiMe.Agent.SendForMe` is its tool
   (recipient resolution, the card, the reply). Sending itself is infrastructure (the phone's MLS send path).
 - **Signals:** card shown → [Send] / [Edit] / Cancel / superseded; edit distance of edits (count only); auto-send
@@ -198,16 +198,16 @@ values didn't change is sent at most every 30 minutes (so `reported_at` stays fr
 - **Flags:** shadow is not meaningful (the card is the action); `canary` (Harsha) → `on`.
 - **Consequential-action guard:** `send_message` and `schedule_message` are registered **non-consequential**.
 
-## 41.8 Gate
+## 42.8 Gate
 `scripts/send-for-me-test` (redroid, two phones): "send a message to <name> …" by **text and by voice**, in
 **English and Sinhala** → one card → one [Send] → the message arrives (decrypted) on the second phone →
 "✓ Sent to <name>" shown in the Risi chat. Also: [Edit] then [Send] delivers the edited text; a request with a
 time gives the scheduled card. Server tests: the tool, the card, the edit, the reply, the recipient cases, the
 skill-state rules (voice device, staleness, optional exact alarm), the hotwords never in logs. Android (JVM):
-decoding the new examples, the §41.3 rule (card, edit, own leaf, unused write_id), auto-send only on the asking
+decoding the new examples, the §42.3 rule (card, edit, own leaf, unused write_id), auto-send only on the asking
 device, the report on resume.
 
-## 41.9 Examples (to add when applied)
+## 42.9 Examples (to add when applied)
 `device_put_risi_send.json`:
 ```json
 {"mls":{"signature_key":"…","capabilities":["groups","tabs","risi_tools","risi_skills","risi_send"]}}
@@ -233,8 +233,8 @@ device, the report on resume.
 {"v":1,"type":"text","body":"✓ Sent to Upali Perera","risi":{"v":1,"kind":"message_sent","request_id":"6d1f2e3a-4b5c-4d6e-9f7a-8b9c0d1e2f3a","write_id":"2b3c4d5e-6f70-4812-93a4-b5c6d7e8f901","conversation_id":"dm:0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e_7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3","to":{"name":"Upali Perera","user_id":"0b9d7e8a-1c2f-4a3b-8d4e-5f6a7b8c9d0e"},"tab":"private","state":"sent","turn_ref":"8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","call_ref":null,"made_by":{"model":null,"provider":"rule","at":"2026-10-14T02:23:33.000Z","also":[]},"notify":["7e3f1a2b-9c8d-4e5f-a6b7-c8d9e0f1a2b3"]}}
 ```
 
-## 41.10 What ships where
-- **Server only (fast lane, works with nightly.7):** the voice-device fix and the §41.5 server rules (the P1's
+## 42.10 What ships where
+- **Server only (fast lane, works with nightly.7):** the voice-device fix and the §42.5 server rules (the P1's
   false "off"), `schedule_message` only with a time, `send_message` Phase 1 (the `draft` card), the hotwords
   field and the "Risi," normalisation, the flag.
 - **Needs the APK:** `risi_send` (the [Send] [Edit] card, the phone send, `message_sent`, per-contact auto-send),

@@ -101,7 +101,7 @@ defmodule RisiMe.Agent.Speech do
   @max_hotwords_chars 1000
 
   @doc """
-  Proposal 2026-10-14-send-for-me §41.6: the service's `hotwords` field for `opts`
+  Proposal 2026-10-14-send-for-me §42.6: the service's `hotwords` field for `opts`
   (`opts[:hotwords]`, a list of words or names; `RisiMe.Agent.Hotwords`), comma-separated, at
   most 60 entries and 1000 characters, or nil. Never logged.
   """

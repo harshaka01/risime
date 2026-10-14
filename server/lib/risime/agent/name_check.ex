@@ -145,7 +145,7 @@ defmodule RisiMe.Agent.NameCheck do
         _ -> []
       end
 
-    # §41.2: a message's own words are never checked as names (only its recipient is).
+    # §42.2: a message's own words are never checked as names (only its recipient is).
     keys = if tool == "send_message", do: ~w(title), else: ~w(title text)
     from_text = for k <- keys, t = args[k], is_binary(t), n <- after_with(t), do: n
 

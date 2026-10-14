@@ -1,13 +1,13 @@
 defmodule RisiMe.Agent.Hotwords do
   @moduledoc """
-  Speech hints (proposal `2026-10-14-send-for-me` §41.6): words the speech service should spell
+  Speech hints (proposal `2026-10-14-send-for-me` §42.6): words the speech service should spell
   right, passed **per request** as the service's `hotwords` field (`RisiMe.Agent.Speech`).
 
   * **Always:** `Risi`, `රිසි`, `ரிசி`.
   * **The sender's own contacts, only in the sender's own Risi chat:** the display names the
     server already holds for that user's friends and chat co-members (full names and first
-    names, at most 50). Never for another user's note, never stored, never logged (the speech
-    service logs only a count), never in the learning log. The phone's own recogniser (the
+    names, at most 50). Never for another user's note, never stored, never logged, never in
+    the learning log. The phone's own recogniser (the
     Voice agent's L1) is the preferred place for contact names; this is the server fallback.
   * `fix_risi/1`: a Risi-chat request that starts with a common mis-hearing of the name
     ("Rishi,", "Risky,", "Reesi,", "රිෂි,") is read as "Risi," (only at the very start).

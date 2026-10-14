@@ -1,13 +1,13 @@
 defmodule RisiMe.Agent.SendForMe do
   @moduledoc """
-  "Send a message for me" (proposal `2026-10-14-send-for-me`, §41; Harsha's P1 2026-10-14): the
+  "Send a message for me" (proposal `2026-10-14-send-for-me`, §42; Harsha's P1 2026-10-14): the
   client tool **`send_message`**, separate from scheduled messages.
 
-  * **One card, one tap** (§41.2): Risi drafts the message in the asker's language and posts ONE
+  * **One card, one tap** (§42.2): Risi drafts the message in the asker's language and posts ONE
     `confirm` card in the Risi chat: To: <name> · the text · [Send] [Edit]. [Send] is the
     `confirm_write`; [Edit] is a `confirm_write` with `edit: {"text"}` (`RisiMe.Agent.Writes`).
     Then the **phone** sends it, end-to-end encrypted, as the user (the `send_message` tool call,
-    the §41.3 phone rule), and Risi posts `message_sent`: "✓ Sent to <name>" (never the text).
+    the §42.3 phone rule), and Risi posts `message_sent`: "✓ Sent to <name>" (never the text).
   * **Phase 1** (an asker without a `risi_send` device, e.g. nightly.7): the §25.4 `draft` card
     ([Use] opens the chat with the composer filled, it never sends) and an honest line.
   * **Recipient** (deterministic, before any card): a friend's or co-member's name; several
@@ -36,7 +36,7 @@ defmodule RisiMe.Agent.SendForMe do
   @doc "True when the switch is on for `user`."
   def on_for?(user), do: RisiMe.Agents.Flags.feature_for(@flag, user)
 
-  @doc "The consequential-action guard's class for this tool: never consequential (§41.0)."
+  @doc "The consequential-action guard's class for this tool: never consequential (§42.0)."
   def consequential?, do: false
 
   @max_text 4096
@@ -49,7 +49,7 @@ defmodule RisiMe.Agent.SendForMe do
       "additionalProperties" => false
     }
 
-  @doc "The `send_message` registry entry (§41.2)."
+  @doc "The `send_message` registry entry (§42.2)."
   def tool do
     %{
       name: "send_message",
@@ -81,7 +81,7 @@ defmodule RisiMe.Agent.SendForMe do
     }
   end
 
-  ## The step (§41.2)
+  ## The step (§42.2)
 
   @doc false
   def run(%{"to" => to, "text" => text} = a, ctx) when is_binary(to) and is_binary(text) do
@@ -132,7 +132,7 @@ defmodule RisiMe.Agent.SendForMe do
     end
   end
 
-  @doc "The card's `send` display object (§41.2)."
+  @doc "The card's `send` display object (§42.2)."
   def send_display(r, lang),
     do: %{
       "to" => %{"name" => r.name, "user_id" => r.user_id},
@@ -143,7 +143,7 @@ defmodule RisiMe.Agent.SendForMe do
   defp tab_label("official"), do: "Official"
   defp tab_label(_), do: "Private"
 
-  # §41.1 Phase 1 (no `risi_send` device): the §25.4 `draft` card, [Use] opens the chat with the
+  # §42.1 Phase 1 (no `risi_send` device): the §25.4 `draft` card, [Use] opens the chat with the
   # composer filled. Nothing is claimed sent.
   defp phase1(r, text, lang, ctx) do
     rc = RisiMe.RisiChat.active_id(ctx.asker) || ctx.conv
@@ -165,7 +165,7 @@ defmodule RisiMe.Agent.SendForMe do
     end
   end
 
-  ## The recipient (§41.2)
+  ## The recipient (§42.2)
 
   @this ["this chat", "this group", "here"]
 
@@ -264,7 +264,7 @@ defmodule RisiMe.Agent.SendForMe do
 
   def resolved_args(args, _choice), do: args
 
-  ## Running the confirmed write (§41.2, §41.3)
+  ## Running the confirmed write (§42.2, §42.3)
 
   @doc """
   `exec` of a confirmed `send_message`: the tool call (the card's args, maybe with the edited

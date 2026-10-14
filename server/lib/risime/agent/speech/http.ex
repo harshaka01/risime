@@ -568,7 +568,7 @@ defmodule RisiMe.Agent.Speech.Http do
         hint -> fields ++ [language_hint: hint]
       end
 
-    # Proposal 2026-10-14-send-for-me §41.6: names to spell right (Risi, the sender's own
+    # Proposal 2026-10-14-send-for-me §42.6: names to spell right (Risi, the sender's own
     # contacts in their Risi chat); an older service ignores the field. Never logged.
     case Speech.hotwords_field(opts) do
       nil -> fields

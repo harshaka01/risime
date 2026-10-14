@@ -242,7 +242,7 @@ defmodule RisiMe.Agent.Voice do
       :skip
   end
 
-  # P1 2026-10-14 (proposal send-for-me §41.5): the note's sending device (nil when unknown).
+  # P1 2026-10-14 (proposal send-for-me §42.5): the note's sending device (nil when unknown).
   defp with_device({:ok, note}, m), do: {:ok, Map.put(note, :sender_device, m[:sender_device])}
   defp with_device(other, _m), do: other
 
@@ -407,7 +407,7 @@ defmodule RisiMe.Agent.Voice do
     posted
   end
 
-  # Proposal 2026-10-14-send-for-me §41.6: in the user's own Risi chat, "Rishi, …" is "Risi, …".
+  # Proposal 2026-10-14-send-for-me §42.6: in the user's own Risi chat, "Rishi, …" is "Risi, …".
   defp fix_name(%{text: text} = t) when is_binary(text),
     do: %{t | text: RisiMe.Agent.Hotwords.fix_risi(text)}
 

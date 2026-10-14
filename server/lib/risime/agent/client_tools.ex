@@ -404,7 +404,7 @@ defmodule RisiMe.Agent.ClientTools do
          text: text,
          personal: true,
          skill_id: "scheduled_messages",
-         # Proposal 2026-10-14-send-for-me §41.4: the one-tap card's display (risi_send devices).
+         # Proposal 2026-10-14-send-for-me §42.4: the one-tap card's display (risi_send devices).
          send:
            RisiMe.Agent.SendForMe.send_display(
              %{name: who, user_id: nil, tab: tab_of(conv)},
@@ -421,7 +421,7 @@ defmodule RisiMe.Agent.ClientTools do
   defp tab_of(conv),
     do: if(RisiMe.Groups.Tabs.official?(conv), do: "official", else: "private")
 
-  # Proposal 2026-10-14-send-for-me §41.4: scheduled only with a time. "Now" (under 2 minutes
+  # Proposal 2026-10-14-send-for-me §42.4: scheduled only with a time. "Now" (under 2 minutes
   # ahead) is `send_message` while that switch is on for the asker.
   defp has_time(t, ctx) do
     if RisiMe.Agent.SendForMe.on_for?(ctx.asker) and DateTime.diff(t, ctx.now) < 120,

@@ -165,7 +165,7 @@ defmodule RisiMe.Devices do
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["pdf_export"]
       # v1.35 §34: `risi_items` (Phase 2), kept only with `risi_tools`.
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["risi_items"]
-      # Proposal 2026-10-14-send-for-me §41.1: `risi_send`, kept only with `risi_tools`.
+      # Proposal 2026-10-14-send-for-me §42.1: `risi_send`, kept only with `risi_tools`.
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["risi_send"]
 
       caps =
@@ -395,7 +395,7 @@ defmodule RisiMe.Devices do
   end
 
   @doc """
-  Proposal 2026-10-14-send-for-me §41.1: true if `device_id` (may be nil) names a `risi_tools`
+  Proposal 2026-10-14-send-for-me §42.1: true if `device_id` (may be nil) names a `risi_tools`
   device of the user that also advertises `risi_send` (the one-tap send card and the phone send).
   """
   def risi_send_device?(_user_id, nil), do: false
@@ -412,7 +412,7 @@ defmodule RisiMe.Devices do
   end
 
   @doc """
-  Proposal 2026-10-14-send-for-me §41.5: the user's `risi_tools` device seen most recently (its
+  Proposal 2026-10-14-send-for-me §42.5: the user's `risi_tools` device seen most recently (its
   `device_id`), or nil. The device of a request that arrived without one (a voice-queue retry).
   """
   def latest_risi_tools_device(user_id) do

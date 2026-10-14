@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# "Send a message for me" gate (proposal contract/proposals/2026-10-14-send-for-me.md §41.8; Harsha's P1 2026-10-14).
+# "Send a message for me" gate (proposal contract/proposals/2026-10-14-send-for-me.md §42.8; Harsha's P1 2026-10-14).
 # Two redroid phones on spark2 against a temp server from THIS checkout (TABS + Risi with the pilot's switches, voice
 # notes on; RISI_SEND_FOR_ME at its default `canary` with A as the RISI_DEV_USERS user), fresh installs, the model
 # scripted by scripts/fake-llm --script (or --live):

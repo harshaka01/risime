@@ -206,7 +206,7 @@ defmodule RisiMe.Agent.Writes do
     |> then(&send_card(&1, tool.name, card, ctx))
   end
 
-  # Proposal 2026-10-14-send-for-me §41.2/§41.4: the one-tap card. `send_message` is [Send]
+  # Proposal 2026-10-14-send-for-me §42.2/§42.4: the one-tap card. `send_message` is [Send]
   # [Edit] (Cancel small) with the `send` display object; a `schedule_message` card for a
   # `risi_send` device is [Schedule] [Edit] the same way (older devices keep [Add] [Cancel]).
   defp send_card(risi, "send_message", card, _ctx),
@@ -339,7 +339,7 @@ defmodule RisiMe.Agent.Writes do
       end)
   end
 
-  # Proposal 2026-10-14-send-for-me §41.2/§41.4: the text of a message, only.
+  # Proposal 2026-10-14-send-for-me §42.2/§42.4: the text of a message, only.
   defp edit_ok?(%Write{tool: tool}, %{"text" => t} = e)
        when tool in ~w(send_message schedule_message) and map_size(e) == 1 do
     is_binary(t) and String.trim(t) != "" and String.length(String.trim(t)) <= 4096
@@ -351,7 +351,7 @@ defmodule RisiMe.Agent.Writes do
 
   defp edited(args, nil), do: {:ok, args}
 
-  # §41.2: a message's edited text (the wire's `text`; nothing else changes).
+  # §42.2: a message's edited text (the wire's `text`; nothing else changes).
   defp edited(%{"wire" => %{"text" => _} = wire} = args, %{"text" => t} = e)
        when map_size(e) == 1 and not is_map_key(wire, "start"),
        do: {:ok, %{args | "wire" => Map.put(wire, "text", String.trim(t))}}

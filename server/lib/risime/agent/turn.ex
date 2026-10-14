@@ -155,7 +155,7 @@ defmodule RisiMe.Agent.Turn do
 
     ctx = %{
       asker: asker,
-      # P1 2026-10-14 (proposal send-for-me §41.5): a request that lost its device (a voice
+      # P1 2026-10-14 (proposal send-for-me §42.5): a request that lost its device (a voice
       # note retried from the queue) runs for the asker's most recent Risi device.
       device_id: Skills.request_device(asker, env["__device"], conv),
       # §25.5: times resolve from the request's `server_ts` and the asker's zone.
@@ -760,12 +760,12 @@ defmodule RisiMe.Agent.Turn do
           status == "ok" and is_map(meta[:risi_items]) ->
             items_final(st, ctx, meta[:risi_items])
 
-          # Proposal 2026-10-14-send-for-me §41.2: a tool's own server-built answer ends the
+          # Proposal 2026-10-14-send-for-me §42.2: a tool's own server-built answer ends the
           # turn (who isn't a contact, no 1:1 chat, the Phase 1 draft), never the model's words.
           is_binary(meta[:answer]) ->
             answer_final(st, ctx, meta[:answer])
 
-          # §41.2: the send card is the action (§28.3): a short fixed line, no more model calls.
+          # §42.2: the send card is the action (§28.3): a short fixed line, no more model calls.
           status == "ok" and name == "send_message" ->
             answer_final(st, ctx, RisiMe.Agent.SendForMe.card_line(ctx, args))
 
@@ -1040,7 +1040,7 @@ defmodule RisiMe.Agent.Turn do
       {:error, status, reason} when is_binary(status) and is_binary(reason) ->
         {status, nil, %{reason: reason}}
 
-      # Proposal 2026-10-14-send-for-me §41.2: the tool's own question ("Which Upali?", the
+      # Proposal 2026-10-14-send-for-me §42.2: the tool's own question ("Which Upali?", the
       # §34.5 clarify form) or its own server-built answer.
       {:clarify, %{} = c} ->
         {"clarify", nil, %{clarify: c}}
@@ -1834,7 +1834,7 @@ defmodule RisiMe.Agent.Turn do
 
     opts = for o <- c.options, do: %{"name" => o.name, "user_id" => o.user_id}
     keep_text = "Keep #{c.said}"
-    # §41.2: "Which Upali?" (several exact matches) has no Keep: one chip per person, up to 3.
+    # §42.2: "Which Upali?" (several exact matches) has no Keep: one chip per person, up to 3.
     keep? = Map.get(c, :keep, true)
 
     chips =
@@ -1882,7 +1882,7 @@ defmodule RisiMe.Agent.Turn do
 
     args =
       case choice do
-        # §41.2: the person is named exactly; the message text is never rewritten.
+        # §42.2: the person is named exactly; the message text is never rewritten.
         %{"name" => _} = o when w.tool == "send_message" ->
           RisiMe.Agent.SendForMe.resolved_args(args, o)
 
@@ -1901,7 +1901,7 @@ defmodule RisiMe.Agent.Turn do
       {st, status, result, meta} = exec_step(st, ctx, w.tool, args, out)
 
       case {status, result, meta} do
-        # §41.2: the send tool's own answer (no 1:1 chat, the Phase 1 draft) or its card line.
+        # §42.2: the send tool's own answer (no 1:1 chat, the Phase 1 draft) or its card line.
         {_, _, %{answer: text}} when is_binary(text) ->
           answer_final(st, ctx, text)
 
