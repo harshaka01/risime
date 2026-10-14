@@ -149,6 +149,8 @@ class CallActivity : ComponentActivity() {
                 val s by calls.state.collectAsStateWithLifecycle()
                 val blind by calls.blindRing.collectAsStateWithLifecycle()
                 val routes by calls.routes.collectAsStateWithLifecycle()
+                // Item 6: the tab table, to tell an Official group call from a Private one (recomposes once it loads).
+                val tabRows by (application as RisiMeApp).container.chatTabs.rows.collectAsStateWithLifecycle()
                 // v1.45 §40.3: "Adding Sunil…", "Couldn't add people…".
                 val mv by calls.move.collectAsStateWithLifecycle()
                 // v1.39 §36: the Official-call transcription (button, prompt, red bar); nothing on a Private call.
@@ -187,7 +189,8 @@ class CallActivity : ComponentActivity() {
                             else -> snap.notice?.let { CallTexts.notice(it, title) } ?: CallTexts.status(snap.phase, snap.connectedAtMs, now, video = snap.video).orEmpty()
                         }
                         // Item 6: a group call on an Official grp: (Risi holds its keys) never shows the Private lock.
-                        val officialGroup = snap.group && !(application as RisiMeApp).container.chatTabs.private(snap.conversationId)
+                        // Null while this phone's tab table hasn't loaded (or has no row yet): a neutral "Encrypted", never Private.
+                        val officialGroup: Boolean? = if (!snap.group) false else tabRows?.get(snap.conversationId.lowercase())?.official
                         val ui = callScreenUi(snap, title, status, routes, now, groupAdd = calls.canAdvertiseAddToCall(), moveLine = mv?.takeIf { it.callId == snap.callId }?.line, officialGroup = officialGroup)
                         val wm = calls.media as? WebRtcCallMedia
                         CallScreen(

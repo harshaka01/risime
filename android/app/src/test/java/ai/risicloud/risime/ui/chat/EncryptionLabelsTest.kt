@@ -74,6 +74,7 @@ class EncryptionLabelsTest {
             EncMarker.OFFICIAL_LOCK, "Encrypted · Risi can read",
             "Messages are encrypted on the way and on the server. Risi, whose keys are on RisiMe's server, reads this chat to answer you.",
         ),
+        (EncSurface.GROUP_TAB_UNKNOWN to true) to EncLabel(EncMarker.NONE, "Encrypted", "Encrypted (checking whether Risi is in this chat…)"),
     ) + EncSurface.entries.associate { (it to false) to EncLabel(EncMarker.NONE, null, null) }
 
     @Test fun everyStateAndTabMapsToItsMarkerAndWording() {
@@ -159,6 +160,31 @@ class EncryptionLabelsTest {
         assertEquals(EncSurface.PRIVATE_GROUP, callEncSurface(grp, officialGroup = false))
         assertEquals(EncSurface.OFFICIAL_GROUP, callEncSurface(grp, officialGroup = true))
         assertEquals(EncSurface.RISI_CHAT, callEncSurface(dm.copy(risiCall = true), officialGroup = false))
+    }
+
+    /** Decision 048: a group call whose tab isn't known yet never falls back to the Private lock or wording. */
+    @Test fun groupCallWithTheTabTableNotLoadedIsNeutralThenSwitches() {
+        val grp = CallSnapshot("c", "grp:o", "b", true, CallPhase.ACTIVE, group = true, verified = true)
+        assertEquals(EncSurface.GROUP_TAB_UNKNOWN, callEncSurface(grp, officialGroup = null))
+        assertEquals(EncMarker.NONE to "Encrypted", callEncryptionLabel(EncSurface.GROUP_TAB_UNKNOWN, true))
+        assertNotEquals(EncryptionWording.PRIVATE_CALL_INFO, callEncryptionInfo(EncSurface.GROUP_TAB_UNKNOWN, true))
+        assertNotEquals(EncMarker.PRIVATE_LOCK, encryptionLabel(EncSurface.GROUP_TAB_UNKNOWN, true).marker)
+        assertFalse(headerEncryptionSubtitle(EncSurface.GROUP_TAB_UNKNOWN, true, "3 members").orEmpty().contains("🔒"))
+        val routes = ai.risicloud.risime.calls.CallRoutes()
+        assertEquals(EncSurface.GROUP_TAB_UNKNOWN, ai.risicloud.risime.calls.callScreenUi(grp, "Team", "0:12", routes, 0, officialGroup = null).encSurface)
+        // Once the table loads, the same call switches to its real tab.
+        assertEquals(EncSurface.OFFICIAL_GROUP, ai.risicloud.risime.calls.callScreenUi(grp, "Team", "0:12", routes, 0, officialGroup = true).encSurface)
+        assertEquals(EncSurface.PRIVATE_GROUP, ai.risicloud.risime.calls.callScreenUi(grp, "Team", "0:12", routes, 0, officialGroup = false).encSurface)
+        // A 1:1 call never depends on the table.
+        assertEquals(EncSurface.PRIVATE_DM, callEncSurface(CallSnapshot("c", "dm:a_b", "b", true, CallPhase.ACTIVE), officialGroup = null))
+    }
+
+    @Test fun unknownTabGroupCallScreenShowsNoLock() {
+        call(EncSurface.GROUP_TAB_UNKNOWN)
+        rule.onNodeWithText("Encrypted").assertIsDisplayed()
+        rule.onNodeWithText("End-to-end encrypted").assertDoesNotExist()
+        rule.onNodeWithTag("call_enc_private_lock", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("call_enc_official_lock", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun helpTexts() {

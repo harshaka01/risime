@@ -96,7 +96,7 @@ fun DmChatInfoDialog(name: String, encrypted: Boolean, notEncryptedText: String?
 @Composable
 fun OfficialLockIcon(size: Dp, tint: Color = androidx.compose.material3.LocalContentColor.current, modifier: Modifier = Modifier, contentDescription: String? = null) {
     val desc = contentDescription
-    Box(modifier.size(size).then(if (desc != null) Modifier.semantics { this.contentDescription = desc } else Modifier)) {
+    Box(modifier.size(size).then(if (desc != null) Modifier.semantics(mergeDescendants = true) { this.contentDescription = desc } else Modifier)) {
         Icon(Icons.Default.Lock, null, Modifier.size(size), tint = tint)
         Box(
             Modifier.align(Alignment.BottomEnd).size(size * 0.5f)

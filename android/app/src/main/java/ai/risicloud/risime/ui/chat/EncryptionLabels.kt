@@ -16,7 +16,13 @@ import ai.risicloud.risime.data.mls.E2EE_INFO_TEXT
 
 /** A conversation, by tab and chat type: what its encryption label depends on. */
 enum class EncSurface {
-    PRIVATE_DM, PRIVATE_GROUP, OFFICIAL_DM, OFFICIAL_GROUP, RISI_CHAT;
+    PRIVATE_DM, PRIVATE_GROUP, OFFICIAL_DM, OFFICIAL_GROUP, RISI_CHAT,
+
+    /**
+     * A group call whose tab isn't known yet (this phone's tab table hasn't loaded): decision 048 never falls back to
+     * Private. It says a neutral "Encrypted" with no lock, and switches once the table loads.
+     */
+    GROUP_TAB_UNKNOWN;
 
     /** Risi is a member (Official, or the Risi chat): Risi, whose keys are on RisiMe's server, can read it. */
     val risiCanRead: Boolean get() = this == OFFICIAL_DM || this == OFFICIAL_GROUP || this == RISI_CHAT
@@ -72,6 +78,10 @@ object EncryptionWording {
     const val RISI_CHAT_INFO =
         "Messages are encrypted on the way and on the server. Risi, whose keys are on RisiMe's server, reads this chat to answer you."
 
+    /** A group call whose tab isn't known yet: neutral, no lock, never the Private wording. */
+    const val UNKNOWN_TAB_CALL_SHORT = "Encrypted"
+    const val UNKNOWN_TAB_CALL_INFO = "Encrypted (checking whether Risi is in this chat…)"
+
     /** Calls: a group's Official call (§20 on the Official `grp:`; Risi is a leaf and can derive the frame keys, §27.7). */
     const val OFFICIAL_GROUP_CALL_SHORT = "Encrypted · Risi can listen"
 
@@ -92,10 +102,12 @@ const val HEADER_OFFICIAL_LOCK_PREFIX = "🔐 "
 /** The label for [surface] in its current state: [encrypted] true (MLS), false (the strip says why). */
 fun encryptionLabel(surface: EncSurface, encrypted: Boolean): EncLabel = when {
     !encrypted -> EncLabel(EncMarker.NONE, null, null)
+    surface == EncSurface.GROUP_TAB_UNKNOWN -> EncLabel(EncMarker.NONE, EncryptionWording.UNKNOWN_TAB_CALL_SHORT, EncryptionWording.UNKNOWN_TAB_CALL_INFO)
+    surface == EncSurface.PRIVATE_DM || surface == EncSurface.PRIVATE_GROUP ->
+        EncLabel(EncMarker.PRIVATE_LOCK, EncryptionWording.PRIVATE_SHORT, EncryptionWording.PRIVATE_INFO)
     surface == EncSurface.RISI_CHAT -> EncLabel(EncMarker.OFFICIAL_LOCK, EncryptionWording.OFFICIAL_SHORT, EncryptionWording.RISI_CHAT_INFO)
     surface == EncSurface.OFFICIAL_DM -> EncLabel(EncMarker.OFFICIAL_LOCK, EncryptionWording.OFFICIAL_SHORT, EncryptionWording.OFFICIAL_INFO_DM)
-    surface == EncSurface.OFFICIAL_GROUP -> EncLabel(EncMarker.OFFICIAL_LOCK, EncryptionWording.OFFICIAL_SHORT, EncryptionWording.OFFICIAL_INFO_GROUP)
-    else -> EncLabel(EncMarker.PRIVATE_LOCK, EncryptionWording.PRIVATE_SHORT, EncryptionWording.PRIVATE_INFO)
+    else -> EncLabel(EncMarker.OFFICIAL_LOCK, EncryptionWording.OFFICIAL_SHORT, EncryptionWording.OFFICIAL_INFO_GROUP)
 }
 
 /**
@@ -122,6 +134,7 @@ fun callEncryptionLabel(surface: EncSurface, verified: Boolean): Pair<EncMarker,
     surface == EncSurface.OFFICIAL_GROUP -> EncMarker.OFFICIAL_LOCK to EncryptionWording.OFFICIAL_GROUP_CALL_SHORT
     surface == EncSurface.OFFICIAL_DM -> EncMarker.OFFICIAL_LOCK to EncryptionWording.OFFICIAL_DM_CALL_SHORT
     surface == EncSurface.RISI_CHAT -> null // Call Risi has its own "Risi hears this call" banner (§41.4), never a lock
+    surface == EncSurface.GROUP_TAB_UNKNOWN -> EncMarker.NONE to EncryptionWording.UNKNOWN_TAB_CALL_SHORT
     else -> EncMarker.PRIVATE_LOCK to EncryptionWording.PRIVATE_SHORT
 }
 
@@ -131,5 +144,6 @@ fun callEncryptionInfo(surface: EncSurface, verified: Boolean): String = when {
     !verified -> "Not verified yet"
     surface == EncSurface.OFFICIAL_GROUP -> EncryptionWording.OFFICIAL_GROUP_CALL_INFO
     surface == EncSurface.OFFICIAL_DM -> EncryptionWording.OFFICIAL_DM_CALL_INFO
+    surface == EncSurface.GROUP_TAB_UNKNOWN -> EncryptionWording.UNKNOWN_TAB_CALL_INFO
     else -> EncryptionWording.PRIVATE_CALL_INFO
 }

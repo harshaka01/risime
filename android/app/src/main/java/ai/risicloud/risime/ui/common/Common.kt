@@ -258,7 +258,7 @@ private fun HeaderSubtitle(subtitle: String, emphasis: Boolean) {
             }
             // Item 6: Official / the Risi chat: never the Private lock (its own tag, so a gate never counts it as one).
             ai.risicloud.risime.ui.chat.EncMarker.OFFICIAL_LOCK -> {
-                ai.risicloud.risime.ui.chat.OfficialLockIcon(13.dp, tint = color, modifier = Modifier.testTag("risi_header_official_lock"))
+                ai.risicloud.risime.ui.chat.OfficialLockIcon(13.dp, tint = color, modifier = Modifier.testTag("risi_header_official_lock"), contentDescription = ai.risicloud.risime.ui.chat.EncryptionWording.OFFICIAL_LOCK_DESCRIPTION)
                 Spacer(Modifier.width(3.dp))
             }
             ai.risicloud.risime.ui.chat.EncMarker.NONE -> Unit
