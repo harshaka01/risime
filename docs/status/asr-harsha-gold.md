@@ -53,6 +53,20 @@ choice for his notes):
 - **Each change** writes a `risi_agent_runs` row (agent `voice`, mode `route`, the choice, the reason with numbers),
   an admin audit row, and a line in his Risi chat.
 
+## Update (Harsha, later 2026-10-14)
+- **Candidates:** Qwen3-ASR Sinhala, **Whisper small Sinhala**, omniASR-CTC-1B, omniASR-LLM-7B (streamed), plus the
+  Google or phone transcript.
+- **Reference = Google, in shadow:** every note is scored at once against his Google transcript (`vs_google`). His
+  correction, when given, beats Google for that note. The Voice agent re-runs the route decision after **every**
+  note (not only after a label), with no user-visible output except a one-line route change in his Risi chat.
+  The stored CER is the source of truth.
+- **Off switch:** "compare off" / "compare on" in his Risi chat (per-user setting
+  `speech_compare_post_user_<uuid>`). While off, nothing is posted and the scoring continues.
+- **Console:** Speech page, card "Sinhala on real speech": mean CER per model, number of notes scored and
+  corrected, each dev user's current Sinhala route, and whether compare posts are on.
+- **Server default for si:** the winner, through the rule above (his per-user route first). When nothing passes the
+  hallucination guard, no transcript is shown (srv3).
+
 ## Report
 `RisiMe.Agent.SpeechCompare.report(5)` (rpc on the pilot) gives the table of his last 5 labelled notes: per model,
 status, guard code, CER, WER and right/wrong. Numbers only.

@@ -91,6 +91,9 @@ defmodule RisiMe.Agent.SpeechGold do
   def labelled,
     do: all() |> Enum.filter(&is_binary(&1["label"])) |> Enum.sort_by(& &1["labelled_at"], :desc)
 
+  @doc "Every note's meta."
+  def all_meta, do: all()
+
   @doc "Every note's meta without a label yet."
   def unlabelled, do: Enum.reject(all(), &is_binary(&1["label"]))
 

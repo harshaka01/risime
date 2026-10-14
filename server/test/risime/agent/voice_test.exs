@@ -1335,6 +1335,9 @@ defmodule RisiMe.Agent.VoiceTest do
       def transcribe_model(_audio, "qwen3-asr-0.6b-sinhala", _opts),
         do: {:ok, %{text: "මම ඒක " <> String.duplicate("කරන්නේ ", 20), model: "q"}}
 
+      def transcribe_model(_audio, "whisper-small-sinhala", _opts),
+        do: {:ok, %{text: "ගෙදර යන්න බස් එකක් නැහැ", model: "w"}}
+
       def transcribe_model(_audio, "omnilingual-ctc-1b", _opts),
         do: {:ok, %{text: "හෙට උදේ දහයට හමුවෙමු", model: "c"}}
 
@@ -1374,9 +1377,10 @@ defmodule RisiMe.Agent.VoiceTest do
       {body, _} = await_post(w.rc, "answer", fn _ -> true end)
       assert body =~ "Sinhala compare for your voice note"
       assert body =~ "1. Qwen3-ASR Sinhala" and body =~ "guard: repeat_token"
-      assert body =~ "2. omniASR-CTC-1B"
-      assert body =~ "3. omniASR-LLM-7B: skipped"
-      assert body =~ "4. Phone (on-device)"
+      assert body =~ "2. Whisper small Sinhala"
+      assert body =~ "3. omniASR-CTC-1B"
+      assert body =~ "4. omniASR-LLM-7B: skipped"
+      assert body =~ "5. Phone (on-device)"
       # Never in the Official chat.
       refute_post(w.og, "answer")
 
@@ -1387,11 +1391,11 @@ defmodule RisiMe.Agent.VoiceTest do
       refute File.read!(Path.join(w.dir, "#{id}.json.sealed")) =~ "හෙට"
 
       # His reply "2" labels it; the scores and the route decision follow.
-      assert RisiMe.Agent.SpeechCompare.label_reply(w.rc, w.a.user.id, " 2 ") == :handled
+      assert RisiMe.Agent.SpeechCompare.label_reply(w.rc, w.a.user.id, " 3 ") == :handled
       {saved, _} = await_post(w.rc, "answer", &(&1["answer"] =~ "Saved"))
       assert saved =~ "omnilingual-ctc-1b CER 0%"
       [gold] = RisiMe.Agent.SpeechGold.labelled()
-      assert gold["label"] == text and gold["label_source"] == "pick:2"
+      assert gold["label"] == text and gold["label_source"] == "pick:3"
       assert gold["scores"]["omnilingual-ctc-1b"]["cer"] == 0.0
       assert gold["scores"]["qwen3-asr-0.6b-sinhala"]["cer"] > 0.5
       # First note: CTC clearly less wrong → his per-user Sinhala route.
@@ -1429,7 +1433,24 @@ defmodule RisiMe.Agent.VoiceTest do
              } = risi
 
       {body, _} = await_post(w.rc, "answer", fn _ -> true end)
-      assert body =~ "4. Google"
+      assert body =~ "5. Google"
+      # Shadow: scored against Google at once (no label yet); the console's scoreboard shows it.
+      sb = RisiMe.Agent.SpeechCompare.scoreboard()
+      assert sb.n == 1 and sb.labelled == 0
+      assert Enum.any?(sb.models, &(&1.model == "omnilingual-ctc-1b" and &1.mean_cer == 0.0))
+
+      # His off switch: no more compare posts, the scoring goes on quietly.
+      assert RisiMe.Agent.SpeechCompare.label_reply(w.rc, w.a.user.id, "compare off") == :handled
+      {off, _} = await_post(w.rc, "answer", &(&1["answer"] =~ "Compare messages are off"))
+      assert off =~ "scores the models quietly"
+      refute RisiMe.Agent.SpeechCompare.post_on?(w.a.user.id)
+      {env, _, _} = note!(w.a.user.id, w.og, "si:හෙට", %{"phone_transcript" => google})
+      {_, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      Process.sleep(300)
+      refute_post(w.rc, "answer")
+      assert RisiMe.Agent.SpeechCompare.scoreboard().n == 2
     end
 
     test "not a dev user, or the flag off: no compare", w do

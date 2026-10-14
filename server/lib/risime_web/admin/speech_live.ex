@@ -67,7 +67,11 @@ defmodule RisiMeWeb.Admin.SpeechLive do
 
   # Incident 2026-10-14: today's per-model latency, timeouts and fallbacks (codes and numbers).
   defp stt_today do
-    %{models: RisiMe.Agent.SpeechStats.models(), notes: RisiMe.Agent.SpeechStats.notes()}
+    %{
+      models: RisiMe.Agent.SpeechStats.models(),
+      notes: RisiMe.Agent.SpeechStats.notes(),
+      compare: RisiMe.Agent.SpeechCompare.scoreboard()
+    }
   rescue
     _ -> nil
   end
@@ -317,6 +321,31 @@ defmodule RisiMeWeb.Admin.SpeechLive do
           </table>
           <p :if={@stt.models == []} class="muted">No transcriptions today yet.</p>
         </div>
+      </div>
+
+      <div :if={@stt} class="card">
+        <strong>Sinhala on real speech (dev users' own notes)</strong>
+        <p class="muted">
+          Mean character error rate per model on {@stt.compare.n} scored notes ({@stt.compare.labelled} corrected by hand).
+          The reference is the user's correction when given, else their Google transcript.
+          The Voice agent re-scores after every note and moves the Sinhala route through the promotion rule.
+        </p>
+        <table :if={@stt.compare.models != []}>
+          <tr>
+            <th>Model</th>
+            <th>Mean CER</th>
+            <th>Notes</th>
+          </tr>
+          <tr :for={m <- @stt.compare.models}>
+            <td>{m.model}</td>
+            <td>{round(m.mean_cer * 100)}%</td>
+            <td>{m.notes}</td>
+          </tr>
+        </table>
+        <p :if={@stt.compare.models == []} class="muted">No scored notes yet.</p>
+        <p :for={r <- @stt.compare.routes} class="muted">
+          Dev user {r.user}…: Sinhala route <strong>{r.si}</strong>; compare messages {if r.posts, do: "on", else: "off"}
+        </p>
       </div>
 
       <div class="card">

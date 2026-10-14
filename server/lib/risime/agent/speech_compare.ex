@@ -33,6 +33,7 @@ defmodule RisiMe.Agent.SpeechCompare do
   @flag "RISI_SPEECH_COMPARE_DEV"
   @models [
     {"Qwen3-ASR Sinhala", :service, "qwen3-asr-0.6b-sinhala"},
+    {"Whisper small Sinhala", :service, "whisper-small-sinhala"},
     {"omniASR-CTC-1B", :service, "omnilingual-ctc-1b"},
     {"omniASR-LLM-7B", :extra, "omniasr-llm-7b"}
   ]
@@ -119,7 +120,22 @@ defmodule RisiMe.Agent.SpeechCompare do
       "candidates" => Enum.map(cands, &Map.new(&1, fn {k, v} -> {to_string(k), v} end))
     })
 
-    post_compare(sender, dur, posted, cands)
+    if post_on?(sender), do: post_compare(sender, dur, posted, cands)
+    # Shadow (Harsha 2026-10-14): the Voice agent re-scores on every note (Google as the
+    # reference until he corrects one) and applies the promotion rule; no output but the line
+    # in his Risi chat when the route changes (and only while his compare posts are on).
+    decision = route_decision(sender)
+
+    case decision do
+      {:changed, choice, why} ->
+        if post_on?(sender) do
+          with rc when is_binary(rc) <- RisiMe.RisiChat.active_id(sender),
+               do: post(rc, sender, "Your Sinhala notes now use #{label(choice)} (#{why}).")
+        end
+
+      _ ->
+        :ok
+    end
 
     Logger.info(
       "speech compare: note #{note_id} " <>
@@ -281,6 +297,36 @@ defmodule RisiMe.Agent.SpeechCompare do
   unlabelled compared note (`1`…`n` or `fix: …`), else `:pass` (the normal request path).
   """
   def label_reply(conv, user, text) when is_binary(text) do
+    case String.downcase(String.trim(text)) do
+      c when c in ["compare off", "compare on"] -> switch_posts(conv, user, c)
+      _ -> label_reply_text(conv, user, text)
+    end
+  end
+
+  def label_reply(_, _, _), do: :pass
+
+  defp switch_posts(conv, user, c) do
+    if enabled_for?(user) and conv == RisiMe.RisiChat.active_id(user) do
+      v = if c == "compare off", do: "off", else: "on"
+      RisiMe.Admin.Settings.put(post_key(user), v, RisiMe.Risi.user_id())
+
+      post(
+        conv,
+        user,
+        if(v == "off",
+          do:
+            "Compare messages are off. Risi still scores the models quietly. Say \"compare on\" to see them again.",
+          else: "Compare messages are on."
+        )
+      )
+
+      :handled
+    else
+      :pass
+    end
+  end
+
+  defp label_reply_text(conv, user, text) do
     with true <- enabled_for?(user),
          true <- conv == RisiMe.RisiChat.active_id(user),
          {:ok, kind, value} <- parse(text),
@@ -321,8 +367,6 @@ defmodule RisiMe.Agent.SpeechCompare do
       Logger.warning("speech compare: label not stored (#{inspect(e.__struct__)})")
       :pass
   end
-
-  def label_reply(_, _, _), do: :pass
 
   @doc false
   def parse(text) do
@@ -415,15 +459,7 @@ defmodule RisiMe.Agent.SpeechCompare do
   `{:same, choice}`. Recorded in `risi_agent_runs` (agent voice, mode route) and the settings audit.
   """
   def route_decision(user) do
-    notes = SpeechGold.labelled()
-    n = length(notes)
-
-    means =
-      for m <- @server_models,
-          cers = for(x <- notes, s = get_in(x, ["scores", m, "cer"]), is_number(s), do: s),
-          cers != [],
-          into: %{},
-          do: {m, {Enum.sum(cers) / length(cers), length(cers)}}
+    {n, means} = means()
 
     {choice, why} = decide(n, means)
     current = SpeechRoutes.user_choice(user, "si")
@@ -447,6 +483,60 @@ defmodule RisiMe.Agent.SpeechCompare do
       {:same, choice}
     end
   end
+
+  @doc """
+  `{n, %{model => {mean_cer, notes}}}` over the scored notes: each note's reference is his label
+  when he gave one (a correction beats Google), else his Google transcript (`vs_google`).
+  """
+  def means do
+    notes = for m <- SpeechGold.all_meta(), (sc = ref_scores(m)) != %{}, do: sc
+    n = length(notes)
+
+    means =
+      for m <- @server_models,
+          cers = for(sc <- notes, c = get_in(sc, [m, "cer"]), is_number(c), do: c),
+          cers != [],
+          into: %{},
+          do: {m, {Enum.sum(cers) / length(cers), length(cers)}}
+
+    {n, means}
+  end
+
+  defp ref_scores(%{"label" => l, "scores" => %{} = sc}) when is_binary(l), do: sc
+  defp ref_scores(%{"vs_google" => %{} = sc}), do: sc
+  defp ref_scores(_), do: %{}
+
+  @doc "The Speech page's scores: `%{n, models: [%{model, mean_cer, notes}], route}` per dev user."
+  def scoreboard do
+    {n, means} = means()
+
+    %{
+      n: n,
+      labelled: length(SpeechGold.labelled()),
+      models:
+        means
+        |> Enum.map(fn {m, {c, k}} -> %{model: m, mean_cer: Float.round(c, 3), notes: k} end)
+        |> Enum.sort_by(& &1.mean_cer),
+      routes:
+        for(
+          u <- Application.get_env(:risime, :risi_dev_users, []),
+          do: %{
+            user: String.slice(u, 0, 8),
+            si: SpeechRoutes.user_choice(u, "si"),
+            posts: post_on?(u)
+          }
+        )
+    }
+  rescue
+    _ -> %{n: 0, labelled: 0, models: [], routes: []}
+  end
+
+  ## His off switch for the compare posts ("compare off" / "compare on" in his Risi chat)
+
+  @doc "True while the numbered compare message is posted in `user`'s Risi chat (default on)."
+  def post_on?(user), do: RisiMe.Admin.Settings.get(post_key(user), "on") != "off"
+
+  defp post_key(user), do: "speech_compare_post_user_" <> String.downcase(user)
 
   @doc false
   def decide(n, means) when n >= 5 do
