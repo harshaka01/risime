@@ -40,7 +40,7 @@ fun pickFriends(contacts: List<ContactEntity>, exclude: Set<String> = emptySet()
 
 class CreateGroupViewModel(private val c: AppContainer) : ViewModel() {
     private val _ui = MutableStateFlow(CreateGroupUi())
-    val ui: StateFlow<CreateGroupUi> = combine(_ui, c.contacts.contacts) { u, contacts -> u.copy(friends = pickFriends(contacts)) }
+    val ui: StateFlow<CreateGroupUi> = combine(_ui, c.contacts.contacts, c.chatTabs.uiOn) { u, contacts, tabsOn -> u.copy(friends = pickFriends(contacts), tabsOn = tabsOn) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CreateGroupUi())
 
     /** The new conversation id once its epoch-0 commit landed (the screen opens the chat). */

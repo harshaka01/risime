@@ -45,7 +45,7 @@ import kotlinx.coroutines.withContext
 object PhoneSttReport {
     const val FLAG_LABEL = "Phone transcript on my voice notes (on-device)"
     const val FLAG_HELP = "This phone's on-device recogniser transcribes your own voice notes before they're encrypted; " +
-        "the text goes inside the end-to-end encrypted note and recipients see it under the bubble. On-device only: " +
+        "the text goes inside the encrypted note and recipients see it under the bubble. On-device only: " +
         "if the language isn't on this phone, the note goes without it. No audio goes to Google."
 
     /** "si-LK · 1.8 s (0.15× real time) · 0.82: <text>" and the honest failures. */

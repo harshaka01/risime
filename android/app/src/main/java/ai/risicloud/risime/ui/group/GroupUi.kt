@@ -154,6 +154,8 @@ data class CreateGroupUi(
     val nameError: String? = null,
     val busy: Boolean = false,
     val error: String? = null,
+    /** Item 6: tabs are on (the group gets an Official tab, which Risi can read). */
+    val tabsOn: Boolean = false,
 ) {
     val canContinue: Boolean get() = selected.isNotEmpty() && !busy
     val canCreate: Boolean get() = canContinue && nameError == null && name.isNotBlank()
@@ -201,7 +203,7 @@ fun CreateGroupContent(
                         enabled = !ui.busy,
                     )
                     Text(
-                        "Messages in this group are end-to-end encrypted. New members don't see earlier messages.",
+                        createGroupEncryptionNote(ui.tabsOn),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -328,3 +330,10 @@ fun ConfirmDialog(title: String, text: String, confirm: String, onConfirm: () ->
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) } },
     )
 }
+
+/** The create-group note: groups are e2ee (§12.0); item 6: with tabs on, its Official tab can be read by Risi. */
+const val CREATE_GROUP_E2EE_NOTE = "Messages in this group are end-to-end encrypted. New members don't see earlier messages."
+const val CREATE_GROUP_TABS_NOTE =
+    "Private messages in this group are end-to-end encrypted. In Official, Risi can read them too. New members don't see earlier messages."
+
+fun createGroupEncryptionNote(tabsOn: Boolean): String = if (tabsOn) CREATE_GROUP_TABS_NOTE else CREATE_GROUP_E2EE_NOTE

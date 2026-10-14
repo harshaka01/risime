@@ -228,21 +228,40 @@ fun RisiTopBar(
 /** A header subtitle starting with "🔒 " is drawn as a lock Icon + the text (never the emoji). */
 const val HEADER_LOCK_PREFIX = "🔒 "
 
-/** (locked, text) of a header subtitle. */
+/** (locked with the Private lock, text) of a header subtitle. */
 fun headerSubtitleParts(subtitle: String): Pair<Boolean, String> =
     if (subtitle.startsWith(HEADER_LOCK_PREFIX)) true to subtitle.removePrefix(HEADER_LOCK_PREFIX) else false to subtitle
 
+/**
+ * Item 6: (marker, text) of a header subtitle: "🔒 " the Private lock, "🔐 " the Official lock (lock + Risi badge),
+ * else none.
+ */
+fun headerSubtitleMarker(subtitle: String): Pair<ai.risicloud.risime.ui.chat.EncMarker, String> = when {
+    subtitle.startsWith(HEADER_LOCK_PREFIX) -> ai.risicloud.risime.ui.chat.EncMarker.PRIVATE_LOCK to subtitle.removePrefix(HEADER_LOCK_PREFIX)
+    subtitle.startsWith(ai.risicloud.risime.ui.chat.HEADER_OFFICIAL_LOCK_PREFIX) ->
+        ai.risicloud.risime.ui.chat.EncMarker.OFFICIAL_LOCK to subtitle.removePrefix(ai.risicloud.risime.ui.chat.HEADER_OFFICIAL_LOCK_PREFIX)
+    else -> ai.risicloud.risime.ui.chat.EncMarker.NONE to subtitle
+}
+
 @Composable
 private fun HeaderSubtitle(subtitle: String, emphasis: Boolean) {
-    val (locked, text) = headerSubtitleParts(subtitle)
+    val (marker, text) = headerSubtitleMarker(subtitle)
     val color = if (emphasis) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }.testTag("risi_header_subtitle"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (locked) {
-            Icon(Icons.Filled.Lock, contentDescription = null, tint = color, modifier = Modifier.size(13.dp).testTag("risi_header_lock"))
-            Spacer(Modifier.width(3.dp))
+        when (marker) {
+            ai.risicloud.risime.ui.chat.EncMarker.PRIVATE_LOCK -> {
+                Icon(Icons.Filled.Lock, contentDescription = null, tint = color, modifier = Modifier.size(13.dp).testTag("risi_header_lock"))
+                Spacer(Modifier.width(3.dp))
+            }
+            // Item 6: Official / the Risi chat: never the Private lock (its own tag, so a gate never counts it as one).
+            ai.risicloud.risime.ui.chat.EncMarker.OFFICIAL_LOCK -> {
+                ai.risicloud.risime.ui.chat.OfficialLockIcon(13.dp, tint = color, modifier = Modifier.testTag("risi_header_official_lock"))
+                Spacer(Modifier.width(3.dp))
+            }
+            ai.risicloud.risime.ui.chat.EncMarker.NONE -> Unit
         }
         Text(text, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("risi_header_subtitle_text"))
     }

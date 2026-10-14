@@ -159,8 +159,19 @@ fun MediaThumb(c: AppContainer, m: MessageEntity, onOpen: () -> Unit) {
  * group), "Official history (read-only)" while off, and the Official member list (Risi with an
  * "AI agent" badge and no actions).
  */
-fun LazyListScope.officialInfoItems(ui: OfficialInfoUi, onToggle: (Boolean) -> Unit, onHistory: () -> Unit, onDismissError: () -> Unit) {
+fun LazyListScope.officialInfoItems(
+    ui: OfficialInfoUi,
+    onToggle: (Boolean) -> Unit,
+    onHistory: () -> Unit,
+    onDismissError: () -> Unit,
+    /** Item 6: a 1:1's chat info ("Private is only you and the other person"); false: a group's. */
+    dm: Boolean = false,
+) {
     item(key = "official_header") { SectionHeader("Official", Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.sm)) }
+    // Item 6 (honesty): Official is encrypted, but Risi (keys on RisiMe's server) can read it; Private can't be read by Risi.
+    item(key = "official_encryption") {
+        ai.risicloud.risime.ui.chat.OfficialEncryptionInfo(dm = dm, modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.xs))
+    }
     item(key = "official_switch") {
         Row(
             Modifier.fillMaxWidth().heightIn(min = Sizes.listRowMin)
@@ -277,7 +288,7 @@ fun DmChatInfoContent(
                     ai.risicloud.risime.ui.chat.E2eeInfoLine(encrypted = encrypted, notEncryptedText = notEncryptedText)
                 }
             }
-            official?.let { officialInfoItems(it, onToggle, onHistory, onDismissError) }
+            official?.let { officialInfoItems(it, onToggle, onHistory, onDismissError, dm = true) }
             lock?.let { chatLockItems(it) }
             item(key = "div") { HorizontalDivider(Modifier.padding(vertical = Spacing.sm)) }
             if (official != null) tabMediaItems(media, showOfficial = official.officialConversation != null, thumb = thumb)

@@ -230,6 +230,10 @@ private fun ServerSection(s: SettingsUiState, vm: SettingsViewModel) {
 const val ABOUT_E2EE_TEXT =
     "Chats are end-to-end encrypted (MLS) once everyone in them runs a current RisiMe. Each chat shows its state."
 
+/** Item 6 (honesty): Official and the Risi chat are encrypted, but Risi can read them. */
+const val ABOUT_OFFICIAL_TEXT =
+    "Official tabs and your Risi chat are encrypted too, but Risi can read them: its keys are on RisiMe's server. Private is only the people in the chat."
+
 @Composable
 internal fun AboutSection(container: ai.risicloud.risime.AppContainer? = null) {
     SectionHeader("About")
@@ -246,6 +250,11 @@ internal fun AboutSection(container: ai.risicloud.risime.AppContainer? = null) {
     if (BuildConfig.DEBUG) CryptoSelfTest()
     Text(
         ABOUT_E2EE_TEXT,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+        ABOUT_OFFICIAL_TEXT,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

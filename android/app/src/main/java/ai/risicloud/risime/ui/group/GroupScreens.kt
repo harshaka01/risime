@@ -173,6 +173,10 @@ fun GroupChatScreen(
         }
     }
     val scroll = rememberChatScrollState()
+    // Item 6: which encryption label this screen shows (Official: [risi] is passed; a 1:1's Official has its 1:1 call buttons).
+    val encSurface = ai.risicloud.risime.ui.chat.EncSurface.of(
+        official = risi != null, risiChat = risiChat, group = dmCallButtons == null && !directAddress,
+    )
     val risiChatReady by vm.risiChatReady.collectAsStateWithLifecycle()
     val notesActive by vm.notesActive.collectAsStateWithLifecycle()
     // §27.3/§27.4 opened from a Risi card ([Open chat] / [Open Risi chat]): scroll there once the message is here.
@@ -291,10 +295,12 @@ fun GroupChatScreen(
             RisiTopBar(
                 title = name,
                 titleSuffix = titleSuffix,
-                subtitle = typingLabel ?: connectionStatus(conn) ?: buildString {
-                    if (encrypted == true) append("🔒 ")
-                    append(subtitleOverride ?: if (risiChat) "Risi" else if (count == 1) "1 member" else "$count members")
-                },
+                // Item 6 (honesty): Private shows the lock; Official and the Risi chat show the Official lock and
+                // "Encrypted · Risi can read" (Risi's keys are on RisiMe's server), never the Private lock.
+                subtitle = typingLabel ?: connectionStatus(conn) ?: ai.risicloud.risime.ui.chat.headerEncryptionSubtitle(
+                    encSurface, encrypted == true,
+                    subtitleOverride ?: if (risiChat) "Risi" else if (count == 1) "1 member" else "$count members",
+                ),
                 emphasis = typingLabel != null,
                 onBack = onBack,
                 avatar = { if (risiChat) ai.risicloud.risime.ui.tabs.RisiAvatar(Sizes.avatarSmall + 4.dp) else InitialsAvatar(name, size = Sizes.avatarSmall + 4.dp, photoKey = vm.conversationId) },

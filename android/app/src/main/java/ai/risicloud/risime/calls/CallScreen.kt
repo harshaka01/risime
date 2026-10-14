@@ -133,6 +133,8 @@ data class CallScreenUi(
      * the agent badge, and only Speaker, Mute and End.
      */
     val risiCall: Boolean = false,
+    /** Item 6 (honesty): Private, or Official (1:1 or group): an Official call never shows the Private lock or wording. */
+    val encSurface: ai.risicloud.risime.ui.chat.EncSurface = ai.risicloud.risime.ui.chat.EncSurface.PRIVATE_DM,
 )
 
 /** v1.45: the build without the feature (or a call that can't add anyone). */
@@ -316,10 +318,11 @@ private fun TopBar(ui: CallScreenUi, a: CallScreenActions, scrim: Boolean) {
                 Spacer(Modifier.size(48.dp))
             }
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                if (ui.encrypted) {
-                    Icon(Icons.Default.Lock, null, Modifier.size(14.dp), tint = Color.White.copy(alpha = 0.85f))
+                // Item 6: the Private lock + "End-to-end encrypted", or the Official lock + its own wording.
+                ai.risicloud.risime.ui.chat.callEncryptionLabel(ui.encSurface, ui.encrypted)?.let { (marker, text) ->
+                    ai.risicloud.risime.ui.chat.EncMarkerIcon(marker, 14.dp, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.testTag("call_enc_" + marker.name.lowercase()))
                     Spacer(Modifier.width(Spacing.xs))
-                    Text("End-to-end encrypted", style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
+                    Text(text, style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.85f))
                 }
             }
             if (ui.risiCall) {
@@ -566,8 +569,8 @@ private fun SwitchPrompt(name: String, source: String, onPrompt: (Boolean, Boole
  * lives in the Calls tab's call info (call records).
  */
 @Composable
-fun CallInfoDialog(s: CallSnapshot, name: String, routes: CallRoutes, stats: DtlsStats?, onDismiss: () -> Unit) {
-    val lines = callInfoLines(s, routes, stats)
+fun CallInfoDialog(s: CallSnapshot, name: String, routes: CallRoutes, stats: DtlsStats?, onDismiss: () -> Unit, officialGroup: Boolean = false) {
+    val lines = callInfoLines(s, routes, stats, officialGroup)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(name) },
@@ -577,9 +580,9 @@ fun CallInfoDialog(s: CallSnapshot, name: String, routes: CallRoutes, stats: Dtl
 }
 
 /** The call info lines (decision 048: "End-to-end encrypted" only when verified). */
-fun callInfoLines(s: CallSnapshot, routes: CallRoutes, stats: DtlsStats?): List<Pair<String, String>> = listOfNotNull(
+fun callInfoLines(s: CallSnapshot, routes: CallRoutes, stats: DtlsStats?, officialGroup: Boolean = false): List<Pair<String, String>> = listOfNotNull(
     "Call" to (if (s.group) "Group " else "") + (if (s.video) "video call" else "voice call") + (if (s.sharing) " · sharing your screen" else if (s.peerSharing) " · watching a shared screen" else ""),
-    "Encryption" to (if (s.verified) "End-to-end encrypted (MLS-bound DTLS-SRTP)" else "Not verified yet"),
+    "Encryption" to ai.risicloud.risime.ui.chat.callEncryptionInfo(callEncSurface(s, officialGroup), s.verified),
     "Audio" to routeKindLabel(routes.current?.kind ?: EndpointUi.Kind.OTHER),
     stats?.localCandidateType?.let { l -> "Path" to (if (l == "relay" || stats.remoteCandidateType == "relay") "Relayed" else "Direct") },
 )
@@ -687,7 +690,19 @@ fun addControl(s: CallSnapshot, name: String, groupAdd: Boolean): ControlUi {
 }
 
 /** The one call screen's state for a call snapshot ([status] already worded by the caller). */
-fun callScreenUi(s: CallSnapshot, name: String, status: String, routes: CallRoutes, nowMs: Long, groupAdd: Boolean = false, moveLine: String? = null): CallScreenUi = CallScreenUi(
+/**
+ * Item 6: the call's encryption surface. A 1:1 call placed from (or offered as) Official is [EncSurface.OFFICIAL_DM]
+ * ([CallSnapshot.official]); a group call on an Official `grp:` ([officialGroup], from the tab rows) is
+ * [EncSurface.OFFICIAL_GROUP]; a Call Risi is [EncSurface.RISI_CHAT].
+ */
+fun callEncSurface(s: CallSnapshot, officialGroup: Boolean): ai.risicloud.risime.ui.chat.EncSurface = when {
+    s.risiCall -> ai.risicloud.risime.ui.chat.EncSurface.RISI_CHAT
+    s.group -> if (officialGroup) ai.risicloud.risime.ui.chat.EncSurface.OFFICIAL_GROUP else ai.risicloud.risime.ui.chat.EncSurface.PRIVATE_GROUP
+    s.official -> ai.risicloud.risime.ui.chat.EncSurface.OFFICIAL_DM
+    else -> ai.risicloud.risime.ui.chat.EncSurface.PRIVATE_DM
+}
+
+fun callScreenUi(s: CallSnapshot, name: String, status: String, routes: CallRoutes, nowMs: Long, groupAdd: Boolean = false, moveLine: String? = null, officialGroup: Boolean = false): CallScreenUi = CallScreenUi(
     name = name,
     status = status,
     stage = callStage(s.phase),
@@ -713,6 +728,7 @@ fun callScreenUi(s: CallSnapshot, name: String, status: String, routes: CallRout
     addControl = addControl(s, name, groupAdd),
     moveLine = moveLine,
     risiCall = s.risiCall,
+    encSurface = callEncSurface(s, officialGroup),
 )
 
 /**

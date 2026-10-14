@@ -186,7 +186,9 @@ class CallActivity : ComponentActivity() {
                             snap.phase == CallPhase.RINGING_IN -> if (snap.group) (if (snap.video) "Group video call" else "Group voice call") else if (snap.video) "Incoming video call" else "RisiMe voice call"
                             else -> snap.notice?.let { CallTexts.notice(it, title) } ?: CallTexts.status(snap.phase, snap.connectedAtMs, now, video = snap.video).orEmpty()
                         }
-                        val ui = callScreenUi(snap, title, status, routes, now, groupAdd = calls.canAdvertiseAddToCall(), moveLine = mv?.takeIf { it.callId == snap.callId }?.line)
+                        // Item 6: a group call on an Official grp: (Risi holds its keys) never shows the Private lock.
+                        val officialGroup = snap.group && !(application as RisiMeApp).container.chatTabs.private(snap.conversationId)
+                        val ui = callScreenUi(snap, title, status, routes, now, groupAdd = calls.canAdvertiseAddToCall(), moveLine = mv?.takeIf { it.callId == snap.callId }?.line, officialGroup = officialGroup)
                         val wm = calls.media as? WebRtcCallMedia
                         CallScreen(
                             ui,
@@ -236,7 +238,7 @@ class CallActivity : ComponentActivity() {
                                 GroupParticipantList(snap.members.map { m -> groupMemberUi(m, memberNames[m.userId] ?: "…") })
                             }) else null,
                         )
-                        if (info) CallInfoDialog(snap, title, routes, wm?.lastStats, onDismiss = { info = false })
+                        if (info) CallInfoDialog(snap, title, routes, wm?.lastStats, onDismiss = { info = false }, officialGroup = officialGroup)
                         adding?.let { p ->
                             AddPeopleDialog(
                                 p.candidates, p.room, p.peerName, p.groupName, p.official,

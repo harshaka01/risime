@@ -79,7 +79,7 @@ object VoiceStrings {
     const val LOCKED_HINT = "Recording"
     const val TOO_SHORT = "Hold to record, release to send"
     const val MIC_RATIONALE_TITLE = "Allow the microphone"
-    const val MIC_RATIONALE = "RisiMe needs the microphone to record voice notes. Audio is recorded only while you hold the mic (or after you lock it), and the note is end-to-end encrypted."
+    const val MIC_RATIONALE = "RisiMe needs the microphone to record voice notes. Audio is recorded only while you hold the mic (or after you lock it), and the note is encrypted like the chat's messages (in Official, Risi can read it)."
     const val MIC_DENIED = "Voice notes need the microphone. You can allow it in Android Settings → Apps → RisiMe → Permissions."
     const val CANT_RECORD = "This phone can't record voice notes"
     const val MIC_BUSY = "The microphone is busy"
