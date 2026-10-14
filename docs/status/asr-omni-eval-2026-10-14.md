@@ -134,8 +134,14 @@ speech and on real Singlish (49.0% vs 27.5% CER), and it also writes English in 
   128 encoder layers read from the checkpoint for every request (pages dropped after use), floor
   checked at load and per layer. Asked only when ticked on the console ("omniASR 7B (compare only,
   slow)") or named in `opts[:extra_models]`; 180 s timeout (`RISI_SPEECH_COMPARE_EXTRA_TIMEOUT_MS`).
-  Time per clip: to be measured after the nightly.7 gates (estimate from the eval run: ~15-20 s for
-  a 5-10 s clip).
+  **Time per clip (measured 2026-10-14 01:56 UTC, through the service's /v1/audio/compare):** a
+  6.2-s Sinhala clip took **17.9 s** end to end: 3.2 s first load (resident part) + **11.1 s**
+  model time (encoder streaming + decoding; RTF ~1.8 per request, vs 0.22 in the batched eval,
+  because every request reads all 128 layers). Text near-perfect (one suffix differs). While
+  loaded it costs **~4.6 GB of MemAvailable** (2.8-3.4 GB GPU + ~2.2 GB host); the next two
+  clips were **refused by the 4 GB floor** (MemAvailable fell from ~9.8 GB as other work grew)
+  and the retry found only 2.5-8 GB free, so only one clip is measured. Expect ~10-15 s per
+  5-10 s chunk, and only when ≥ ~10 GB is available; otherwise the console shows it as failed.
 - **Console:** the Speech page's Test card lists the omniASR models as compare-only ticks; the
   Models table marks them "compare only"; they are never offered as a language's route
   (`SpeechRoutes.put` refuses them).
