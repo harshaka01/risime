@@ -315,7 +315,7 @@ defmodule RisiMe.Agent.Voice do
     t0 = System.monotonic_time(:millisecond)
     hint = hint(conv, sender)
     VoiceJobs.working(conv, note_id, sender, hint)
-    result = run_speech(conv, note, hint, sender)
+    result = run_speech(conv, note, hint, sender, note_id)
     latency = System.monotonic_time(:millisecond) - t0
     # The audio, the ciphertext and the key lived only in `run_speech/2`'s frames.
     :erlang.garbage_collect()
@@ -353,7 +353,7 @@ defmodule RisiMe.Agent.Voice do
   """
   def retry(conv, note_id, sender, note, request_id) do
     t0 = System.monotonic_time(:millisecond)
-    result = run_speech(conv, note, hint(conv, sender), sender)
+    result = run_speech(conv, note, hint(conv, sender), sender, note_id)
     latency = System.monotonic_time(:millisecond) - t0
     :erlang.garbage_collect()
 
@@ -416,19 +416,23 @@ defmodule RisiMe.Agent.Voice do
   # `Speech.transcribe_note/2` holds the live budget (3 × duration, ≥ 15 s), retries a fast error
   # once, then falls back (the phone's transcript while RISI_VOICE_PHONE_FALLBACK is on, then the
   # fast CPU model).
-  defp run_speech(conv, note, hint, sender) do
+  defp run_speech(conv, note, hint, sender, note_id) do
     opts =
       Speech.hint_opts(hint) ++
         [
           duration_ms: note.duration_ms,
           phone_transcript: Map.get(note, :phone_transcript),
-          phone_fallback: RisiMe.Agents.Flags.feature_for("RISI_VOICE_PHONE_FALLBACK", sender),
+          phone_fallback: phone_fallback?(sender, note),
           sender: sender
         ]
 
     case audio(conv, note) do
       {:ok, audio} ->
-        case Speech.transcribe_note(audio, opts) do
+        result = Speech.transcribe_note(audio, opts)
+        # Harsha's Sinhala compare mode (dev users' own notes only; his Risi chat only).
+        RisiMe.Agent.SpeechCompare.maybe_start(conv, note_id, sender, audio, note, result, hint)
+
+        case result do
           {:ok, r} -> {:ok, r}
           {:error, _} -> {:error, :failed}
         end
@@ -436,6 +440,14 @@ defmodule RisiMe.Agent.Voice do
       {:error, _} = e ->
         e
     end
+  end
+
+  # The phone transcript may stand in for ours: while RISI_VOICE_PHONE_FALLBACK is on, or for a dev
+  # user's own opt-in Google transcript (Harsha 2026-10-14, "Transcript (Google)").
+  defp phone_fallback?(sender, note) do
+    RisiMe.Agents.Flags.feature_for("RISI_VOICE_PHONE_FALLBACK", sender) or
+      (match?(%{"engine" => "android-online-google"}, Map.get(note, :phone_transcript)) and
+         RisiMe.Agent.SpeechCompare.enabled_for?(sender))
   end
 
   defp audio(conv, note) do
@@ -484,7 +496,8 @@ defmodule RisiMe.Agent.Voice do
       reason: reason,
       p: p,
       parts: if(status == "ok", do: parts(r), else: []),
-      source: Map.get(r, :source)
+      source: Map.get(r, :source),
+      engine: Map.get(r, :engine)
     }
   end
 
@@ -500,7 +513,8 @@ defmodule RisiMe.Agent.Voice do
       reason: nil,
       p: nil,
       parts: [],
-      source: nil
+      source: nil,
+      engine: nil
     }
 
   defp parts(r) do
@@ -820,10 +834,13 @@ defmodule RisiMe.Agent.Voice do
   end
 
   # Proposal 2026-10-14-phone-transcript-fallback: a transcript taken from the sender phone says
-  # so (`source: "phone"`, provider `phone`); only ever while RISI_VOICE_PHONE_FALLBACK is on.
-  defp phone_source(risi, %{source: "phone"}) do
+  # so (`source: "phone"`, provider `phone`, and its `engine`: "android-online-google" is
+  # rendered "Transcript (Google)"); only while RISI_VOICE_PHONE_FALLBACK is on, or for a dev
+  # user's own Google transcript.
+  defp phone_source(risi, %{source: "phone"} = t) do
     risi
     |> Map.put("source", "phone")
+    |> then(&if(is_binary(t[:engine]), do: Map.put(&1, "engine", t[:engine]), else: &1))
     |> update_in(["made_by"], &Map.put(&1, "provider", "phone"))
   end
 
@@ -877,6 +894,9 @@ defmodule RisiMe.Agent.Voice do
   buffered working copies go with the note ids (`Transcript.delete/2`, by the caller).
   """
   def notes_deleted(conv, ids) when is_list(ids) do
+    # Harsha's gold set (SpeechGold): a deleted note's sealed audio and labels go too.
+    for id <- ids, is_binary(id), do: RisiMe.Agent.SpeechGold.delete(id)
+
     if Repo.exists?(
          from v in "risi_voice_transcripts",
            where: v.conversation_id == ^conv and v.note_message_id in ^ids

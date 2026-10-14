@@ -64,11 +64,40 @@ defmodule RisiMe.Agent.SpeechRoutes do
   def put(_, _, _, _), do: {:error, :invalid}
 
   @doc """
+  A per-user override (Harsha 2026-10-14, the Voice agent's route decision from his own labelled
+  notes, `RisiMe.Agent.SpeechCompare`): `"auto"` (none), a model alias, or `"none"` (show
+  nothing: the note is "couldn't hear clearly"). Key `speech_route_<lang>_user_<uuid>`.
+  """
+  def user_choice(user, lang) when is_binary(user) and lang in @langs do
+    case Settings.get(user_key(user, lang), "auto") do
+      v when is_binary(v) and v != "" -> v
+      _ -> "auto"
+    end
+  end
+
+  def user_choice(_, _), do: "auto"
+
+  @doc "Sets (or, with `\"auto\"`, clears) `user`'s override for `lang` (audit-logged as `by`)."
+  def put_user(user, lang, "auto", by), do: Settings.clear(user_key(user, lang), by)
+  def put_user(user, lang, v, by) when is_binary(v), do: Settings.put(user_key(user, lang), v, by)
+
+  defp user_key(user, lang), do: "speech_route_#{lang}_user_#{String.downcase(user)}"
+
+  @doc """
   The route for one chunk: `:auto` (today's path) or `{:manual, model, language | nil}`.
-  No I/O at all while every language is on Auto.
+  No I/O at all while every language is on Auto (and the sender has no override).
+  `opts[:sender]`'s per-user overrides win over the global choice.
   """
   def pick(audio, opts) when is_binary(audio) do
-    choices = choices()
+    user = opts[:sender]
+
+    choices =
+      Map.new(choices(), fn {lang, v} ->
+        case user_choice(user, lang) do
+          "auto" -> {lang, v}
+          u -> {lang, u}
+        end
+      end)
 
     if Enum.all?(choices, fn {_, v} -> v == "auto" end) do
       :auto

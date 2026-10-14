@@ -42,7 +42,9 @@ defmodule RisiMe.Agents.Flags do
     # Incident 2026-10-14 (Sinhala slow), proposals 2026-10-14-transcribe-progress and
     # -phone-transcript-fallback: off until root applies them (v1.48).
     "RISI_VOICE_PROGRESS" => :risi_voice_progress,
-    "RISI_VOICE_PHONE_FALLBACK" => :risi_voice_phone_fallback
+    "RISI_VOICE_PHONE_FALLBACK" => :risi_voice_phone_fallback,
+    # Harsha 2026-10-14: the Sinhala compare mode on dev users' own notes (SpeechCompare).
+    "RISI_SPEECH_COMPARE_DEV" => :risi_speech_compare_dev
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
@@ -50,7 +52,8 @@ defmodule RisiMe.Agents.Flags do
   @feature_defaults %{
     "RISI_SPOKEN_MENTION" => "canary",
     "RISI_VOICE_PROGRESS" => "off",
-    "RISI_VOICE_PHONE_FALLBACK" => "off"
+    "RISI_VOICE_PHONE_FALLBACK" => "off",
+    "RISI_SPEECH_COMPARE_DEV" => "canary"
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000

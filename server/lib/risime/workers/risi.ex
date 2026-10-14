@@ -198,6 +198,8 @@ defmodule RisiMe.Workers.Risi do
   defp run(%{"kind" => "request", "conv" => conv, "user_id" => user} = a) do
     cond do
       not Secretary.active_human?(conv, user) -> :ok
+      # Harsha's Sinhala compare mode (dev users only): "1"…"n" / "fix: …" labels his note.
+      compare_label?(conv, user, a) -> :ok
       a["error"] -> Requests.handle(conv, a["message_id"], a["request_id"], user, a["error"])
       true -> Requests.handle(conv, a["message_id"], a["request_id"], user, nil, a["t0"])
     end
@@ -266,4 +268,22 @@ defmodule RisiMe.Workers.Risi do
   defp run(_args), do: :ok
 
   defp risi_chat?(conv), do: RisiMe.Groups.Tabs.risi_chat?(conv)
+
+  defp compare_label?(conv, user, %{"message_id" => mid}) when is_binary(mid) do
+    if RisiMe.Agent.SpeechCompare.enabled_for?(user) do
+      case Secretary.envelope(conv, mid) do
+        %{"text" => text} when is_binary(text) ->
+          RisiMe.Agent.SpeechCompare.label_reply(conv, user, text) == :handled
+
+        _ ->
+          false
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp compare_label?(_conv, _user, _a), do: false
 end

@@ -1300,6 +1300,156 @@ defmodule RisiMe.Agent.VoiceTest do
     end
   end
 
+  describe "Harsha's Sinhala compare mode (RISI_SPEECH_COMPARE_DEV, dev users' own notes)" do
+    defmodule CompareFake do
+      @moduledoc "Candidates for the compare mode: fixed texts per model."
+      def transcribe_model(_audio, "qwen3-asr-0.6b-sinhala", _opts),
+        do: {:ok, %{text: "මම ඒක " <> String.duplicate("කරන්නේ ", 20), model: "q"}}
+
+      def transcribe_model(_audio, "omnilingual-ctc-1b", _opts),
+        do: {:ok, %{text: "හෙට උදේ දහයට හමුවෙමු", model: "c"}}
+
+      def extra_transcribe(_audio, _model, _opts), do: {:error, :off}
+    end
+
+    setup w do
+      dir = Path.join(System.tmp_dir!(), "asr-gold-#{System.unique_integer([:positive])}")
+
+      prev =
+        for k <- [:risi_asr_gold_dir, :risi_speech_compare_impl],
+            do: {k, Application.get_env(:risime, k)}
+
+      on_exit(fn ->
+        for {k, v} <- prev, do: Application.put_env(:risime, k, v)
+        File.rm_rf(dir)
+      end)
+
+      Application.put_env(:risime, :risi_asr_gold_dir, dir)
+      Application.put_env(:risime, :risi_speech_compare_impl, CompareFake)
+      Application.put_env(:risime, :risi_dev_users, [String.downcase(w.a.user.id)])
+      rc = RisiMe.RisiHelpers.own_risi_chat!(w.a.user)
+      intervals!(rc, [w.a.user.id])
+      %{rc: rc, dir: dir}
+    end
+
+    test "his Sinhala note: the chat gets the guarded transcript, his Risi chat the compare; a reply labels it",
+         w do
+      text = "හෙට උදේ දහයට හමුවෙමු"
+      phone = %{"text" => text, "lang" => "si-LK", "engine" => "android-on-device"}
+      {env, _, _} = note!(w.a.user.id, w.og, "si:" <> text, %{"phone_transcript" => phone})
+      {id, s} = receive_note(w.og, w.a.user, env)
+      {_, risi} = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert risi["status"] == "ok" and risi["text"] == text
+
+      {body, _} = await_post(w.rc, "answer", fn _ -> true end)
+      assert body =~ "Sinhala compare for your voice note"
+      assert body =~ "1. Qwen3-ASR Sinhala" and body =~ "guard: repeat_token"
+      assert body =~ "2. omniASR-CTC-1B"
+      assert body =~ "3. omniASR-LLM-7B: skipped"
+      assert body =~ "4. Phone (on-device)"
+      # Never in the Official chat.
+      refute_post(w.og, "answer")
+
+      # Sealed on disk, with the training marker, mode 600.
+      assert File.exists?(Path.join(w.dir, "NO_TRAINING"))
+      assert {:ok, %{mode: mode}} = File.stat(Path.join(w.dir, "#{id}.audio.sealed"))
+      assert Bitwise.band(mode, 0o777) == 0o600
+      refute File.read!(Path.join(w.dir, "#{id}.json.sealed")) =~ "හෙට"
+
+      # His reply "2" labels it; the scores and the route decision follow.
+      assert RisiMe.Agent.SpeechCompare.label_reply(w.rc, w.a.user.id, " 2 ") == :handled
+      {saved, _} = await_post(w.rc, "answer", &(&1["answer"] =~ "Saved"))
+      assert saved =~ "omnilingual-ctc-1b CER 0%"
+      [gold] = RisiMe.Agent.SpeechGold.labelled()
+      assert gold["label"] == text and gold["label_source"] == "pick:2"
+      assert gold["scores"]["omnilingual-ctc-1b"]["cer"] == 0.0
+      assert gold["scores"]["qwen3-asr-0.6b-sinhala"]["cer"] > 0.5
+      # First note: CTC clearly less wrong → his per-user Sinhala route.
+      assert RisiMe.Agent.SpeechRoutes.user_choice(w.a.user.id, "si") == "omnilingual-ctc-1b"
+      assert RisiMe.Agent.SpeechRoutes.user_choice(w.b.user.id, "si") == "auto"
+
+      # Nothing left to label: a plain "1" is a normal request again.
+      assert RisiMe.Agent.SpeechCompare.label_reply(w.rc, w.a.user.id, "1") == :pass
+
+      # Deleting the note deletes its gold files.
+      Voice.notes_deleted(w.og, [id])
+      refute File.exists?(Path.join(w.dir, "#{id}.audio.sealed"))
+    end
+
+    test "his opt-in Google transcript: 'Google' in the compare, and shown when ours fails the guard",
+         w do
+      google = %{
+        "text" => "හෙට උදේ දහයට හමුවෙමු",
+        "lang" => "si-LK",
+        "engine" => "android-online-google"
+      }
+
+      loop = "si:මම ඒක " <> String.duplicate("කරන්නේ ", 20)
+      {env, _, _} = note!(w.a.user.id, w.og, loop, %{"phone_transcript" => google})
+      {_, s} = receive_note(w.og, w.a.user, env)
+      {_, risi} = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+
+      assert %{
+               "status" => "ok",
+               "text" => "හෙට උදේ දහයට හමුවෙමු",
+               "source" => "phone",
+               "engine" => "android-online-google",
+               "model" => "phone-google"
+             } = risi
+
+      {body, _} = await_post(w.rc, "answer", fn _ -> true end)
+      assert body =~ "4. Google"
+    end
+
+    test "not a dev user, or the flag off: no compare", w do
+      Application.put_env(:risime, :risi_dev_users, [])
+      {env, _, _} = note!(w.a.user.id, w.og, "si:හෙට")
+      {_, s} = receive_note(w.og, w.a.user, env)
+      _ = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      Process.sleep(200)
+      refute_post(w.rc, "answer")
+      assert File.ls(w.dir) in [{:error, :enoent}, {:ok, []}]
+    end
+
+    test "parse, cer/wer and the decision rule" do
+      alias RisiMe.Agent.SpeechCompare, as: C
+      assert C.parse("3") == {:ok, :pick, 3}
+      assert C.parse("fix: හෙට එනවා") == {:ok, :typed, "හෙට එනවා"}
+      assert C.parse("what's on tomorrow?") == :no
+      assert C.cer("abc", "abd") == 0.333
+      assert C.wer("a b c", "a x c") == 0.333
+
+      assert {"omnilingual-ctc-1b", _} =
+               C.decide(1, %{
+                 "omnilingual-ctc-1b" => {0.2, 1},
+                 "qwen3-asr-0.6b-sinhala" => {0.9, 1}
+               })
+
+      assert {"none", _} =
+               C.decide(2, %{
+                 "omnilingual-ctc-1b" => {0.7, 2},
+                 "qwen3-asr-0.6b-sinhala" => {0.9, 2}
+               })
+
+      assert {"auto", _} =
+               C.decide(2, %{
+                 "omnilingual-ctc-1b" => {0.3, 2},
+                 "qwen3-asr-0.6b-sinhala" => {0.35, 2}
+               })
+
+      assert {"qwen3-asr-0.6b-sinhala", _} =
+               C.decide(5, %{
+                 "omnilingual-ctc-1b" => {0.3, 5},
+                 "qwen3-asr-0.6b-sinhala" => {0.2, 5}
+               })
+
+      assert {"none", _} = C.decide(6, %{"omnilingual-ctc-1b" => {0.7, 5}})
+    end
+  end
+
   describe "PART 9: canary switches (RISI_VOICE_TRANSCRIBE, RISI_ACTION_ITEMS)" do
     test "canary transcribes only RISI_DEV_USERS' notes; /auth/config says off", w do
       Application.put_env(:risime, :risi_test_pid, self())

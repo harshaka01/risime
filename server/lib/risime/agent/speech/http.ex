@@ -83,6 +83,22 @@ defmodule RisiMe.Agent.Speech.Http do
   def transcribe(audio, opts \\ []) when is_binary(audio) do
     # Decision 089: an admin's manual model for the chunk's language (Auto: no I/O, unchanged).
     case RisiMe.Agent.SpeechRoutes.pick(audio, opts) do
+      # A per-user "show nothing" (SpeechCompare's route decision): no model is good enough yet.
+      {:manual, "none", lang} ->
+        {:ok,
+         %{
+           text: "",
+           language: lang || "si",
+           model: "none",
+           elapsed_ms: 0,
+           speech: true,
+           romanised: false,
+           language_probability: nil,
+           script: nil,
+           segments: [],
+           rejected: "route_none"
+         }}
+
       {:manual, model, lang} ->
         case post_transcription(audio, model, Keyword.put(opts, :language, lang)) do
           {:error, e} when e in [:not_served, :failed] -> transcribe_auto(audio, opts)
@@ -495,6 +511,53 @@ defmodule RisiMe.Agent.Speech.Http do
          ) do
       {:error, :not_served} -> {:error, :unavailable}
       other -> other
+    end
+  end
+
+  @doc """
+  One model by name on the speech service (Harsha's Sinhala compare mode): `opts` `language`,
+  `timeout`, `priority` (default batch). A 503 (no memory) is `{:error, :unavailable}`.
+  """
+  def transcribe_model(audio, model, opts \\ []) when is_binary(audio) and is_binary(model) do
+    case post_transcription(audio, model, Keyword.put_new(opts, :priority, "batch")) do
+      {:error, :not_served} -> {:error, :not_served}
+      other -> other
+    end
+  end
+
+  @doc """
+  One model on the extra compare service (omniASR, `compare_extra_url`): `{:ok, result}`,
+  `{:error, :off}` when none is configured, or an error.
+  """
+  def extra_transcribe(audio, model, opts \\ []) when is_binary(audio) do
+    case extra() do
+      {:ok, base, _} ->
+        fields =
+          [
+            file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"},
+            model: model,
+            response_format: "verbose_json"
+          ] ++ if(is_binary(opts[:language]), do: [language: opts[:language]], else: [])
+
+        t0 = System.monotonic_time(:millisecond)
+        timeout = Keyword.get(opts, :timeout, extra_timeout())
+
+        case Req.post(req(base <> "/v1/audio/transcriptions", timeout), form_multipart: fields) do
+          {:ok, %{status: 200, body: %{} = b}} ->
+            {:ok, result(b, model, System.monotonic_time(:millisecond) - t0)}
+
+          {:ok, %{status: 503}} ->
+            {:error, :unavailable}
+
+          {:error, %{reason: :timeout}} ->
+            {:error, :timeout}
+
+          _ ->
+            {:error, :failed}
+        end
+
+      :off ->
+        {:error, :off}
     end
   end
 

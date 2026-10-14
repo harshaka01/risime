@@ -126,6 +126,13 @@ defmodule RisiMe.Agent.Speech do
   def phone_model, do: @phone_model
 
   @doc """
+  The alias of a phone transcript by its engine: `phone-google` for Harsha's opt-in Google
+  online recogniser (`android-online-google`, "Transcript (Google)"), else `phone-on-device`.
+  """
+  def phone_model_of(%{"engine" => "android-online-google"}), do: "phone-google"
+  def phone_model_of(_), do: @phone_model
+
+  @doc """
   A voice note (§37.6) under the live budget, with the fallbacks (incident 2026-10-14,
   docs/status/incident-2026-10-14-sinhala-slow.md):
 
@@ -148,7 +155,9 @@ defmodule RisiMe.Agent.Speech do
     dur = opts[:duration_ms]
     budget = budget_ms(dur)
     t0 = System.monotonic_time(:millisecond)
-    primary_opts = Keyword.take(opts, [:language_hint]) ++ [timeout: budget, priority: "live"]
+
+    primary_opts =
+      Keyword.take(opts, [:language_hint, :sender]) ++ [timeout: budget, priority: "live"]
 
     phone_text =
       case phone_transcript(opts[:phone_transcript]) do
@@ -156,8 +165,19 @@ defmodule RisiMe.Agent.Speech do
         _ -> nil
       end
 
+    route_phone? =
+      is_binary(opts[:sender]) and phone_text != nil and opts[:phone_fallback] == true and
+        "si" in List.wrap(opts[:language_hint]) and
+        RisiMe.Agent.SpeechRoutes.user_choice(opts[:sender], "si") == "phone"
+
     {result, why} =
-      case primary(audio, primary_opts, t0, budget) do
+      case if(route_phone?, do: :route_phone, else: primary(audio, primary_opts, t0, budget)) do
+        :route_phone ->
+          # The Voice agent's route decision for this user: the phone's (Google) transcript wins
+          # on his notes until one of our models beats it (SpeechCompare's promotion rule).
+          {phone_fallback(opts)
+           |> then(fn {:ok, r} -> {:ok, Map.put(r, :fallback_reason, "route")} end), "route"}
+
         {:ok, r} ->
           case guard(r, dur, phone_text) do
             :ok ->
@@ -257,7 +277,8 @@ defmodule RisiMe.Agent.Speech do
        %{
          text: text,
          language: language,
-         model: @phone_model,
+         model: phone_model_of(opts[:phone_transcript]),
+         engine: opts[:phone_transcript]["engine"],
          elapsed_ms: 0,
          speech: true,
          romanised: language == "si" and romanised?(text),
