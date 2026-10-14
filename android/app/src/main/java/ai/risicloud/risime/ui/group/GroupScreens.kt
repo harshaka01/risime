@@ -601,10 +601,11 @@ internal fun GroupMessageList(
                     onMenu = s?.let { x -> { if (x.selecting) x.onToggle() else x.onDelete() } }, onTap = s?.takeIf { it.selecting }?.onToggle,
                     tail = startsRun(items, i),
                 )
-            } else if (risi != null && ai.risicloud.risime.data.tabs.RisiMessages.meta(item.m) != null) {
+            } else if (risi != null && ai.risicloud.risime.data.tabs.RisiMessages.metaForDisplay(item.m) != null) {
                 // §24.11: stored only when it came from an attested agent leaf in Official (RisiMessages.honoured).
+                // Hotfix 2026-10-14: an unreadable `risi` object still draws (its body or the "update RisiMe" line).
                 ai.risicloud.risime.ui.chat.RisiCardActions(item.m, x, del?.selectFor(item.m, selection)) {
-                    ai.risicloud.risime.ui.tabs.RisiCardRow(item.m, ai.risicloud.risime.data.tabs.RisiMessages.meta(item.m)!!, risi)
+                    ai.risicloud.risime.ui.tabs.RisiCardRow(item.m, ai.risicloud.risime.data.tabs.RisiMessages.metaForDisplay(item.m)!!, risi)
                 }
             } else {
                 val bubble: @Composable () -> Unit = { GroupBubble(

@@ -224,6 +224,24 @@ object LenientIdListSerializer : kotlinx.serialization.json.JsonTransformingSeri
     }
 }
 
+/**
+ * Hotfix 2026-10-14: a list of texts where each element may be a string or an object with `text`
+ * (§35.4 the brief's `decisions` are `{"text", "conversation_id"}`; a summary's are strings). Other
+ * elements are skipped, so the whole `risi` object still parses.
+ */
+object LenientTextListSerializer : kotlinx.serialization.json.JsonTransformingSerializer<List<String>>(ListSerializer(String.serializer())) {
+    override fun transformDeserialize(element: kotlinx.serialization.json.JsonElement): kotlinx.serialization.json.JsonElement {
+        val arr = element as? JsonArray ?: return JsonArray(emptyList())
+        return JsonArray(arr.mapNotNull { e ->
+            when (e) {
+                is JsonPrimitive -> e.takeIf { it.isString }
+                is JsonObject -> (e["text"] as? JsonPrimitive)?.takeIf { it.isString }
+                else -> null
+            }
+        })
+    }
+}
+
 /** §29.3 request bodies (built as JSON: an absent field and `null` mean different things in a PATCH). */
 object RisiCalendarBodies {
     fun create(

@@ -113,6 +113,7 @@ data class RisiMeta(
     val sections: List<RisiSection> = emptyList(),
     // summary
     val summary: String? = null,
+    @Serializable(with = LenientTextListSerializer::class)
     val decisions: List<String> = emptyList(),
     @SerialName("action_items") val actionItems: List<String> = emptyList(),
     @SerialName("open_questions") val openQuestions: List<String> = emptyList(),

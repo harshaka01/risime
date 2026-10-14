@@ -77,18 +77,18 @@ fun splitOwner(item: String, names: Collection<String>): Pair<String?, String> {
 fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier: Modifier = Modifier) {
     if (r.kind == RisiKinds.COMMITMENT_UPDATE) {
         // The original card shows the new state; here only the small line.
-        SystemLineText(row.body)
+        SystemLineText(ai.risicloud.risime.data.tabs.RisiRender.bodyOrFallback(row.body))
         return
     }
     if (r.kind == ai.risicloud.risime.net.RisiKinds127.ITEM_UPDATE) {
         // §27.5 applied to the summary card it belongs to (no bubble); without that card, a small line.
-        if (!ai.risicloud.risime.data.tabs.RisiLedger.updateHasCard(r, ctx.messages)) SystemLineText(row.body)
+        if (!ai.risicloud.risime.data.tabs.RisiLedger.updateHasCard(r, ctx.messages)) SystemLineText(ai.risicloud.risime.data.tabs.RisiRender.bodyOrFallback(row.body))
         return
     }
     if (r.kind == ai.risicloud.risime.net.RisiKinds135.CONFIRM_UPDATE) {
         // v1.35 §34.2 applied to the card with that write_id (greyed, "Replaced by your newer request"); no bubble.
         // Without that card on this phone, a small line.
-        if (!ai.risicloud.risime.data.tabs.RisiP0Cards.confirmUpdateHasCard(r, ctx.messages)) SystemLineText(row.body)
+        if (!ai.risicloud.risime.data.tabs.RisiP0Cards.confirmUpdateHasCard(r, ctx.messages)) SystemLineText(ai.risicloud.risime.data.tabs.RisiRender.bodyOrFallback(row.body))
         return
     }
     if (r.kind == ai.risicloud.risime.net.RisiKinds129.EVENT_UPDATE) {
@@ -144,7 +144,9 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     RisiKinds.COMMITMENT -> CommitmentCard(row, r, ctx)
                     RisiKinds.REMINDER -> ReminderCard(row, r, ctx)
                     RisiKinds.ESCALATION -> EscalationCard(row, r, ctx)
-                    RisiKinds.DIGEST -> if (r.scope == "personal") PersonalDigestCard(r, ctx) else DigestCard(r, ctx)
+                    // Hotfix 2026-10-14: the §35.4 brief (scope "brief"), an unknown scope or an empty card shows `body` (= the list preview).
+                    RisiKinds.DIGEST -> if (ai.risicloud.risime.data.tabs.RisiRender.digestShowsBody(r)) ai.risicloud.risime.ui.common.RisiMarkdownText(ai.risicloud.risime.data.tabs.RisiRender.bodyOrFallback(row.body), modifier = Modifier.testTag("risi_digest_body"))
+                        else if (r.scope == "personal") PersonalDigestCard(r, ctx) else DigestCard(r, ctx)
                     RisiKinds.ANSWER -> if (r.clarify != null) RisiClarifyCard(row, r, ctx) else AnswerCard(row, r, ctx)
                     RisiKinds.SUMMARY -> SummaryCard(r, ctx)
                     RisiKinds.REPORT -> ReportCard(r)
@@ -168,12 +170,13 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
                     ai.risicloud.risime.net.RisiKinds142.ACTION_ITEMS, ai.risicloud.risime.net.RisiKinds142.ACTION_CONFIRM -> {
                         val card = remember(row.systemJson) { ai.risicloud.risime.net.RisiActionCard.parse(row.systemJson) }
                         when {
-                            card == null -> ai.risicloud.risime.ui.common.RisiMarkdownText(row.body)
+                            card == null -> ai.risicloud.risime.ui.common.RisiMarkdownText(ai.risicloud.risime.data.tabs.RisiRender.bodyOrFallback(row.body))
                             card.kind == ai.risicloud.risime.net.RisiKinds142.ACTION_ITEMS -> ActionItemsCardBody(row, card, ctx)
                             else -> ActionConfirmCardBody(row, card, ctx)
                         }
                     }
-                    else -> ai.risicloud.risime.ui.common.RisiMarkdownText(row.body)
+                    // An unknown or unsupported kind: its body, else the "update RisiMe" line; never nothing.
+                    else -> ai.risicloud.risime.ui.common.RisiMarkdownText(ai.risicloud.risime.data.tabs.RisiRender.visibleText(row.body, r), modifier = Modifier.testTag("risi_fallback"))
                 }
                 FeedbackRow(r, ctx)
             }
@@ -185,7 +188,7 @@ private fun headerOf(r: RisiMeta) = risiCalendarHeader(r) ?: when (r.kind) {
     RisiKinds.COMMITMENT -> "Risi · Track this?"
     RisiKinds.REMINDER -> "Risi · Reminder"
     RisiKinds.ESCALATION -> "Risi · Overdue"
-    RisiKinds.DIGEST -> (if (r.scope == "personal") "Risi · Your items" else "Risi · Open items") + (r.date?.let { " · $it" } ?: "")
+    RisiKinds.DIGEST -> ai.risicloud.risime.data.tabs.RisiRender.digestHeader(r)
     RisiKinds.ANSWER -> if (r.clarify != null) ai.risicloud.risime.data.tabs.RisiP0Cards.CLARIFY_HEADER else "Risi"
     RisiKinds.SUMMARY -> "Risi · Summary" + if (r.partial) " (partial)" else ""
     RisiKinds.REPORT -> "Risi · Report"

@@ -34,6 +34,18 @@ object RisiMessages {
     }
 
     /**
+     * Hotfix 2026-10-14: the row's Risi model for drawing. A stored `risi` object that this version
+     * can't read becomes `kind: "unknown"`, which draws as its body or the "update RisiMe" line
+     * ([RisiRender]); a Risi message never disappears. Null: an ordinary message.
+     */
+    fun metaForDisplay(m: MessageEntity): RisiMeta? {
+        if (m.kind != MessageEntity.KIND_TEXT || m.systemJson.isNullOrBlank()) return null
+        return meta(m) ?: RisiMeta(kind = UNKNOWN_KIND)
+    }
+
+    const val UNKNOWN_KIND = "unknown"
+
+    /**
      * §24.9/§24.11: a Risi message notifies only the users in its `notify`; for everyone else it is
      * silent (no sound, no heads-up, no notification) and still counts as unread. Any other message
      * notifies as before.
