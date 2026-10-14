@@ -31,8 +31,15 @@ defmodule RisiMe.Agent.PermissionFixit do
   @permission %{
     "calendar" => "calendar",
     "reminders" => "notifications",
-    "alarm" => "alarms"
+    "alarm" => "alarms",
+    # Proposal 2026-10-14-calendar-v2 §44.9: permissions without a Risi skill (skill_id null).
+    "contacts" => "contacts",
+    "microphone" => "microphone",
+    "location" => "location"
   }
+
+  # The ids above that are Risi skills (§26.1); the others are phone permissions only.
+  @skills ~w(calendar reminders alarm)
 
   @doc "The permissions a card may name (§43.2)."
   def permissions, do: ~w(calendar contacts microphone notifications location alarms)
@@ -89,6 +96,11 @@ defmodule RisiMe.Agent.PermissionFixit do
       "si" => "ඒක කරන්න මට ඔබේ %{what} ඕන.",
       "ta" => "அதைச் செய்ய எனக்கு உங்கள் %{what} தேவை."
     },
+    account: %{
+      "en" => "Your Google calendar isn't on this phone yet.",
+      "si" => "ඔබේ Google calendar එක තවම මේ phone එකේ නැහැ.",
+      "ta" => "உங்கள் Google calendar இன்னும் இந்த phone இல் இல்லை."
+    },
     declined: %{
       "en" => "OK, I won't use your %{what}. You can change this in Risi skills.",
       "si" => "හරි, මම ඔබේ %{what} පාවිච්චි කරන්නේ නැහැ. Risi skills වල මේක වෙනස් කරන්න පුළුවන්.",
@@ -115,13 +127,20 @@ defmodule RisiMe.Agent.PermissionFixit do
   Ends a turn with the card for `skill_id` (the skill is off or its permission is missing): the
   resume record, then the card in the asker's Risi chat (the group gets the pointer). Oban result.
   """
-  def post(ctx, skill_id, call_ref \\ nil) do
+  def post(ctx, skill_id, call_ref \\ nil, opts \\ []) do
     permission = permission_of(skill_id)
     resume_id = Ecto.UUID.generate()
     rc = RisiMe.RisiChat.active_id(ctx.asker) || ctx.conv
-    off? = RisiMe.Agent.Skills.state(ctx.asker, skill_id) == "off"
+    skill? = skill_id in @skills
+    off? = skill? and RisiMe.Agent.Skills.state(ctx.asker, skill_id) == "off"
     lang = Map.get(ctx, :lang, "en")
-    text = line(:need, permission, lang)
+    # Proposal 2026-10-14-calendar-v2 §44.9: the guide's step ("account": no calendars yet).
+    step = Keyword.get(opts, :step)
+
+    text =
+      if step == "account",
+        do: line(:account, permission, lang),
+        else: line(:need, permission, lang)
 
     :ok =
       hold(ctx, resume_id, rc, %{
@@ -136,7 +155,7 @@ defmodule RisiMe.Agent.PermissionFixit do
       "request_id" => ctx.request_id,
       "resume_id" => resume_id,
       "permission" => permission,
-      "skill_id" => skill_id,
+      "skill_id" => if(skill?, do: skill_id),
       "turn_on" => off?,
       "text" => text,
       "buttons" => ["allow"],
@@ -146,6 +165,8 @@ defmodule RisiMe.Agent.PermissionFixit do
       "made_by" => RisiMe.Agent.MadeBy.rule(),
       "notify" => [ctx.asker]
     }
+
+    risi = if step, do: Map.put(risi, "step", step), else: risi
 
     body =
       text <>
@@ -195,6 +216,10 @@ defmodule RisiMe.Agent.PermissionFixit do
            ),
          {:ok, payload} <- open(w) do
       Repo.update_all(from(x in Writes.Write, where: x.write_id == ^rid), set: [args: nil])
+
+      # Proposal 2026-10-14-calendar-v2 §44.4: a new grant: the next read says so, once.
+      if action == "permission_granted" and payload["permission"] == "calendar",
+        do: RisiMe.Agent.CalendarV2.reset_first_read(w.user_id)
 
       if action == "permission_granted",
         do: resume(w, payload),

@@ -30,8 +30,15 @@ defmodule RisiMeWeb.ApiJSON do
 
     # Decision 092 (proposal 2026-10-14-private-transcribe): `private_transcribe: true` while
     # RISI_PRIVATE_TRANSCRIBE applies to the user (absent otherwise: off is byte-identical).
-    if RisiMeWeb.TranslateController.enabled_for?(user.id),
-      do: Map.put(json, :private_transcribe, true),
+    json =
+      if RisiMeWeb.TranslateController.enabled_for?(user.id),
+        do: Map.put(json, :private_transcribe, true),
+        else: json
+
+    # Proposal 2026-10-14-calendar-v2 §44.1: `calendar_v2: true` while RISI_CALENDAR_V2 applies
+    # (absent otherwise, so off is byte-identical; the app never hard-codes the canary).
+    if RisiMe.Agent.CalendarV2.on_for?(user.id),
+      do: Map.put(json, :calendar_v2, true),
       else: json
   end
 

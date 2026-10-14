@@ -372,6 +372,12 @@ defmodule RisiMe.Agent.RisiItems do
          true <- DateTime.diff(to, from) <= 366 * 86_400 || {:error, :bad_request},
          {:ok, kinds} <- param_kinds(params["kinds"]),
          {:ok, items} <- list(user, from: from, to: to, kinds: kinds, device_id: device) do
+      # Proposal 2026-10-14-calendar-v2 §44.6: the phone merges by `group`.
+      items =
+        if RisiMe.Agent.CalendarV2.on_for?(user),
+          do: Enum.map(items, &Map.put(&1, "group", group_of(&1))),
+          else: items
+
       {:ok, %{"items" => items}}
     end
   end
@@ -716,6 +722,195 @@ defmodule RisiMe.Agent.RisiItems do
     end
   end
 
+  @doc """
+  Proposal 2026-10-14-calendar-v2 (§44.3, §44.5, §44.6): the schedule answer under
+  `RISI_CALENDAR_V2`. With `local_events` (the phone was read; `local?`) the phone lists every
+  event, Risi Calendar event and item itself, with titles: the server's text is the head line
+  only, so nothing is listed twice. Without it, Risi's own things are listed, one row per real
+  thing with tags. Then a conflict line (an all-day block on a day with meetings), one plain
+  sentence per connected source not read, and the footer "From: your phone calendars · Risi".
+  `{text, sources, unread?}` as `agenda/4`.
+  """
+  def agenda_v2(checks, user, tz, local?) do
+    last = List.last(checks)
+    {honesty, no_read?} = RisiMe.Agent.CalendarHonesty.enforce_made("", checks, tz)
+
+    with false <- no_read?,
+         %{result: %{"from" => f, "to" => t} = result} <- last,
+         {:ok, from, _} <- DateTime.from_iso8601(f),
+         {:ok, to, _} <- DateTime.from_iso8601(t) do
+      alias RisiMe.Agent.CalendarV2
+      sources = result["sources"] || []
+      read = CalendarV2.read_sources(last)
+
+      risi =
+        if "risi_calendar" in read do
+          case Calendar.own_events(user, from, to) do
+            {:ok, evs} ->
+              for %{event: e, title: title} <- evs,
+                  do: %{
+                    "kind" => "risi_calendar_event",
+                    "title" => title,
+                    "start" => Clock.ts(e.start_at),
+                    "end" => Clock.ts(e.end_at),
+                    "all_day" => e.all_day == true,
+                    "group" => e.source_item_id
+                  }
+
+            _ ->
+              []
+          end
+        else
+          []
+        end
+
+      ledger =
+        case list(user,
+               from: from,
+               to: DateTime.add(to, 2 * 86_400, :second),
+               kinds: ~w(phone_event_added reminder scheduled_message promise follow_up),
+               undated: false
+             ) do
+          {:ok, items} ->
+            items
+            |> Enum.map(&Map.merge(&1, %{"_user" => user, "group" => group_of(&1)}))
+            # A reminder may fire before the range for a thing in it; the rest stay in range.
+            |> Enum.filter(&(&1["kind"] == "reminder" or in_window?(&1["start"], from, to)))
+
+          _ ->
+            []
+        end
+
+      rows =
+        CalendarV2.merge(risi ++ ledger, tz)
+        |> Enum.filter(&in_window?(&1["start"], from, to))
+        |> Enum.sort_by(&{sort_key(&1["start"]), &1["title"] || ""})
+
+      phone_busy =
+        for b <- result["blocks"] || [], b["busy"] != false, not Map.has_key?(b, "status"), do: b
+
+      one_day? = DateTime.diff(to, from) <= 86_400
+      head = range_label(from, to, tz, one_day?)
+      unread = Enum.filter(sources, &(&1["read_ok"] != true and &1["reason"] != "not_connected"))
+
+      busy_rows =
+        if local?,
+          do: [],
+          else:
+            for(
+              b <- phone_busy,
+              do: %{
+                "kind" => "busy",
+                "title" => "Busy (phone calendar)",
+                "start" => b["start"],
+                "end" => b["end"],
+                "all_day" => b["all_day"] == true,
+                "tags" => ["busy"]
+              }
+            )
+
+      body =
+        cond do
+          local? ->
+            head <> ":"
+
+          rows ++ busy_rows != [] ->
+            list = Enum.sort_by(rows ++ busy_rows, &{sort_key(&1["start"]), &1["title"] || ""})
+            head <> ":\n" <> Enum.map_join(list, "\n", &("- " <> v2_line(&1, tz, not one_day?)))
+
+          unread != [] ->
+            head <> ": nothing in what I could check."
+
+          true ->
+            head <> ": nothing on your calendars."
+        end
+
+      others =
+        phone_busy ++
+          for r <- rows,
+              r["all_day"] != true,
+              r["kind"] in ~w(risi_calendar_event phone_event_added),
+              do: r
+
+      conflict = CalendarV2.conflict_line(rows, others, tz)
+      footer = CalendarV2.unread_lines(last) ++ List.wrap(CalendarV2.footer_line(read))
+
+      text =
+        [body, conflict, Enum.join(footer, "\n")]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join("\n\n")
+
+      srcs =
+        for i <- ledger,
+            in_window?(i["start"], from, to) or i["kind"] == "reminder",
+            do: %{"type" => "risi_item", "item_id" => i["id"], "kind" => i["kind"]}
+
+      {text, srcs, unread != []}
+    else
+      _ -> {honesty, [], true}
+    end
+  end
+
+  defp in_window?(s, from, to) when is_binary(s) do
+    case DateTime.from_iso8601(s) do
+      {:ok, t, _} -> DateTime.compare(t, from) != :lt and DateTime.compare(t, to) == :lt
+      _ -> false
+    end
+  end
+
+  defp in_window?(_, _, _), do: false
+
+  # "Sun 18 Oct · all day · Free up calendar (promise · reminder Sat 18:00)".
+  defp v2_line(row, tz, day?) do
+    base = line(Map.put(row, "kind", "v2"), tz, day?)
+
+    case RisiMe.Agent.CalendarV2.tags_text(row, tz) do
+      nil -> base <> single_tag(row["kind"])
+      tags -> base <> " (" <> tags <> ")"
+    end
+  end
+
+  defp single_tag("risi_calendar_event"), do: " (Risi Calendar)"
+  defp single_tag("promise"), do: " (promise)"
+  defp single_tag("follow_up"), do: " (follow-up)"
+  defp single_tag("reminder"), do: " (reminder)"
+  defp single_tag("phone_event_added"), do: " (added by Risi)"
+  defp single_tag(_), do: ""
+
+  @doc """
+  §44.6 the item's group: the ledger item it comes from (a promise / follow-up: itself; a Risi
+  Calendar event: its `source.item_id`; a reminder: the item of the §28.5 offer it came from).
+  """
+  def group_of(%{"kind" => k, "ref" => %{"item_id" => id}}) when k in ~w(promise follow_up),
+    do: id
+
+  def group_of(%{"kind" => "risi_calendar_event", "ref" => %{"event_id" => id}}) do
+    with {:ok, eid} <- Ecto.UUID.cast(id),
+         %Calendar.Event{source_item_id: item} <- Repo.get(Calendar.Event, eid) do
+      item
+    else
+      _ -> nil
+    end
+  end
+
+  def group_of(%{"kind" => "reminder", "ref" => %{"reminder_id" => id}}) do
+    with {:ok, rid} <- Ecto.UUID.cast(id),
+         %Reminders{write_id: wid} when is_binary(wid) <- Reminders.get(rid) do
+      Repo.one(
+        from o in RisiMe.Agent.Offers.Offer,
+          where: o.write_id == ^wid and o.kind == "reminder",
+          select: o.item_id,
+          limit: 1
+      )
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  def group_of(_), do: nil
+
   defp sort_key(nil), do: "~"
   defp sort_key(s), do: s
 
@@ -773,6 +968,7 @@ defmodule RisiMe.Agent.RisiItems do
   defp what(%{"kind" => "promise", "title" => t}), do: "Your promise: #{t}"
   defp what(%{"kind" => "follow_up", "title" => t}), do: "Following up: #{t}"
   defp what(%{"kind" => "busy", "title" => t}), do: t
+  defp what(%{"kind" => "v2", "title" => t}), do: to_string(t)
   defp what(%{"title" => t}), do: to_string(t)
 
   defp recipient(conv, user) when is_binary(conv) do

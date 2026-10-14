@@ -1181,6 +1181,10 @@ defmodule RisiMe.Agent.Skills do
         on_conflict: [set: [permission: p, reported_at: now]],
         conflict_target: [:device_ref, :skill_id]
       )
+
+      # Proposal 2026-10-14-calendar-v2 §44.4: after a denial the next read says the first-read
+      # line again.
+      if id == "calendar" and p == "denied", do: RisiMe.Agent.CalendarV2.reset_first_read(user_id)
     end
 
     with new when is_binary(new) <- c["state"],

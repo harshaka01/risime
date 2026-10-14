@@ -85,6 +85,9 @@ defmodule RisiMe.Agent.Offers do
       not Skills.on?() and not RisiMe.Agent.Calendar.on?() -> 0
       c.needs_clarification -> if Skills.on?(), do: clarify(c), else: 0
       timed_future?(c) -> timed(c)
+      # Proposal 2026-10-14-calendar-v2 §44.7: a whole-day block gets one all-day Risi Calendar
+      # event (no 15-min reminder card; its §27.6 reminder is the day before at 18:00).
+      all_day_block?(c) -> elem(RisiMe.Agent.CalendarOffers.consider(c, recipients(c)), 0)
       true -> 0
     end
   rescue
@@ -115,6 +118,23 @@ defmodule RisiMe.Agent.Offers do
   defp timed_future?(%Commitment{due: due} = c) do
     due != nil and c.all_day != true and c.due_kind in [nil, "datetime"] and
       DateTime.compare(due, Clock.now()) == :gt
+  end
+
+  @doc "§44.7: an all-day item in the future that blocks the day, under the owner's switch."
+  def all_day_block?(%Commitment{due: due, all_day: true} = c) when not is_nil(due) do
+    DateTime.compare(due, Clock.now()) == :gt and RisiMe.Agent.CalendarV2.on_for?(c.owner_id) and
+      RisiMe.Agent.DayPart.all_day_block?(words(c))
+  end
+
+  def all_day_block?(_c), do: false
+
+  defp words(%Commitment{text: t} = c) when is_binary(t), do: "#{t} #{c.due_text}"
+
+  defp words(c) do
+    case Commitment.open(c) do
+      {:ok, o} -> "#{o.text} #{o.due_text}"
+      _ -> ""
+    end
   end
 
   @doc """
@@ -201,7 +221,13 @@ defmodule RisiMe.Agent.Offers do
   end
 
   defp reminder(c, user, rc) do
-    at = DateTime.add(Clock.usec(c.due), -@remind_before_min * 60, :second)
+    # Proposal 2026-10-14-calendar-v2 §44.8: the user's learned lead (default 15 min).
+    lead =
+      if RisiMe.Agent.CalendarV2.on_for?(user),
+        do: RisiMe.Agent.CalendarV2.lead_min(user),
+        else: @remind_before_min
+
+    at = DateTime.add(Clock.usec(c.due), -lead * 60, :second)
 
     with true <- DateTime.diff(at, Clock.now()) > 60,
          {:ok, ^rc} <- gated(user, "reminders") do

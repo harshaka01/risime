@@ -555,7 +555,12 @@ defmodule RisiMe.Agent.Ledger do
 
       true ->
         tz = Map.get(tzs, owner, Clock.default_tz())
-        {due, all_day} = due(i["due_local"], tz)
+        # Proposal 2026-10-14-calendar-v2 §44.7: "whole day" means all day.
+        whole_day? =
+          RisiMe.Agent.CalendarV2.on_for?(owner) and
+            RisiMe.Agent.DayPart.all_day?("#{text} #{i["due_text"]}")
+
+        {due, all_day} = due(i["due_local"], tz, whole_day?)
 
         %{
           item_id: Ecto.UUID.generate(),
@@ -594,6 +599,19 @@ defmodule RisiMe.Agent.Ledger do
   end
 
   def due(_s, _tz), do: {nil, false}
+
+  @doc """
+  `due/2`, and with `whole_day?` (proposal 2026-10-14-calendar-v2 §44.7: the item says "whole
+  day") a `due_local` with a time is taken as its date: all day.
+  """
+  def due(s, tz, true) when is_binary(s) do
+    case Regex.run(~r/^(\d{4}-\d{2}-\d{2})T/, s) do
+      [_, d] -> due(d, tz)
+      _ -> due(s, tz)
+    end
+  end
+
+  def due(s, tz, _whole_day?), do: due(s, tz)
 
   ## Storing
 

@@ -439,7 +439,9 @@ defmodule RisiMe.Agent.ActionItems do
           end
 
         dtz = if owner, do: Map.get(tzs, owner, tz), else: tz
-        {due, all_day} = Ledger.due(i["due_local"], dtz)
+
+        {due, all_day} =
+          Ledger.due(i["due_local"], dtz, whole_day_hint(owner, text, i["due_text"]))
 
         %{
           item_id: Ecto.UUID.generate(),
@@ -1195,4 +1197,10 @@ defmodule RisiMe.Agent.ActionItems do
       end
     end)
   end
+
+  # Proposal 2026-10-14-calendar-v2 §44.7: "whole day" makes the due all day (owner's switch).
+  defp whole_day_hint(owner, text, due_text),
+    do:
+      RisiMe.Agent.CalendarV2.on_for?(owner) and
+        RisiMe.Agent.DayPart.all_day?("#{text} #{due_text}")
 end

@@ -158,6 +158,8 @@ config :risime, :risi_speech_pause_file, false
 # older speech tests keep today's route, SpeechLangTest turns it on, and risi-l1's likelihood is
 # only ever a Req.Test stub there.
 config :risime, :risi_voice_lang_id, false
+# Proposal 2026-10-14-calendar-v2: off in tests (parity); its own tests switch it on.
+config :risime, :risi_calendar_v2, false
 config :risime, :risi_speech_lang, lm: false
 # Harsha's sealed Sinhala gold set (RisiMe.Agent.SpeechGold): tests set a temp dir themselves.
 config :risime, :risi_asr_gold_dir, false

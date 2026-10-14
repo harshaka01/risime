@@ -224,6 +224,10 @@ defmodule RisiMe.Workers.Risi do
         a when a in ~w(permission_granted permission_declined) ->
           RisiMe.Agent.PermissionFixit.act(conv, user, env)
 
+        # Proposal 2026-10-14-calendar-v2 §44.5: "Let Risi read meeting titles…" Yes / Only times.
+        "calendar_titles" ->
+          RisiMe.Agent.CalendarV2.act_titles(conv, user, env)
+
         a when a in ~w(me_too not_me) ->
           RisiMe.Agent.Reminders.act(conv, user, env)
 

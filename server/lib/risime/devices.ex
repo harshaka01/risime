@@ -148,7 +148,8 @@ defmodule RisiMe.Devices do
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
                          risi_ledger risi_events risi_notes google_calendar files pdf_export
-                         risi_items call_transcribe voice add_to_call call_risi risi_send risi_fixit)
+                         risi_items call_transcribe voice add_to_call call_risi risi_send risi_fixit
+                         risi_calendar_v2)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
@@ -169,6 +170,8 @@ defmodule RisiMe.Devices do
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["risi_send"]
       # Proposal 2026-10-14-permission-fixit §43.1: `risi_fixit`, kept only with `risi_skills`.
       caps = if "risi_skills" in caps, do: caps, else: caps -- ["risi_fixit"]
+      # Proposal 2026-10-14-calendar-v2 §44.1: `risi_calendar_v2`, kept only with `risi_tools`.
+      caps = if "risi_tools" in caps, do: caps, else: caps -- ["risi_calendar_v2"]
 
       caps =
         if "group_calls" in caps and "call_switch" in caps,

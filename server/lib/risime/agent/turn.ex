@@ -56,6 +56,7 @@ defmodule RisiMe.Agent.Turn do
   alias RisiMe.Agent.{
     ActionDraft,
     CalendarHonesty,
+    CalendarV2,
     Audience,
     Capabilities,
     Clock,
@@ -1000,6 +1001,17 @@ defmodule RisiMe.Agent.Turn do
         do: st,
         else: %{st | failed: Map.put(st.failed, {name, TurnSteps.args_hash(args)}, status)}
 
+    # Proposal 2026-10-14-calendar-v2 §44.2: a phone read with calendars is a read, whatever
+    # Android's auto-sync says (the check and what the model sees).
+    {result, meta} =
+      if name in @calendar_checks and CalendarV2.on_for?(ctx.asker),
+        do:
+          {CalendarV2.normalize(result),
+           Map.update(meta, :calendar_check, nil, &CalendarV2.normalize/1)},
+        else: {result, meta}
+
+    reply = if ok?, do: %{"ok" => true, "result" => result}, else: reply
+
     st =
       if name in ~w(calendar_check risi_calendar_check),
         do: %{
@@ -1367,14 +1379,35 @@ defmodule RisiMe.Agent.Turn do
     # v1.35 §34.1: a schedule question's answer is built by the server from the read (every
     # event in the range, Risi's items, the "Checked:" line); never from chat context.
     # P0 2026-10-09: otherwise never "clear" without a trustworthy read.
+    # Proposal 2026-10-14-calendar-v2 (§44.3/§44.4): the plain footer from what THIS request
+    # read, and "✓ I can see your calendars now." once per grant.
+    v2? = checks != [] and CalendarV2.on_for?(ctx.asker)
+
+    first_read? =
+      v2? and "phone_provider" in CalendarV2.read_sources(List.last(checks)) and
+        CalendarV2.claim_first_read(ctx.asker)
+
     {answer, rule?, retry, item_sources, unread?} =
-      if schedule? do
-        {text, srcs, unread?} = RisiItems.agenda(checks, ctx.asker, ctx.tz, local?)
-        {text, st.call_refs == [], nil, srcs, unread?}
-      else
-        {a, r, retry} = CalendarHonesty.enforce_full(answer, checks, ctx.tz)
-        {a, r, retry, [], false}
+      cond do
+        schedule? and v2? ->
+          {text, srcs, unread?} = RisiItems.agenda_v2(checks, ctx.asker, ctx.tz, local?)
+          {text, st.call_refs == [], nil, srcs, unread?}
+
+        schedule? ->
+          {text, srcs, unread?} = RisiItems.agenda(checks, ctx.asker, ctx.tz, local?)
+          {text, st.call_refs == [], nil, srcs, unread?}
+
+        v2? ->
+          {a, r, retry} = CalendarHonesty.enforce_v2(answer, checks, ctx.tz)
+          {a, r, retry, [], false}
+
+        true ->
+          {a, r, retry} = CalendarHonesty.enforce_full(answer, checks, ctx.tz)
+          {a, r, retry, [], false}
       end
+
+    answer =
+      if first_read?, do: CalendarV2.first_read_text() <> "\n\n" <> answer, else: answer
 
     # v1.32 §25.3: the model's text never claims a write that no tool result reported done.
     # (A server-built list of what Risi set up, §34.4, is not a model's claim.)
@@ -1512,6 +1545,27 @@ defmodule RisiMe.Agent.Turn do
         _ -> answer_risi
       end
 
+    # Proposal 2026-10-14-calendar-v2 §44.5: meeting prep needs titles: ask once (default
+    # "Only times"; nothing is sent until the user says Yes).
+    {answer, answer_risi} =
+      if v2? and schedule? and ctx.in_risi_chat? and
+           CalendarV2.ask_titles?(ctx.asker, Map.get(ctx, :question)) do
+        q = CalendarV2.titles_question()
+
+        {answer <> "\n\n" <> q,
+         answer_risi
+         |> Map.put("answer", answer <> "\n\n" <> q)
+         |> Map.put("next_actions", CalendarV2.titles_chips())}
+      else
+        {answer, answer_risi}
+      end
+
+    # Proposal 2026-10-14-calendar-v2 §44.3: what this request read, for the phone's footer.
+    answer_risi =
+      if v2? and ctx.in_risi_chat?,
+        do: Map.put(answer_risi, "footer", CalendarV2.footer(List.last(checks), first_read?)),
+        else: answer_risi
+
     answer_risi = voice_sink(answer, answer_risi)
     Audience.deliver(ctx, answer, answer_risi, st.personal)
   end
@@ -1599,10 +1653,20 @@ defmodule RisiMe.Agent.Turn do
 
       # Proposal 2026-10-14-permission-fixit §43.4: the phone has no calendar permission: the
       # fix-it card (the question resumes once allowed), never a dead end.
-      if status == "no_permission" and name == "calendar_check" and
-           RisiMe.Agent.PermissionFixit.applies?(ctx, "calendar"),
-         do: RisiMe.Agent.PermissionFixit.post(ctx, "calendar", st.call_ref),
-         else: loop(add_items_source(st), ctx)
+      cond do
+        status == "no_permission" and name == "calendar_check" and
+            RisiMe.Agent.PermissionFixit.applies?(ctx, "calendar") ->
+          RisiMe.Agent.PermissionFixit.post(ctx, "calendar", st.call_ref)
+
+        # Proposal 2026-10-14-calendar-v2 §44.9: no calendars on the phone yet: the guide's
+        # "account" step (the question resumes once the user is back with a calendar).
+        CalendarV2.no_calendars?(List.last(st.calendar_checks)) and
+            CalendarV2.guide?(ctx) ->
+          RisiMe.Agent.PermissionFixit.post(ctx, "calendar", st.call_ref, step: "account")
+
+        true ->
+          loop(add_items_source(st), ctx)
+      end
     else
       # No read is possible here: exactly why (§29.7 rule 1), never an answer from chat.
       calendar_unavailable(st, Map.put(ctx, :schedule, nil), "calendar_check", %{

@@ -48,6 +48,39 @@ defmodule RisiMe.Agent.CalendarHonesty do
 
   def enforce_full(answer, _checks, _tz), do: {answer, false, nil}
 
+  @doc """
+  Proposal 2026-10-14-calendar-v2 §44.3: as `enforce_full/3`, but the last paragraph ("Checked: …
+  Not checked: …", "I checked: …") becomes one plain sentence per connected source that could not
+  be read and the footer "From: your phone calendars · Risi" — what THIS request read.
+  """
+  def enforce_v2(answer, checks, tz) when is_binary(answer) do
+    {out, rule?, retry} = enforce_full(answer, checks, tz)
+    last = List.last(checks)
+
+    case RisiMe.Agent.CalendarV2.footer_line(RisiMe.Agent.CalendarV2.read_sources(last)) do
+      nil ->
+        {out, rule?, retry}
+
+      footer ->
+        body = strip_checked(out)
+        lines = RisiMe.Agent.CalendarV2.unread_lines(last)
+        tail = Enum.join(lines ++ [footer], "\n")
+        {if(body == "", do: tail, else: body <> "\n\n" <> tail), rule?, retry}
+    end
+  end
+
+  def enforce_v2(answer, checks, tz), do: enforce_full(answer, checks, tz)
+
+  @doc "The text without its trailing \"Checked:\" / \"I checked:\" paragraph (§44.3)."
+  def strip_checked(text) do
+    text
+    |> String.trim()
+    |> String.split("\n\n")
+    |> Enum.reject(&Regex.match?(~r/^(?:I checked:|Checked:)/u, String.trim(&1)))
+    |> Enum.join("\n\n")
+    |> String.trim()
+  end
+
   # The free-claim rewrite of `unread_text/2` (the only answer built with this sentence).
   defp retry_if_rewritten(_answer, out),
     do: if(out =~ ~r/^Your .* free then, but I couldn't check /, do: ["Retry"])

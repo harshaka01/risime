@@ -21,7 +21,7 @@ defmodule RisiMe.Agent.CalendarTools do
 
   require Logger
 
-  alias RisiMe.Agent.{Calendar, CalendarCards, ClientTools, Clock, Writes}
+  alias RisiMe.Agent.{Calendar, CalendarCards, CalendarV2, ClientTools, Clock, DayPart, Writes}
   alias RisiMe.Repo
 
   @max_range_s 14 * 86_400
@@ -449,10 +449,22 @@ defmodule RisiMe.Agent.CalendarTools do
     title = String.trim(title)
     settings = Calendar.settings(ctx.asker)
 
+    # Proposal 2026-10-14-calendar-v2 §44.7: the request's own words decide "whole day" and a
+    # duration ("2 hours", "the morning"), whatever times the model filled in.
+    part =
+      if CalendarV2.on_for?(ctx.asker),
+        do: DayPart.parse(Map.get(ctx, :question) || ""),
+        else: :none
+
     with true <- (title != "" and String.length(title) <= 200) || {:error, "failed", "bad_title"},
+         true <- part != :unclear || {:error, "failed", "ambiguous_time:duration"},
          {:ok, start, kind} <- ClientTools.time(s, ctx),
-         all_day = a["all_day"] == true or (kind == :date and a["end"] in [nil, ""]),
+         all_day =
+           a["all_day"] == true or part == :all_day or (kind == :date and a["end"] in [nil, ""]),
+         start = if(all_day and kind != :date, do: local_midnight(start, ctx.tz), else: start),
+         a = if(part == :all_day, do: Map.put(a, "end", nil), else: a),
          {:ok, stop} <- stop_of(a["end"], start, all_day, settings, ctx),
+         stop = part_stop(part, a["end"], start, stop, all_day),
          true <- DateTime.compare(stop, start) == :gt || {:error, "failed", "end_before_start"},
          :ok <- ClientTools.future(start, ctx) do
       {ok_ids, _} = Calendar.invitable(ctx.asker, with_ids(a, ctx))
@@ -491,6 +503,20 @@ defmodule RisiMe.Agent.CalendarTools do
   end
 
   defp run_add(_args, _ctx), do: {:error, "failed", "bad_args"}
+
+  defp local_midnight(t, tz) do
+    d = t |> Clock.local(tz) |> NaiveDateTime.to_date()
+    Clock.to_utc(NaiveDateTime.new!(d, ~T[00:00:00]), tz)
+  end
+
+  # §44.7: "for 2 hours" / "the morning" when the model gave no end of its own.
+  defp part_stop({:duration, sec}, e, start, _stop, false) when e in [nil, ""],
+    do: DateTime.add(start, sec, :second)
+
+  defp part_stop({:part, _, a, b}, e, start, _stop, false) when e in [nil, ""],
+    do: DateTime.add(start, Time.diff(b, a), :second)
+
+  defp part_stop(_part, _e, _start, stop, _all_day), do: stop
 
   # A date alone is an all-day event (a day); a start alone lasts the default duration (60).
   defp stop_of(e, start, true, _settings, _ctx) when e in [nil, ""],

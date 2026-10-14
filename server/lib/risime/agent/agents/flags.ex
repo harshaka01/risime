@@ -49,6 +49,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_SEND_FOR_ME" => :risi_send_for_me,
     # Proposal 2026-10-14-permission-fixit (§43.1): "I need your calendar…" [Allow calendar].
     "RISI_PERMISSION_FIXIT" => :risi_permission_fixit,
+    # Proposal 2026-10-14-calendar-v2 (§44.1): the honest footer, phone-side titles, merged rows.
+    "RISI_CALENDAR_V2" => :risi_calendar_v2,
     # P1 2026-10-14 (Tamil notes in Sinhala script): the Voice agent's language decision
     # (RisiMe.Agent.SpeechLang); on for everyone, off = today's route.
     "RISI_VOICE_LANG_ID" => :risi_voice_lang_id,
@@ -68,6 +70,7 @@ defmodule RisiMe.Agents.Flags do
     "RISI_SPEECH_COMPARE_DEV" => "canary",
     "RISI_SEND_FOR_ME" => "canary",
     "RISI_PERMISSION_FIXIT" => "canary",
+    "RISI_CALENDAR_V2" => "canary",
     "RISI_VOICE_LANG_ID" => "on",
     "RISI_VOICE_TRANSLATE" => "canary",
     "RISI_PRIVATE_TRANSCRIBE" => "off"

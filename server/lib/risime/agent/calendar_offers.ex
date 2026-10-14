@@ -117,8 +117,10 @@ defmodule RisiMe.Agent.CalendarOffers do
   end
 
   defp create(c, opts) do
-    start = Clock.usec(c.due)
-    stop = DateTime.add(start, 3600, :second)
+    # Proposal 2026-10-14-calendar-v2 §44.7: a whole-day block is one all-day event on its date.
+    block? = RisiMe.Agent.Offers.all_day_block?(c)
+    {start, stop} = if block?, do: day_span(c), else: {Clock.usec(c.due), nil}
+    stop = stop || DateTime.add(start, 3600, :second)
     people = Enum.uniq([c.owner_id | c.counterpart_ids])
     names = CalendarCards.names(people) |> Map.values()
     title = neutral_title(c.text, names)
@@ -130,7 +132,7 @@ defmodule RisiMe.Agent.CalendarOffers do
         tz: Clock.user_tz(c.owner_id),
         start: start,
         stop: stop,
-        all_day: false,
+        all_day: block?,
         with: c.counterpart_ids,
         drop: true,
         reminder_min: :default,
@@ -148,6 +150,15 @@ defmodule RisiMe.Agent.CalendarOffers do
         error -> error
       end
     end
+  end
+
+  # The owner's local date of an all-day due, as [00:00, next 00:00).
+  defp day_span(c) do
+    tz = Clock.user_tz(c.owner_id)
+    date = c.due |> Clock.local(tz) |> NaiveDateTime.to_date()
+    a = Clock.to_utc(NaiveDateTime.new!(date, ~T[00:00:00]), tz)
+    b = Clock.to_utc(NaiveDateTime.new!(Date.add(date, 1), ~T[00:00:00]), tz)
+    {Clock.usec(a), Clock.usec(b)}
   end
 
   # v1.29 §30.3: an item of a note links its event to the note too.

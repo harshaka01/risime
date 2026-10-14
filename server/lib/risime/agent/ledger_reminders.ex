@@ -54,7 +54,9 @@ defmodule RisiMe.Agent.LedgerReminders do
     if DateTime.compare(before, confirmed) == :gt and DateTime.compare(before, now) == :gt,
       do: job(base, "before", c.owner_id, before)
 
-    if DateTime.compare(at, now) == :gt, do: job(base, "at", c.owner_id, at)
+    # Proposal 2026-10-14-calendar-v2 §44.8: a whole-day block has ONE reminder, the day before.
+    block? = c.all_day == true and RisiMe.Agent.Offers.all_day_block?(c)
+    if DateTime.compare(at, now) == :gt and not block?, do: job(base, "at", c.owner_id, at)
 
     for cp <- c.counterpart_ids do
       today = today_moment(c, owner_tz, Clock.user_tz(cp))
@@ -91,7 +93,13 @@ defmodule RisiMe.Agent.LedgerReminders do
   defp owner_moments(%Commitment{all_day: true} = c, tz) do
     date = due_date(c, tz)
 
-    {at_local(Date.add(date, -1), ~T[09:00:00], tz), at_local(date, ~T[09:00:00], tz),
+    # Proposal 2026-10-14-calendar-v2 §44.8: the day before at the user's time (18:00).
+    before =
+      if RisiMe.Agent.CalendarV2.on_for?(c.owner_id),
+        do: RisiMe.Agent.CalendarV2.allday_remind_at(c.owner_id),
+        else: ~T[09:00:00]
+
+    {at_local(Date.add(date, -1), before, tz), at_local(date, ~T[09:00:00], tz),
      at_local(Date.add(date, 1), ~T[10:00:00], tz)}
   end
 
