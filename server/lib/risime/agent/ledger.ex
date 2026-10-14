@@ -55,6 +55,7 @@ defmodule RisiMe.Agent.Ledger do
   }
 
   alias RisiMe.{Repo, TimeUUID}
+  alias RisiMe.Agent.CallTranscribe.Sections
   alias RisiMe.Workers.Risi, as: Job
 
   # v1.36 §35.4: the quiet-period summary comes 30 min after the last message.
@@ -228,7 +229,7 @@ defmodule RisiMe.Agent.Ledger do
         # each speaker's language (`langs`) of a transcribed call.
         opts =
           [call_id: call[:call_id], media: call[:media], duration_s: call[:duration_s]] ++
-            for k <- [:also, :lang, :langs], call[k] != nil, do: {k, call[k]}
+            for k <- [:also, :lang, :langs, :session_id], call[k] != nil, do: {k, call[k]}
 
         conv |> summarise(msgs, senders, :call, opts) |> done()
 
@@ -347,7 +348,6 @@ defmodule RisiMe.Agent.Ledger do
     members = Secretary.members(conv)
     tzs = Clock.user_tzs(Enum.map(members, & &1.user_id))
     tz = Secretary.chat_tz(conv)
-    {text, refs} = Prompts.render(members, msgs, tz, tzs: tzs, now: Clock.now())
     # v1.29 §30.2: the extraction gains topic and meetings when the chat has a notes user.
     notes? = Notes.users(Enum.map(members, & &1.user_id)) != []
 
@@ -365,6 +365,53 @@ defmodule RisiMe.Agent.Ledger do
           system
       end
 
+    # P0 2026-10-15: a transcribed call is extracted in sections that fit risi-l1 (map-reduce,
+    # `CallTranscribe.Sections`); a chat window stays one extraction.
+    sections = if source == :call, do: Sections.split(msgs, &msg_ts/1), else: [msgs]
+    n = length(sections)
+
+    {oks, failed} =
+      Sections.map(sections, fn sec, i ->
+        extract_section(conv, sec, members, tzs, tz, notes?, section_system(system, i, n))
+      end)
+
+    cond do
+      Enum.any?(failed, fn {_i, r} -> r == :rate_limited end) ->
+        {:snooze, 30}
+
+      oks == [] ->
+        {_i, reason} = hd(failed)
+        {:error, reason}
+
+      true ->
+        {found, call_ref} = merge_sections(conv, Enum.map(oks, &elem(&1, 1)), opts)
+
+        result =
+          summarised(conv, msgs, participants, source, opts, found, call_ref, notes?, members)
+
+        if failed != [] and result == :posted do
+          spans = for {i, _} <- failed, sec = Enum.at(sections, i - 1), do: span(sec)
+          gap = Sections.gap_text(spans, msg_ts(hd(msgs)))
+          RisiMe.Agent.CallTranscribe.Summary.say(conv, %{session_id: opts[:session_id]}, gap)
+        end
+
+        result
+    end
+  end
+
+  defp span(sec), do: {msg_ts(hd(sec)), msg_ts(List.last(sec))}
+
+  defp section_system(system, _i, 1), do: system
+
+  defp section_system(system, i, n),
+    do:
+      system <>
+        "This transcript is part #{i} of #{n} of a longer call: use only what this part says.\n"
+
+  # One section's extraction: `{:ok, {found, call_ref}}` or `{:error, reason}`.
+  defp extract_section(conv, msgs, members, tzs, tz, notes?, system) do
+    {text, refs} = Prompts.render(members, msgs, tz, tzs: tzs, now: Clock.now())
+
     req = %{
       task: "discussion_summarise",
       conversation_id: conv,
@@ -380,41 +427,91 @@ defmodule RisiMe.Agent.Ledger do
 
     case LLM.complete(req) do
       {:ok, %{call_ref: call_ref, output: out}} ->
-        found = validate(out, refs, members, tzs, notes?)
-        # Item 10: an item that repeats one already kept is merged into it, not stored again.
-        found = %{found | items: ItemDedupe.drop_merged(found.items)}
-        newest = msg_ts(List.last(msgs))
-
-        window =
-          Map.merge(
-            %{
-              conversation_id: conv,
-              source: Atom.to_string(source),
-              started_at: msg_ts(hd(msgs)),
-              ended_at: newest,
-              participants: participants,
-              call_ref: call_ref
-            },
-            Map.new(opts)
-          )
-
-        # v1.36 §35.4: a discussion with ≥ 3 key points is summarised to the chat even without
-        # an item or a notes user.
-        # P0 2026-10-14: a transcribed call is always summarised (one key point is enough).
-        if found.items == [] and not note_worthy?(found) and
-             not (source == :call and found.raw_points >= 1) do
-          # No item and nothing worth a summary: nothing is posted; the cutoff moves on.
-          move_cutoff(conv, newest, false)
-          :nothing
-        else
-          store_and_publish(window, found, members, notes?)
-        end
-
-      {:error, :rate_limited} ->
-        {:snooze, 30}
+        {:ok, {validate(out, refs, members, tzs, notes?), call_ref}}
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # One section: as it is. More: the items together (de-duplicated), one summary and its key
+  # points (`Sections.reduce/2`), the meetings together.
+  defp merge_sections(_conv, [{found, call_ref}], _opts), do: {found, call_ref}
+
+  defp merge_sections(conv, results, opts) do
+    founds = Enum.map(results, &elem(&1, 0))
+
+    parts =
+      Enum.map(founds, fn f ->
+        %{key_points: if(f.raw_points > 0, do: f.key_points, else: []), summary: f.summary}
+      end)
+
+    base = %{
+      conversation_id: conv,
+      chat_id: Secretary.chat_id(conv),
+      lang: opts[:lang],
+      meta: %{"source" => "call", "call_id" => opts[:call_id]}
+    }
+
+    r = Sections.reduce(base, parts)
+
+    items =
+      founds |> Enum.flat_map(& &1.items) |> Enum.uniq_by(&{&1.owner, String.downcase(&1.text)})
+
+    key_points =
+      cond do
+        r.key_points != [] -> r.key_points
+        r.summary != nil -> [String.slice(r.summary, 0, 200)]
+        true -> ["Follow-ups were agreed."]
+      end
+
+    summary = r.summary || String.slice(hd(key_points), 0, 280)
+
+    found = %{
+      items: Enum.take(items, @max_items),
+      key_points: key_points,
+      summary: summary,
+      raw_points: length(r.key_points),
+      topic: String.slice(summary, 0, 80),
+      language: hd(founds).language,
+      meetings:
+        founds
+        |> Enum.flat_map(& &1.meetings)
+        |> Enum.uniq_by(&{&1.title, &1.start})
+        |> Enum.take(3)
+    }
+
+    {found, r.call_ref || elem(hd(results), 1)}
+  end
+
+  defp summarised(conv, msgs, participants, source, opts, found, call_ref, notes?, members) do
+    # Item 10: an item that repeats one already kept is merged into it, not stored again.
+    found = %{found | items: ItemDedupe.drop_merged(found.items)}
+    newest = msg_ts(List.last(msgs))
+
+    window =
+      Map.merge(
+        %{
+          conversation_id: conv,
+          source: Atom.to_string(source),
+          started_at: msg_ts(hd(msgs)),
+          ended_at: newest,
+          participants: participants,
+          call_ref: call_ref
+        },
+        Map.new(opts)
+      )
+
+    # v1.36 §35.4: a discussion with ≥ 3 key points is summarised to the chat even without
+    # an item or a notes user.
+    # P0 2026-10-14: a transcribed call is always summarised (one key point is enough).
+    if found.items == [] and not note_worthy?(found) and
+         not (source == :call and found.raw_points >= 1) do
+      # No item and nothing worth a summary: nothing is posted; the cutoff moves on.
+      move_cutoff(conv, newest, false)
+      :nothing
+    else
+      store_and_publish(window, found, members, notes?)
     end
   end
 

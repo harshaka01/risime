@@ -277,8 +277,12 @@ defmodule RisiMe.Agent.LedgerOut do
     end
   end
 
-  # v1.36 §35.4: a `discussion_card` with no items whose body is the summary itself.
-  defp summary_card(d) do
+  @doc """
+  v1.36 §35.4: a `discussion_card` with no items whose body is the summary itself (its line and
+  key points). P0 2026-10-15: also posted for a call whose items go on the §38 `action_items`
+  card.
+  """
+  def summary_card(d) do
     risi = %{
       "kind" => "discussion_card",
       "summary_id" => d.summary_id,
