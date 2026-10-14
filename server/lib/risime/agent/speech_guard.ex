@@ -6,7 +6,8 @@ defmodule RisiMe.Agent.SpeechGuard do
   omniASR eval service): they stop starting work until it expires.
 
   * **Slow** = the note took more than `max(8 s, 1.5 × its duration)`, or any fallback / failure.
-  * **The file** (`RISI_SPEECH_PAUSE_FILE`, default `~/risime-logs/speech-eval.pause`) holds one
+  * **The file** (`RISI_SPEECH_PAUSE_FILE`, default `~/risime-logs/speech-guard/speech-eval.pause`, a directory of its own so
+    the omniASR eval container can mount it read-only) holds one
     line `until=<unix s> reason=<code> by=risime-server`; each slow note extends `until` to now +
     10 min (`RISI_SPEECH_PAUSE_S`). A file written by hand without `until=` (an indefinite manual
     pause) is never touched. Codes only: never text, never ids.
@@ -96,8 +97,16 @@ defmodule RisiMe.Agent.SpeechGuard do
 
       _ ->
         case System.get_env("RISI_SPEECH_PAUSE_FILE") do
-          p when is_binary(p) and p != "" -> p
-          _ -> Path.join([System.user_home() || "/tmp", "risime-logs", "speech-eval.pause"])
+          p when is_binary(p) and p != "" ->
+            p
+
+          _ ->
+            Path.join([
+              System.user_home() || "/tmp",
+              "risime-logs",
+              "speech-guard",
+              "speech-eval.pause"
+            ])
         end
     end
   end

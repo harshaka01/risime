@@ -37,6 +37,7 @@ defmodule RisiMeWeb.Admin.SpeechLive do
       |> assign(:clip, nil)
       |> assign(:test, nil)
       |> assign(:notice, nil)
+      |> assign(:stt, nil)
       |> assign(:auto, RisiMe.Agent.VoiceAuto.status(:stt))
       |> load_choices()
       |> load_audit()
@@ -60,7 +61,15 @@ defmodule RisiMeWeb.Admin.SpeechLive do
      socket
      |> assign(:installed, SpeechRoutes.installed())
      |> assign(:extra, extra)
-     |> assign(:extra_picked, picked)}
+     |> assign(:extra_picked, picked)
+     |> assign(:stt, stt_today())}
+  end
+
+  # Incident 2026-10-14: today's per-model latency, timeouts and fallbacks (codes and numbers).
+  defp stt_today do
+    %{models: RisiMe.Agent.SpeechStats.models(), notes: RisiMe.Agent.SpeechStats.notes()}
+  rescue
+    _ -> nil
   end
 
   @impl true
@@ -255,6 +264,59 @@ defmodule RisiMeWeb.Admin.SpeechLive do
             </td>
           </tr>
         </table>
+      </div>
+
+      <div class="card">
+        <strong>Speed today (UTC)</strong>
+        <p :if={@stt == nil} class="muted">Loading…</p>
+        <div :if={@stt}>
+          <p>
+            Voice notes: {@stt.notes.n} · timeouts {@stt.notes.timeouts} · answered by a fallback
+            {@stt.notes.fallbacks} · not transcribed {@stt.notes.failed}
+          </p>
+          <p class="muted">
+            A voice note gets 3 × its length (at least 15 s). After that Risi uses the sender
+            phone's transcript (when that switch is on), then a fast CPU model.
+          </p>
+          <table :if={@stt.notes.by_model != []}>
+            <tr>
+              <th>Voice notes answered by</th>
+              <th>Notes</th>
+              <th>p50 s</th>
+              <th>p95 s</th>
+              <th>Fallbacks</th>
+            </tr>
+            <tr :for={m <- @stt.notes.by_model}>
+              <td>{m.model}</td>
+              <td>{m.n}</td>
+              <td>{seconds(m.p50_ms)}</td>
+              <td>{seconds(m.p95_ms)}</td>
+              <td>{m.fallbacks}</td>
+            </tr>
+          </table>
+          <p :if={@stt.notes.by_reason != %{}} class="muted">
+            Why: {Enum.map_join(@stt.notes.by_reason, ", ", fn {r, n} -> "#{r} #{n}" end)}
+          </p>
+          <table :if={@stt.models != []}>
+            <tr>
+              <th>Model (all transcriptions)</th>
+              <th>Calls</th>
+              <th>OK</th>
+              <th>Failed</th>
+              <th>p50 s</th>
+              <th>p95 s</th>
+            </tr>
+            <tr :for={m <- @stt.models}>
+              <td>{m.model}</td>
+              <td>{m.n}</td>
+              <td>{m.ok}</td>
+              <td class={m.failed > 0 && "warn"}>{m.failed}</td>
+              <td>{seconds(m.p50_ms)}</td>
+              <td>{seconds(m.p95_ms)}</td>
+            </tr>
+          </table>
+          <p :if={@stt.models == []} class="muted">No transcriptions today yet.</p>
+        </div>
       </div>
 
       <div class="card">

@@ -206,7 +206,9 @@ defmodule RisiMe.Agent.SpeechNoteTest do
     assert_received {:primary, _}
     assert_received {:primary, _}
     assert_received {:ctc, _}
-    assert [%{status: "error", fell_back: true, reason: "failed_all", decision: "none"}] = runs()
+
+    assert [%{status: "error", fell_back: true, reason: "unavailable_none", decision: "none"}] =
+             runs()
   end
 
   test "the retry after a fast error can succeed with no fallback" do
@@ -214,6 +216,21 @@ defmodule RisiMe.Agent.SpeechNoteTest do
 
     assert {:ok, %{fallback: nil, text: "hello"}} =
              Speech.transcribe_note("audio", duration_ms: 5_000)
+  end
+
+  test "SpeechStats.notes/1: today's notes per answering model, timeouts and fallbacks" do
+    script(%{
+      primary: [ok("a", "en", "faster-whisper-large-v3"), {:error, :timeout}, {:error, :timeout}],
+      ctc: [ok("හෙට", "en", "omnilingual-ctc-1b"), {:error, :failed}]
+    })
+
+    for _ <- 1..3, do: Speech.transcribe_note("audio", duration_ms: 4_000)
+
+    s = RisiMe.Agent.SpeechStats.notes()
+    assert %{n: 3, timeouts: 2, fallbacks: 1, failed: 1} = s
+    assert s.by_reason == %{"timeout_ctc" => 1, "timeout_none" => 1}
+    models = Map.new(s.by_model, &{&1.model, &1.n})
+    assert models == %{"faster-whisper-large-v3" => 1, "omnilingual-ctc-1b" => 1, "none" => 1}
   end
 
   test "phone_transcript/1 follows the §37.10 receiver rules" do

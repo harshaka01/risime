@@ -6,27 +6,40 @@
 #   scripts/asr-omni-stream <model alias> <results.jsonl> [stream_eval args, e.g. --sets omni-si]
 #   NEED_MB (default 11000): MemAvailable needed to start. Measured: a streamed run costs ~5.6 GB
 #   (CUDA ~2.6-2.9 GB + ~2 GB host-side torch/CUDA runtime + staging), plus the 4 GB floor + margin.
+# Live speech first (incident 2026-10-14, docs/status/speech-eval-guard.md): every attempt starts
+# only when scripts/speech-guard says go (no pause file, the live speech service healthy, idle and
+# fast, MemAvailable >= NEED_MB); while it runs, `speech-guard watch` pauses this eval's own
+# container while live speech is slow or paused and stops it under GUARD_RUN_MIN_MB (default 5120;
+# the run resumes on the next attempt). A missing guard refuses to start.
 # Audio stays in ~/risime-eval-data; the container has no network.
 set -uo pipefail
-root="$(cd "$(dirname "$0")/.." && pwd)"
+root="${RISIME_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 model="$1"; out="$2"; shift 2
 need="${NEED_MB:-11000}"
 image="${OMNI_IMAGE:-risime/omniasr:fs2-0.6.0-oa-0.2.0}"
 data="$HOME/risime-eval-data"
 outdir="$(cd "$(dirname "$out")" && pwd)"
+guard="$root/scripts/speech-guard"
+[ -x "$guard" ] || { echo "speech guard missing ($guard): refusing to start" >&2; exit 2; }
 avail() { awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; }
 for attempt in $(seq 1 40); do
-  while pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null || [ "$(avail)" -lt "$need" ]; do
+  while pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null; do
     sleep 30
   done
+  SPEECH_GUARD_MIN_MB="$need" "$guard" wait
   echo "$(date -u +%T) attempt $attempt, MemAvailable $(avail) MB" >&2
   log="$(mktemp)"
-  docker run --rm --gpus all --network none --user 1000:1000 -e HOME=/tmp -e OMNI_API_KEY=unused \
+  cname="risime-omni-eval-$$-$attempt"
+  ( for _ in $(seq 1 60); do docker inspect "$cname" >/dev/null 2>&1 && break; sleep 2; done
+    SPEECH_GUARD_MIN_MB="${GUARD_RUN_MIN_MB:-5120}" "$guard" watch --container "$cname" ) &
+  watcher=$!
+  docker run --rm --name "$cname" --gpus all --network none --user 1000:1000 -e HOME=/tmp -e OMNI_API_KEY=unused \
     -v "$HOME/risime-eval-models:/models:ro" -v "$data:$data:ro" -v "$outdir:/res" \
     -v "$root/scripts:/scripts:ro" --entrypoint python3 "$image" -I /app/stream_eval.py \
     --manifest "$data/manifests/all.jsonl" --model "$model" --out "/res/$(basename "$out")" "$@" \
     2>&1 | grep -v -E '^(=+|== vLLM ==|NVIDIA Release|vLLM Version|Container image|Various files|GOVERNING|\(found|NOTE:|   insuff|   docker|   https|  Using CUDA|  See https|)$|INFO (Found|Using provided|Pipeline)' \
     | tee "$log" >&2
+  kill "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
   if grep -q -E '^done:|^0 clips to run' "$log"; then rm -f "$log"; exit 0; fi
   rm -f "$log"
   sleep 60

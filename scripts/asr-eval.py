@@ -52,6 +52,7 @@ import collections
 import json
 import os
 import struct
+import subprocess
 import sys
 import time
 import unicodedata
@@ -209,8 +210,13 @@ def mem_available_mb():
     return 0
 
 
+SPEECH_GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speech-guard")
+
+
 def mem_guard(a):
-    """Never starve the release gates: wait while MemAvailable is under --min-avail-mb."""
+    """Never starve the release gates: wait while MemAvailable is under --min-avail-mb. Live speech
+    first (incident 2026-10-14, docs/status/speech-eval-guard.md): also wait while scripts/
+    speech-guard says the live service is slow, busy or paused (SPEECH_GUARD=off skips it)."""
     waited = 0
     while mem_available_mb() < a.min_avail_mb:
         if waited % 300 == 0:
@@ -218,11 +224,16 @@ def mem_guard(a):
                   "waiting", file=sys.stderr)
         time.sleep(15)
         waited += 15
+    if os.environ.get("SPEECH_GUARD", "on") != "off" and os.path.exists(SPEECH_GUARD):
+        env = dict(os.environ, SPEECH_GUARD_MIN_MB=str(a.min_avail_mb))
+        subprocess.run([sys.executable, "-I", SPEECH_GUARD, "wait"], env=env, check=False)
 
 
 def transcribe(a, key, model, file, lang):
     """One request with the 503 (no memory) wait. -> response dict or {"error": ...}."""
-    fields = {"file": file, "model": model, "response_format": "verbose_json", "language": lang}
+    # priority=batch: the speech service (asr6+) serves live voice notes first.
+    fields = {"file": file, "model": model, "response_format": "verbose_json", "language": lang,
+              "priority": "batch"}
     if model == "auto" and a.hint:
         fields.update(language_hint=a.hint, hint_mode=a.hint_mode)
     elif model == "auto" and a.hint_mode:

@@ -471,6 +471,30 @@ def models(request: Request):
                       "arch": v["arch"]} for n, v in sorted(s.items())]}
 
 
+# Live speech first (incident 2026-10-14, docs/status/speech-eval-guard.md): the shared pause file
+# (written by the app server after a slow live voice note, or by hand with scripts/speech-guard
+# pause), mounted read-only at /guard. While it says paused, this eval service refuses work (503).
+PAUSE_FILE = os.environ.get("OMNI_PAUSE_FILE", "/guard/speech-eval.pause")
+
+
+def paused():
+    try:
+        body = open(PAUSE_FILE).read()
+    except OSError:
+        return False
+    for tok in body.split():
+        if tok.startswith("until="):
+            try:
+                return int(tok[6:]) > time.time()
+            except ValueError:
+                return True
+    return True
+
+
+def paused_err():
+    return err(503, "paused: live speech first (speech-eval.pause)")
+
+
 @app.post("/v1/audio/transcriptions")
 def transcriptions(request: Request,
                    file: UploadFile = File(...),
@@ -478,6 +502,8 @@ def transcriptions(request: Request,
                    language: str | None = Form(None),
                    response_format: str = Form("json")):
     auth(request)
+    if paused():
+        return paused_err()
     if model not in served():
         return err(404, f"unknown model {model}; served: {sorted(served())}")
     if language is not None and language not in LANG:
@@ -512,6 +538,8 @@ def compare(request: Request,
             language: str | None = Form(None),
             models: str | None = Form(None)):
     auth(request)
+    if paused():
+        return paused_err()
     s = served()
     names = [n.strip() for n in models.split(",")] if models else [n for n in COMPARE if n in s]
     unknown = [n for n in names if n not in s]

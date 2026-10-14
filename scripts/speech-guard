@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Live speech first (incident 2026-10-14, docs/status/speech-eval-guard.md).
+
+Eval and training tooling asks this before and during work; it says "go" only when
+  1. no pause file: ~/risime-logs/speech-guard/speech-eval.pause (SPEECH_PAUSE_FILE) is absent,
+     or it holds "until=<unix s>" in the past (the app server writes until=now+10 min after a slow,
+     fallen-back or failed live voice note; a file without until= is a manual, indefinite pause);
+  2. the live speech service (SPEECH_URL, default http://127.0.0.1:8200) answers /health, and when
+     it reports them (asr6+): no live request waiting, and the live p95 of the last 10 min is under
+     SPEECH_GUARD_LIVE_P95_S (default 8 s) and the worst live RTF under SPEECH_GUARD_MAX_RTF (1.5);
+  3. host MemAvailable >= SPEECH_GUARD_MIN_MB (default 5120, as scripts/heavy).
+
+  scripts/speech-guard check [-q]        exit 0 = go, 1 = wait (the reason on stderr)
+  scripts/speech-guard wait [--max S]    block until go (poll 30 s); exit 1 after --max seconds
+  scripts/speech-guard watch --container NAME   during work: docker pause NAME while not go,
+                                         unpause when go, stop it under the memory floor
+  scripts/speech-guard pause [reason]    manual pause (no until=: stays until resume)
+  scripts/speech-guard resume            remove the pause file
+  scripts/speech-guard status            one JSON line (codes and numbers only)
+Never prints audio or text. Read-only toward the live service (GET /health only).
+"""
+import json
+import os
+import sys
+import time
+import urllib.request
+
+HOME = os.path.expanduser("~")
+PAUSE = os.environ.get("SPEECH_PAUSE_FILE",
+                       os.path.join(HOME, "risime-logs", "speech-guard", "speech-eval.pause"))
+URL = os.environ.get("SPEECH_URL", "http://127.0.0.1:8200").rstrip("/")
+MIN_MB = int(os.environ.get("SPEECH_GUARD_MIN_MB", "5120"))
+P95_S = float(os.environ.get("SPEECH_GUARD_LIVE_P95_S", "8"))
+MAX_RTF = float(os.environ.get("SPEECH_GUARD_MAX_RTF", "1.5"))
+
+
+def mem_available_mb():
+    with open("/proc/meminfo") as f:
+        for line in f:
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    return 0
+
+
+def pause_state():
+    try:
+        body = open(PAUSE).read()
+    except OSError:
+        return None
+    for tok in body.split():
+        if tok.startswith("until="):
+            try:
+                until = int(tok[6:])
+            except ValueError:
+                return "pause file unreadable"
+            left = until - int(time.time())
+            return f"paused by the live service for {left} s more" if left > 0 else None
+    return "paused by hand (scripts/speech-guard resume)"
+
+
+def health():
+    try:
+        with urllib.request.urlopen(URL + "/health", timeout=4) as r:
+            return json.load(r)
+    except Exception as e:
+        return {"error": type(e).__name__}
+
+
+def reasons():
+    out = []
+    p = pause_state()
+    if p:
+        out.append(p)
+    h = health()
+    if h.get("status") != "ok":
+        out.append(f"live speech service not healthy ({h.get('error') or h.get('status')})")
+    else:
+        waiting = ((h.get("queue") or {}).get("waiting") or {}).get("live", 0)
+        if waiting:
+            out.append(f"{waiting} live request(s) waiting")
+        live = h.get("live") or {}
+        if live.get("p95_s") is not None and live["p95_s"] > P95_S:
+            out.append(f"live p95 {live['p95_s']} s > {P95_S} s")
+        if live.get("max_rtf") is not None and live["max_rtf"] > MAX_RTF:
+            out.append(f"live worst RTF {live['max_rtf']} > {MAX_RTF}")
+    mem = mem_available_mb()
+    if mem < MIN_MB:
+        out.append(f"MemAvailable {mem} MB < {MIN_MB} MB")
+    return out, h, mem
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "check"
+    if cmd == "check":
+        rs, _, _ = reasons()
+        if rs and "-q" not in argv:
+            print("speech-guard: wait: " + "; ".join(rs), file=sys.stderr)
+        return 1 if rs else 0
+    if cmd == "wait":
+        limit = float(argv[argv.index("--max") + 1]) if "--max" in argv else None
+        t0, last = time.monotonic(), None
+        while True:
+            rs, _, _ = reasons()
+            if not rs:
+                return 0
+            msg = "; ".join(rs)
+            if msg != last:
+                print(f"{time.strftime('%H:%M:%S')} speech-guard: waiting: {msg}", file=sys.stderr)
+                last = msg
+            if limit is not None and time.monotonic() - t0 > limit:
+                return 1
+            time.sleep(30)
+    if cmd == "watch":
+        # During work: an eval container is paused (docker pause: no GPU work) while live speech
+        # is slow, busy or paused, unpaused when it clears, and stopped (resumable runs restart on
+        # the next attempt) when MemAvailable is under the floor. Ends when the container is gone.
+        import subprocess
+        name = argv[argv.index("--container") + 1]
+        paused = False
+
+        def docker(*a):
+            return subprocess.run(["docker", *a], capture_output=True, text=True)
+
+        while docker("inspect", name).returncode == 0:
+            rs, _, mem = reasons()
+            if mem < MIN_MB:
+                print(f"{time.strftime('%H:%M:%S')} speech-guard: stopping {name}: MemAvailable "
+                      f"{mem} MB", file=sys.stderr)
+                if paused:
+                    docker("unpause", name)
+                docker("stop", "-t", "20", name)
+                return 0
+            if rs and not paused:
+                print(f"{time.strftime('%H:%M:%S')} speech-guard: pausing {name}: "
+                      + "; ".join(rs), file=sys.stderr)
+                paused = docker("pause", name).returncode == 0
+            elif not rs and paused:
+                print(f"{time.strftime('%H:%M:%S')} speech-guard: resuming {name}", file=sys.stderr)
+                paused = not docker("unpause", name).returncode == 0
+            time.sleep(15)
+        return 0
+    if cmd == "pause":
+        os.makedirs(os.path.dirname(PAUSE), exist_ok=True)
+        reason = "_".join(argv[2:]) or "manual"
+        with open(PAUSE, "w") as f:
+            f.write(f"reason={reason} by={os.environ.get('USER', '?')}\n")
+        print(f"paused ({PAUSE})")
+        return 0
+    if cmd == "resume":
+        try:
+            os.remove(PAUSE)
+        except FileNotFoundError:
+            pass
+        print("resumed")
+        return 0
+    if cmd == "status":
+        rs, h, mem = reasons()
+        print(json.dumps({"go": not rs, "reasons": rs, "mem_available_mb": mem,
+                          "queue": h.get("queue"), "live": h.get("live")}))
+        return 0
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

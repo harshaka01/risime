@@ -148,15 +148,15 @@ defmodule RisiMe.Agent.Speech do
     t0 = System.monotonic_time(:millisecond)
     primary_opts = Keyword.take(opts, [:language_hint]) ++ [timeout: budget, priority: "live"]
 
-    result =
+    {result, why} =
       case primary(audio, primary_opts, t0, budget) do
-        {:ok, r} -> {:ok, Map.merge(r, %{fallback: nil, fallback_reason: nil})}
-        {:error, why} -> fallback(audio, opts, why)
+        {:ok, r} -> {{:ok, Map.merge(r, %{fallback: nil, fallback_reason: nil})}, nil}
+        {:error, why} -> {fallback(audio, opts, why), why}
       end
 
     elapsed = System.monotonic_time(:millisecond) - t0
     RisiMe.Agent.SpeechGuard.observe_live(result, elapsed, dur)
-    record_run(result, elapsed, budget, opts)
+    record_run(result, why, elapsed, budget, opts)
     result
   end
 
@@ -301,7 +301,7 @@ defmodule RisiMe.Agent.Speech do
   defp letter?(c), do: String.match?(<<c::utf8>>, ~r/^\p{L}$/u)
 
   # One `risi_agent_runs` row per note (Voice agent scores, decision 084): codes and timings.
-  defp record_run(result, elapsed, budget, opts) do
+  defp record_run(result, why, elapsed, budget, opts) do
     {status, model, fell_back, reason, lang} =
       case result do
         {:ok, %{fallback: nil} = r} ->
@@ -311,7 +311,8 @@ defmodule RisiMe.Agent.Speech do
           {"ok", r.model, true, "#{r.fallback_reason}_#{r.fallback}", r.language}
 
         {:error, _} ->
-          {"error", "none", true, "failed_all", nil}
+          # Every fallback failed too: `<primary error>_none` (e.g. `timeout_none`).
+          {"error", "none", true, "#{why || "failed"}_none", nil}
       end
 
     %{
