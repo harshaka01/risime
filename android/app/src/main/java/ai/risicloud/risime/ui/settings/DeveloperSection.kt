@@ -115,6 +115,7 @@ fun RisiDevSection(c: AppContainer) {
             }
             error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             PhoneRecogniserSection(c)
+            PhoneTtsSection()
             CallRisiDevRow(c)
         }
     }

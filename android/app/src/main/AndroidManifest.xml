@@ -52,6 +52,10 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- Developer "Phone voice (TTS) test": the phone's TextToSpeech engines (on-device voices only). -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
         <!-- §26.6 set_alarm: a Clock app that takes AlarmClock.ACTION_SET_ALARM (else `unsupported`). -->
         <intent>
             <action android:name="android.intent.action.SET_ALARM" />

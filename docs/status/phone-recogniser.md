@@ -45,6 +45,8 @@ send path is unchanged (no session opens). Nothing in the gates depends on a rec
    - the extra wait after you release the mic (2–8 s) is acceptable or not.
 7. Optional privacy check: turn on airplane mode, run the test on a note again: it must still work (on-device).
 8. Turn the flag off: notes are exactly as before (no transcript line on the other phone).
+9. **Phone voice (TTS):** on the same Developer screen, run the "Phone voice (TTS) test" and fill in
+   `docs/status/phone-tts.md` (on-device si / ta / en voices, time to first audio).
 
 ## Results (to fill from Harsha's phone)
 | Phone / Android | Engine | si-LK | ta-LK | ta-IN | en-US | en-IN | notes |
