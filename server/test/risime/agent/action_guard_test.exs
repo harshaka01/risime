@@ -428,7 +428,7 @@ defmodule RisiMe.Agent.ActionGuardTest do
       # same turn, whose tools run through the guard, §43.3; `Voice.transcript_language`: a
       # member's "Wrong language?" re-transcribes Risi's own post, §37.13.1.)
       reviewed =
-        ~w(CalendarActions.act Commitments.act LedgerActions.act PermissionFixit.act
+        ~w(CalendarActions.act CalendarV2.act_titles Commitments.act LedgerActions.act PermissionFixit.act
            Reminders.act SpeechCompare.label_reply Voice.transcript_delete
            Voice.transcript_language Writes.act)
 

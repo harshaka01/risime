@@ -33,7 +33,7 @@ defmodule RisiMe.Agent.RisiKindsExamplesTest do
     extract follow_up forget grp item_expire item_reminder memory_ingest message name_pending
     offers_backfill pending_copies phone_event_added promise prune reminder_fire request resume
     risi_calendar_event scheduled_message stale_device_ops status undo_timeout voice_actions
-    voice_delete wake
+    v2 voice_delete wake
   )
 
   # Kinds built from a variable (e.g. `common(c, "item_due", to)` in LedgerReminders).
