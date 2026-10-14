@@ -83,6 +83,18 @@ class CallRisiTest {
         assertFalse(CallRisiRules.allowedRemote("u-b/b1", "u-risi/d1"))
     }
 
+    /** v1.48 §41.1 (Harsha 2026-10-14): the Risi contact sheet follows the button's rules, for an existing Risi chat only. */
+    @Test fun theContactSheetFollowsTheButtonRulesForAnExistingRisiChat() {
+        val visible = CallRisiRules.buttonVisible(userCallRisi = true, flagOn = true, groupCalls = true)
+        assertTrue(CallRisiRules.contactSheet(visible, "grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"))
+        // The flag off (or any rule false) → no sheet: the avatar stays as in v1.47.
+        assertFalse(CallRisiRules.contactSheet(CallRisiRules.buttonVisible(true, false, true), "grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"))
+        assertFalse(CallRisiRules.contactSheet(CallRisiRules.buttonVisible(false, true, true), "grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"))
+        // The "Risi" entry before the Risi chat exists, or anything that isn't a grp:.
+        assertFalse(CallRisiRules.contactSheet(visible, null))
+        assertFalse(CallRisiRules.contactSheet(visible, "dm:a:b"))
+    }
+
     @Test fun userCallRisiIsOptional() {
         val base = """{"id":"u1","phone":"+94770000000","display_name":"A","company":"C"}"""
         assertFalse(ProtocolJson.decodeFromString(User.serializer(), base).callRisi)

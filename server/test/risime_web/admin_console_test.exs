@@ -395,6 +395,65 @@ defmodule RisiMeWeb.AdminConsoleTest do
       assert Repo.all(from e in AuditEntry, where: e.actor_id == ^a.id, select: e.action) ==
                ["setting_set"]
     end
+
+    test "Call Risi length (v1.48 §41.6): shown, bounded, saved, reset, audit-logged", %{
+      conn: conn
+    } do
+      {a, _} = admin("callrisi@example.com")
+      alias RisiMe.Agent.CallRisi
+
+      html = conn |> admin_conn(a.id) |> get("/admin/voices") |> html_response(200)
+      assert html =~ "Call Risi"
+      assert html =~ "30 min"
+      assert CallRisi.max_s() == 1800 and CallRisi.max_s_source() == :default
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{__changed__: %{}, admin_id: a.id, installed: [], test: nil, flash: %{}}
+      }
+
+      for bad <- ["0", "61", "ten", "", "1.5"] do
+        {:noreply, s} =
+          RisiMeWeb.Admin.VoicesLive.handle_event("call_risi_max", %{"minutes" => bad}, socket)
+
+        assert {:error, _} = s.assigns.notice, bad
+      end
+
+      assert CallRisi.max_s() == 1800
+
+      {:noreply, s} =
+        RisiMeWeb.Admin.VoicesLive.handle_event("call_risi_max", %{"minutes" => "12"}, socket)
+
+      assert {:ok, msg} = s.assigns.notice
+      assert msg =~ "12 min"
+      assert CallRisi.max_s() == 720 and CallRisi.max_s_source() == :table
+      assert s.assigns.call_risi_max_s == 720
+
+      {:noreply, s} = RisiMeWeb.Admin.VoicesLive.handle_event("call_risi_max_reset", %{}, s)
+      assert {:ok, _} = s.assigns.notice
+      assert CallRisi.max_s() == 1800 and CallRisi.max_s_source() == :default
+
+      assert Repo.all(
+               from e in AuditEntry,
+                 where: e.actor_id == ^a.id,
+                 order_by: e.at,
+                 select: {e.action, e.target}
+             ) == [{"setting_set", "call_risi_max_s"}, {"setting_clear", "call_risi_max_s"}]
+    end
+
+    test "Call Risi length: a stored value outside 60–3600 is clamped, junk is ignored" do
+      {a, _} = admin("callrisi2@example.com")
+      alias RisiMe.Agent.CallRisi
+
+      for {v, want} <- [{"10", 60}, {"99999", 3600}, {"900", 900}, {"soon", 1800}] do
+        :ok = Settings.put("call_risi_max_s", v, a.id)
+        assert CallRisi.max_s() == want, v
+      end
+
+      assert {:error, :out_of_range} = CallRisi.put_max_s(59, a.id)
+      assert {:error, :out_of_range} = CallRisi.put_max_s(3601, a.id)
+      assert :ok = CallRisi.put_max_s(3600, a.id)
+      assert CallRisi.max_s() == 3600
+    end
   end
 
   describe "test clips" do

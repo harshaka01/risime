@@ -16,11 +16,14 @@ defmodule RisiMeWeb.Admin.VoicesLive do
     nor stored (the audit log records only its length).
   * Rating: 👍 / 👎 per reply (`RisiMe.Agent.TTS.Ratings`: audit-logged with the reply's latency,
     summed into the Voice agent's scoreboard row).
+  * Call Risi (contract v1.48 §41.6): the maximum length of one Risi call, in minutes (1–60, the
+    setting `call_risi_max_s` in seconds, default 30 min). Live within 5 s for new calls; audit-logged.
   """
   use RisiMeWeb, :live_view
 
   alias RisiMe.Admin
   alias RisiMe.Admin.Settings
+  alias RisiMe.Agent.CallRisi
   alias RisiMe.Agent.TTS
 
   @labels %{
@@ -76,6 +79,37 @@ defmodule RisiMeWeb.Admin.VoicesLive do
       end
 
     {:noreply, socket |> assign(:notice, notice) |> load_choices()}
+  end
+
+  def handle_event("call_risi_max", %{"minutes" => minutes}, socket) when is_binary(minutes) do
+    {lo, hi} = CallRisi.max_s_bounds()
+
+    result =
+      case Integer.parse(String.trim(minutes)) do
+        {m, ""} -> CallRisi.put_max_s(m * 60, socket.assigns.admin_id)
+        _ -> {:error, :invalid}
+      end
+
+    notice =
+      case result do
+        :ok ->
+          {:ok,
+           "Call Risi: at most #{minutes(CallRisi.max_s())} per call (new calls, within 5 s)."}
+
+        {:error, _} ->
+          {:error, "Type whole minutes from #{div(lo, 60)} to #{div(hi, 60)}."}
+      end
+
+    {:noreply, socket |> assign(:notice, notice) |> load_choices()}
+  end
+
+  def handle_event("call_risi_max_reset", _params, socket) do
+    :ok = CallRisi.reset_max_s(socket.assigns.admin_id)
+
+    {:noreply,
+     socket
+     |> assign(:notice, {:ok, "Call Risi: back to #{minutes(CallRisi.max_s())} per call."})
+     |> load_choices()}
   end
 
   def handle_event("test", %{"text" => text} = params, socket) when is_binary(text) do
@@ -226,9 +260,14 @@ defmodule RisiMeWeb.Admin.VoicesLive do
   defp load_choices(socket) do
     assign(socket,
       choices: TTS.choices(),
-      sources: Map.new(TTS.languages(), &{&1, Settings.source(TTS.setting_key(&1))})
+      sources: Map.new(TTS.languages(), &{&1, Settings.source(TTS.setting_key(&1))}),
+      call_risi_max_s: CallRisi.max_s(),
+      call_risi_source: CallRisi.max_s_source()
     )
   end
+
+  defp minutes(s) when rem(s, 60) == 0, do: "#{div(s, 60)} min"
+  defp minutes(s), do: "#{div(s, 60)} min #{rem(s, 60)} s"
 
   @impl true
   def render(assigns) do
@@ -323,6 +362,41 @@ defmodule RisiMeWeb.Admin.VoicesLive do
             </td>
           </tr>
         </table>
+      </div>
+
+      <div class="card">
+        <strong>Call Risi</strong>
+        <p class="muted">
+          The longest one voice call with Risi may last; the call ends at the limit. A change
+          applies to new calls within 5 seconds, with no deploy.
+        </p>
+        <p>
+          Now: <strong>{minutes(@call_risi_max_s)}</strong>
+          <span :if={@call_risi_source == :env} class="muted"> (from the server environment)</span>
+          <span :if={@call_risi_source == :default} class="muted"> (default)</span>
+        </p>
+        <form phx-submit="call_risi_max" class="row">
+          <input
+            type="number"
+            name="minutes"
+            min="1"
+            max="60"
+            step="1"
+            value={div(@call_risi_max_s, 60)}
+            style="width:6em;font:inherit;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg)"
+            aria-label="Maximum Call Risi length in minutes"
+          />
+          <span>minutes (1–60)</span>
+          <button class="btn primary" type="submit">Save</button>
+          <button
+            :if={@call_risi_source == :table}
+            class="btn"
+            type="button"
+            phx-click="call_risi_max_reset"
+          >
+            Back to default
+          </button>
+        </form>
       </div>
 
       <div class="card">

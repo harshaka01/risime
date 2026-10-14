@@ -4,22 +4,29 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,20 +80,64 @@ fun RisiCallExplainer(onOk: () -> Unit, onCancel: () -> Unit) {
     )
 }
 
-/** §41.1 the Risi chat's top-bar Call Risi button: asks RECORD_AUDIO on the first call. */
+/** RECORD_AUDIO first (asked on the first call), then [onCall]; a refusal → [onBlocked]. */
 @Composable
-fun CallRisiButton(onBlocked: (String) -> Unit, onCall: () -> Unit) {
+private fun rememberMicThen(onBlocked: (String) -> Unit, onCall: () -> Unit): () -> Unit {
     val ctx = LocalContext.current
     val mic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) onCall() else onBlocked("RisiMe needs the microphone for calls")
     }
+    return {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) onCall()
+        else mic.launch(Manifest.permission.RECORD_AUDIO)
+    }
+}
+
+/** §41.1 the Risi chat's top-bar Call Risi button: asks RECORD_AUDIO on the first call. */
+@Composable
+fun CallRisiButton(onBlocked: (String) -> Unit, onCall: () -> Unit) {
+    val call = rememberMicThen(onBlocked, onCall)
     IconButton(
-        onClick = {
-            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) onCall()
-            else mic.launch(Manifest.permission.RECORD_AUDIO)
-        },
+        onClick = call,
         modifier = Modifier.testTag("call_risi_button").semantics { contentDescription = CallRisiTexts.BUTTON },
     ) { Icon(Icons.Default.Call, null) }
+}
+
+/**
+ * v1.48 §41.1/§41.3 (Harsha 2026-10-14): the Risi contact sheet, opened from Risi's avatar on the chat list's
+ * Risi row while Call Risi is available (the same rules as the Risi chat's button): Risi with the agent badge,
+ * [Message] and [Call Risi]. The list offers it only while [CallRisiRules.contactSheet] holds.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RisiContactSheet(onMessage: () -> Unit, onCall: () -> Unit, onBlocked: (String) -> Unit, onDismiss: () -> Unit) {
+    val call = rememberMicThen(onBlocked) { onDismiss(); onCall() }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp).testTag("risi_contact_sheet")) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RisiAvatar(48.dp)
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(CallRisiTexts.TITLE, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(CallRisiTexts.CONTACT_SUBTITLE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = { onDismiss(); onMessage() }, modifier = Modifier.weight(1f).testTag("risi_contact_message")) {
+                    Text(CallRisiTexts.MESSAGE, maxLines = 1)
+                }
+                Button(
+                    onClick = call,
+                    modifier = Modifier.weight(1f).testTag("risi_contact_call").semantics { contentDescription = CallRisiTexts.BUTTON },
+                ) {
+                    Icon(Icons.Default.Call, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text(CallRisiTexts.BUTTON, maxLines = 1)
+                }
+            }
+        }
+    }
 }
 
 /** §41.5 the `call_transcript` card in the Risi chat (filler lines dimmed). */

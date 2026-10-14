@@ -31,6 +31,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import ai.risicloud.risime.ui.chat.testTagOf
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -107,6 +110,24 @@ fun ChatsScreen(
     CallsDialogs(callsUi, callRows, onDelete = vm::hideCalls, onClear = vm::clearCallLog)
     // WhatsApp: a long-press selects the chat; the top bar becomes the selection bar (Delete, ⋮ → Lock chat / Clear chat).
     var selected by remember { mutableStateOf<ChatRow?>(null) }
+    // v1.48 §41.1 (Harsha 2026-10-14): the Risi contact sheet with [Call Risi], under the Risi chat button's rules.
+    val callRisiFlagOn by vm.callRisiFlagOn.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(callRisiFlagOn) { if (callRisiFlagOn) vm.refreshCallRisi() }
+    val callRisiOk by vm.callRisiAllowed.collectAsStateWithLifecycle()
+    var risiSheet by remember { mutableStateOf<String?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var risiExplain by remember { mutableStateOf<String?>(null) }
+    risiSheet?.let { conv ->
+        ai.risicloud.risime.calls.risi.RisiContactSheet(
+            onMessage = { onOpen(conv) },
+            onCall = { if (vm.callRisiExplained()) vm.startRisiCall(conv) else risiExplain = conv },
+            onBlocked = { android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show() },
+            onDismiss = { risiSheet = null },
+        )
+    }
+    risiExplain?.let { conv ->
+        ai.risicloud.risime.calls.risi.RisiCallExplainer(onOk = { risiExplain = null; vm.startRisiCall(conv) }, onCancel = { risiExplain = null })
+    }
     var clearAsk by remember { mutableStateOf<Pair<ChatRow, Boolean>?>(null) }
     androidx.activity.compose.BackHandler(enabled = selected != null) { selected = null }
     // A selected row that left the list (locked, deleted elsewhere) ends the selection.
@@ -256,6 +277,9 @@ fun ChatsScreen(
                                 // While selecting, a tap selects that chat instead (one at a time); else it opens.
                                 onClick = { if (selected != null) selected = row else row.target?.takeIf { row.openable }?.let(onOpen) },
                                 onLongClick = { selected = row },
+                                onAvatar = row.conversationId
+                                    ?.takeIf { row.risi && selected == null && ai.risicloud.risime.calls.risi.CallRisiRules.contactSheet(callRisiOk, it) }
+                                    ?.let { conv -> { risiSheet = conv } },
                             )
                         }
                     }
@@ -440,8 +464,8 @@ fun tabIcon(tab: ai.risicloud.risime.data.tabs.Tab?): String = when (tab) {
 }
 
 @Composable
-internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null) {
-    if (row.risi) return RisiRowItem(row, onClick)
+internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> Unit)? = null, onAvatar: (() -> Unit)? = null) {
+    if (row.risi) return RisiRowItem(row, onClick, onAvatar)
     if (row.group) return GroupRowItem(row, onClick, onLongClick)
     val sub = when {
         !row.friend -> "Not friends any more"
@@ -473,7 +497,7 @@ internal fun ChatRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
 
 /** §25.2 the Risi chat's row (Official styling, Risi's avatar); before it exists, "Ask Risi anything". */
 @Composable
-private fun RisiRowItem(row: ChatRow, onClick: () -> Unit) {
+private fun RisiRowItem(row: ChatRow, onClick: () -> Unit, onAvatar: (() -> Unit)? = null) {
     val last = row.last
     val lastText = last?.let { ai.risicloud.risime.push.bodyPreview(it.kind, it.body, it.systemJson) }.orEmpty()
     ListRow(
@@ -484,7 +508,13 @@ private fun RisiRowItem(row: ChatRow, onClick: () -> Unit) {
             last.outgoing -> "You: $lastText"
             else -> lastText
         },
-        leading = { ai.risicloud.risime.ui.tabs.RisiAvatar() },
+        // v1.48 §41.1: while Call Risi is available, Risi's avatar opens the Risi contact sheet (else v1.47 exactly).
+        leading = {
+            if (onAvatar == null) ai.risicloud.risime.ui.tabs.RisiAvatar()
+            else androidx.compose.foundation.layout.Box(
+                Modifier.risiAvatarTap(onAvatar),
+            ) { ai.risicloud.risime.ui.tabs.RisiAvatar() }
+        },
         meta = last?.takeIf { lastText.isNotEmpty() }?.let { shortStamp(it.localTs) },
         strong = row.unread > 0,
         badge = if (row.unread > 0) ({ UnreadBadge(row.unread) }) else null,
@@ -523,3 +553,11 @@ private fun GroupRowItem(row: ChatRow, onClick: () -> Unit, onLongClick: (() -> 
         onLongClick = onLongClick,
     )
 }
+
+/** v1.48 §41.1: Risi's avatar on the list row opens the Risi contact sheet. */
+private fun Modifier.risiAvatarTap(onTap: () -> Unit): Modifier =
+    this.then(
+        Modifier.clip(androidx.compose.foundation.shape.CircleShape)
+            .clickable(onClickLabel = "Risi", onClick = onTap)
+            .testTag("risi_row_avatar"),
+    )

@@ -43,7 +43,8 @@ defmodule RisiMeWeb.CallRisiRoomsTest do
       :risi_call_chat_check,
       :risi_call_health,
       :risi_agent_flags,
-      :risi_dev_users
+      :risi_dev_users,
+      :admin_settings
     ]
 
     prev = for k <- keys, do: {k, Application.get_env(:risime, k)}
@@ -207,6 +208,29 @@ defmodule RisiMeWeb.CallRisiRoomsTest do
                rooms(a, a_dev, req(id, %{"risi_call" => true}))
 
       stop_sessions()
+    end
+
+    test "v1.48 §41.6: max_s comes from the admin setting, the same in the reply and the session",
+         ctx do
+      %{a: a, a_dev: a_dev, id: id} = ctx
+      flag("on")
+
+      ex =
+        Path.expand("../../../../contract/v1/examples/calls_room_reply_call_risi.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+
+      for {v, want} <- [{"600", 600}, {"5", 60}, {"7200", 3600}, {"x", 1800}] do
+        Application.put_env(:risime, :admin_settings, %{"call_risi_max_s" => v})
+        {200, reply} = rooms(a, a_dev, req(id, %{"risi_call" => true}))
+        assert reply["risi_call"]["max_s"] == want, v
+        assert_receive {:session_started, args}
+        assert args.max_s == want
+        # The reply has exactly the example's fields (calls_room_reply_call_risi.json).
+        assert Enum.sort(Map.keys(reply)) == Enum.sort(Map.keys(ex))
+        assert Enum.sort(Map.keys(reply["risi_call"])) == Enum.sort(Map.keys(ex["risi_call"]))
+        stop_sessions()
+      end
     end
 
     test "risi_call on another action is 400", ctx do

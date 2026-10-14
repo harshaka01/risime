@@ -51,7 +51,13 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
         Process.send_after(self(), :join_timeout, @join_ms)
         Process.send_after(self(), :caller_timeout, @caller_ms)
-        Process.send_after(self(), :max_length, CallRisi.max_s() * 1000)
+        # v1.48 §41.2: the limit the start reply announced (`max_s`), fixed for the call.
+        Process.send_after(
+          self(),
+          :max_length,
+          (Map.get(args, :max_s) || CallRisi.max_s()) * 1000
+        )
+
         Process.send_after(self(), :flag_check, @flag_every_ms)
 
         {:ok,

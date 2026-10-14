@@ -185,6 +185,9 @@ defmodule RisiMe.Calls.Rooms do
       metadata: Jason.encode!(%{"c" => req.conv, "m" => "audio", "k" => "risi"})
     }
 
+    # v1.48 §41.6: the admin's limit at `start`, the same for the session and the reply.
+    max_s = RisiMe.Agent.CallRisi.max_s()
+
     with {:ok, _r} <- LiveKit.api().create_room(config, room, opts),
          {:ok, _pid} <-
            RisiMe.Agent.CallRisi.start(%{
@@ -192,11 +195,12 @@ defmodule RisiMe.Calls.Rooms do
              call_id: req.call_id,
              user_id: me.user_id,
              device_id: me.device_id,
-             room: room
+             room: room,
+             max_s: max_s
            }) do
-      {:ok, risi_reply(config, room, me)}
+      {:ok, risi_reply(config, room, me, max_s)}
     else
-      {:error, {:already_started, _}} -> {:ok, risi_reply(config, room, me)}
+      {:error, {:already_started, _}} -> {:ok, risi_reply(config, room, me, max_s)}
       _ -> {:error, :risi_unavailable}
     end
   end
@@ -358,7 +362,7 @@ defmodule RisiMe.Calls.Rooms do
 
   defp risi_room?(_room), do: false
 
-  defp risi_reply(config, room, me) do
+  defp risi_reply(config, room, me, max_s) do
     config
     |> token_reply(room, me, "audio")
     |> Map.put(:max_participants, 2)
@@ -366,7 +370,7 @@ defmodule RisiMe.Calls.Rooms do
       state: "joining",
       e2ee: false,
       risi_identity: RisiMe.Agent.CallRisi.risi_identity(),
-      max_s: RisiMe.Agent.CallRisi.max_s(),
+      max_s: max_s,
       lang: "en"
     })
   end

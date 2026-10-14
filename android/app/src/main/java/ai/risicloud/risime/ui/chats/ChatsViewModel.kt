@@ -291,6 +291,37 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // ---- v1.48 §41.1 (Harsha 2026-10-14): Call Risi on the Risi contact sheet (the chat list's Risi avatar) ----
+
+    private val _callRisiUser = MutableStateFlow(false)
+
+    /** The Risi chat button's rules (`User.call_risi`, the developer flag `call_risi`, a `group_calls` device). */
+    val callRisiAllowed: StateFlow<Boolean> = combine(_callRisiUser, c.callRisiFlag.on) { user, flag ->
+        ai.risicloud.risime.calls.risi.CallRisiRules.buttonVisible(
+            userCallRisi = user, flagOn = flag,
+            groupCalls = c.deviceRegistrar.advertised?.contains(ai.risicloud.risime.net.DeviceMls.CAP_GROUP_CALLS) == true,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** The developer flag (the list asks `GET /me` for `call_risi` only while it is on). */
+    val callRisiFlagOn: StateFlow<Boolean> = c.callRisiFlag.on
+
+    fun refreshCallRisi() {
+        viewModelScope.launch {
+            (c.api.me() as? ApiResult.Ok)?.value?.user?.let { _callRisiUser.value = it.callRisi }
+        }
+    }
+
+    /** §41.4: the one-time explainer was shown on this phone. */
+    fun callRisiExplained(): Boolean = c.callRisiFlag.explained()
+
+    /** §41.3: Call Risi from the contact sheet, in the Risi chat [risiChat]. */
+    fun startRisiCall(risiChat: String) {
+        c.callRisiFlag.setExplained()
+        c.calls.placeRisiCall(risiChat)
+        c.calls.openCallScreen()
+    }
+
     /** The Calls tab: 1:1 call records grouped like WhatsApp ("Name (3)"), newest first. */
     val calls: StateFlow<List<CallRow>> = combine(
         c.db.messages().observeCallLines(), c.contacts.contacts, c.db.callLog().hiddenIds(), c.db.callLog().clearedBefore(),

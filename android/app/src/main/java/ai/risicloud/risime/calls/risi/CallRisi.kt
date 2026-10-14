@@ -65,6 +65,13 @@ object CallRisiRules {
     /** §41.1: the button shows only with `User.call_risi`, the developer flag, and a `group_calls` device. */
     fun buttonVisible(userCallRisi: Boolean, flagOn: Boolean, groupCalls: Boolean): Boolean = userCallRisi && flagOn && groupCalls
 
+    /**
+     * v1.48 §41.1 (Harsha 2026-10-14): the Risi contact sheet (from Risi's avatar on the chat list) offers Call Risi
+     * under the button's rules ([buttonVisible]), and only for an existing Risi chat ([risiChat], a `grp:`);
+     * otherwise the avatar isn't tappable (v1.47 exactly).
+     */
+    fun contactSheet(buttonVisible: Boolean, risiChat: String?): Boolean = buttonVisible && risiChat?.startsWith("grp:") == true
+
     /** §41.1: `call_risi` is advertised only with the flag on and both `group_calls` and `risi_tools`. */
     fun advertise(flagOn: Boolean, groupCalls: Boolean, risiTools: Boolean): Boolean = flagOn && groupCalls && risiTools
 
@@ -90,6 +97,8 @@ object CallRisiTexts {
     const val EXPLAIN_TEXT = "You're calling Risi. Risi hears what you say and answers. A transcript goes to your Risi chat. Audio isn't kept."
     const val LINE = "Call with Risi"
     const val TRANSCRIPT_TITLE = "Call with Risi"
+    const val MESSAGE = "Message"
+    const val CONTACT_SUBTITLE = "Agent · answers when you call"
 
     /** The error a refused `start` shows (§41.2), null for other failures (the generic "Can't connect"). */
     fun error(code: String?): String? = when (code) {
@@ -129,12 +138,11 @@ data class CallTranscriptLine(val who: String, val text: String, val filler: Boo
 data class CallTranscript(val callId: String, val durationS: Long?, val lines: List<CallTranscriptLine>, val truncated: Boolean = false) {
     companion object {
         /**
-         * The proposal's kind. It shares its name with §36.5's per-turn `call_transcript` (which has no `lines`),
-         * so a post is a Call Risi transcript only when it carries `lines`; [ALT_KIND] is accepted too in case the
-         * contract renames it.
+         * v1.48 §41.5: the kind is `risi_call_transcript`. [ALT_KIND] (the proposal's first name, which §36.5's
+         * per-turn line also uses) is still read when the post carries `lines` (a §36.5 line has none).
          */
-        const val KIND = "call_transcript"
-        const val ALT_KIND = "risi_call_transcript"
+        const val KIND = "risi_call_transcript"
+        const val ALT_KIND = "call_transcript"
         private const val MAX_LINES = 400
 
         /** From a stored row's `system_json` (the envelope or its `risi` object). */

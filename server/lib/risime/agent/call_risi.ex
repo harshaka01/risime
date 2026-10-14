@@ -8,7 +8,8 @@ defmodule RisiMe.Agent.CallRisi do
   * **Switch:** `RISI_CALL_RISI` = `off` | `canary` | `on` (`RisiMe.Agents.Flags.feature/1`, live in
     5 s; `canary` = `RISI_DEV_USERS`, Harsha first). Default `off`: nothing changes for any call.
   * **Start:** `RisiMe.Calls.Rooms` calls `check/3` before it creates the room and `start/1` after.
-  * At most `RISI_CALL_RISI_MAX` (default 2) calls at once, each at most 30 minutes.
+  * At most `RISI_CALL_RISI_MAX` (default 2) calls at once, each at most `max_s/0` (the admin setting
+    `call_risi_max_s`, default 30 minutes, 60–3600 s; contract v1.48 §41.6).
   * The transcript goes to the Risi chat at the end (`risi_call_transcript`); timings go to
     `risi_agent_runs` (agent `voice_call`) and the scoreboard; text and audio are never logged.
   """
@@ -54,8 +55,72 @@ defmodule RisiMe.Agent.CallRisi do
   @doc "The mode label for the runs table (`canary` | `on` | `off`)."
   def mode_label, do: Flags.feature(@flag) |> Atom.to_string()
 
-  @doc "The maximum call length in seconds."
-  def max_s, do: Keyword.get(config(), :max_s, @max_s)
+  @max_s_key "call_risi_max_s"
+  @max_s_min 60
+  @max_s_max 3_600
+
+  @doc "The admin setting of the call length limit (§41.6)."
+  def max_s_key, do: @max_s_key
+
+  @doc "The bounds of `max_s/0` in seconds: `{60, 3600}`."
+  def max_s_bounds, do: {@max_s_min, @max_s_max}
+
+  @doc """
+  The maximum call length in seconds (contract v1.48 §41.6): the admin setting `call_risi_max_s`
+  (`RisiMe.Admin.Settings`: table → env `RISI_CALL_RISI_MAX_S` → the default, live within 5 s), default
+  1800 (`config :risime, :risi_call_risi_config, max_s:` may change the default). Always within 60–3600:
+  a value outside is clamped, a value that isn't a number is ignored.
+  """
+  def max_s do
+    default = Keyword.get(config(), :max_s, @max_s)
+
+    with :error <- parse_s(RisiMe.Admin.Settings.get(@max_s_key)),
+         :error <- parse_s(default) do
+      @max_s
+    else
+      {:ok, n} -> n |> max(@max_s_min) |> min(@max_s_max)
+    end
+  rescue
+    _ -> @max_s
+  end
+
+  @doc "Where `max_s/0` comes from: `:table`, `:env` or `:default`."
+  def max_s_source do
+    RisiMe.Admin.Settings.source(@max_s_key)
+  rescue
+    _ -> :default
+  end
+
+  @doc """
+  Sets the call length limit from the admin console (audit-logged by `by`). `:ok`, or
+  `{:error, :out_of_range}` / `{:error, :invalid}` (nothing saved).
+  """
+  def put_max_s(value, by) do
+    case parse_s(value) do
+      {:ok, n} when n >= @max_s_min and n <= @max_s_max ->
+        RisiMe.Admin.Settings.put(@max_s_key, Integer.to_string(n), by)
+
+      {:ok, _} ->
+        {:error, :out_of_range}
+
+      :error ->
+        {:error, :invalid}
+    end
+  end
+
+  @doc "Back to the environment/default (audit-logged)."
+  def reset_max_s(by), do: RisiMe.Admin.Settings.clear(@max_s_key, by)
+
+  defp parse_s(n) when is_integer(n), do: {:ok, n}
+
+  defp parse_s(s) when is_binary(s) do
+    case Integer.parse(String.trim(s)) do
+      {n, ""} -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  defp parse_s(_), do: :error
 
   @doc "The configuration (`config :risime, :risi_call_risi_config`)."
   def config, do: Application.get_env(:risime, :risi_call_risi_config, [])

@@ -773,7 +773,69 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + v149 + mapOf(
+    /** v1.48 §41 Call Risi (decision 090; calls/risi/CallRisi.kt, GroupCallEnvelope `with`). */
+    private val callRisiV148: Map<String, (String) -> Any> by lazy {
+        mapOf(
+            "device_put_call_risi.json" to { s ->
+                ProtocolJson.decodeFromString<DevicePut>(s).also { d ->
+                    val caps = d.mls!!.capabilities!!
+                    require(DeviceMls.CAP_CALL_RISI in caps && DeviceMls.CAP_GROUP_CALLS in caps && "risi_tools" in caps)
+                }
+            },
+            "me_reply_call_risi.json" to { s -> ProtocolJson.decodeFromString<MeReply>(s).also { require(it.user.callRisi && it.user.risiDev) } },
+            "calls_room_request_call_risi.json" to { s ->
+                ProtocolJson.decodeFromString<CallsRoomRequest>(s).also {
+                    require(it.action == CallsRoomRequest.START && it.risiCall == true && it.risiListen == null && it.media == "audio")
+                    require(ProtocolJson.encodeToJsonElement(it) == ProtocolJson.parseToJsonElement(s)) // re-encodes exactly
+                }
+            },
+            "calls_room_reply_call_risi.json" to { s ->
+                ProtocolJson.decodeFromString<CallsRoomReply>(s).also {
+                    val r = it.risiCall!!
+                    require(it.maxParticipants == 2 && it.risi == null && !it.toString().contains(it.token))
+                    require(r.state == "joining" && !r.e2ee && r.maxS == 1_800L && r.lang == "en" && r.risiIdentity.contains('/'))
+                    require(ai.risicloud.risime.calls.risi.CallRisiRules.allowedRemote(r.risiIdentity.uppercase(), r.risiIdentity))
+                }
+            },
+            "error_call_risi_off.json" to { s -> apiError(s, CallErrors.CALL_RISI_OFF).also { require(ai.risicloud.risime.calls.risi.CallRisiTexts.error(it.error.code) != null) } },
+            "error_risi_busy.json" to { s -> apiError(s, CallErrors.RISI_BUSY).also { require(ai.risicloud.risime.calls.risi.CallRisiTexts.error(it.error.code) != null) } },
+            "error_risi_unavailable.json" to { s -> apiError(s, CallErrors.RISI_UNAVAILABLE).also { require(ai.risicloud.risime.calls.risi.CallRisiTexts.error(it.error.code) != null) } },
+            "error_not_risi_chat.json" to { s -> apiError(s, CallErrors.NOT_RISI_CHAT).also { require(ai.risicloud.risime.calls.risi.CallRisiTexts.error(it.error.code) != null) } },
+            // Server-side claims for Risi's own token in a Call Risi room: never sent to the app; microphone only.
+            "livekit_token_claims_call_risi.json" to { s ->
+                (ProtocolJson.parseToJsonElement(s) as JsonObject).also { o ->
+                    val v = o["video"]!!.jsonObject
+                    require(v["canPublish"]!!.jsonPrimitive.boolean && v["canSubscribe"]!!.jsonPrimitive.boolean && !v["canPublishData"]!!.jsonPrimitive.boolean)
+                    require(v["canPublishSources"]!!.jsonArray.map { it.jsonPrimitive.content } == listOf("microphone"))
+                }
+            },
+            "group_call_started_call_risi_payload.json" to { s ->
+                groupCall(s).also {
+                    require(it.state == ai.risicloud.risime.calls.GroupCallEnvelope.STARTED && it.with == ai.risicloud.risime.calls.GroupCallEnvelope.WITH_RISI && it.risi == null)
+                    require(ai.risicloud.risime.calls.risi.CallRisiTexts.historyLine(it, running = false) == "Call with Risi")
+                }
+            },
+            "group_call_ended_call_risi_payload.json" to { s ->
+                groupCall(s).also {
+                    require(it.state == ai.risicloud.risime.calls.GroupCallEnvelope.ENDED && it.with == ai.risicloud.risime.calls.GroupCallEnvelope.WITH_RISI && it.durationS == 192L)
+                    require(ai.risicloud.risime.calls.risi.CallRisiTexts.historyLine(it, running = false) == "Call with Risi · 3:12")
+                }
+            },
+            "envelope_risi_call_risi_transcript.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { e ->
+                    require(e.risi!!.kind == ai.risicloud.risime.calls.risi.CallTranscript.KIND && e.body.startsWith("Call with Risi · 3:12\n"))
+                    val t = ai.risicloud.risime.calls.risi.CallTranscript.parseJson(s)!!
+                    require(t.durationS == 192L && t.lines.size == 3 && t.lines[1].filler && !t.lines[2].interrupted && t.title == "Call with Risi · 3:12")
+                    require(t.callId == e.risi!!.callId)
+                }
+            },
+            "envelope_risi_answer_call.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).risi!!.also { require(it.kind == "answer" && it.callId != null && it.requestId != null) }
+            },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + callRisiV148 + v149 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

@@ -11669,6 +11669,157 @@ under 1.5 % of one core and 5–10 MiB per participant, so **spark2's 31 Mbit/s 
   answers, every phone receives decrypted audio from both others, B leaves and A–C go on; then the same
   with video (frames decoded from every remote). `GCTEST OK`.
 
+## 41. Call Risi: a voice call that Risi answers (v1.48)
+Decision 090; proposal `contract/proposals/2026-10-14-call-risi.md` (applied). Behind flags: server
+`RISI_CALL_RISI` = `off` | `canary` | `on` (default `off`; `canary` = `RISI_DEV_USERS`), Android developer flag
+`call_risi` (`risi_dev` accounts only, off by default). With the flags off every call is byte-identical to v1.47.
+
+**Additive only:** one device capability, one optional `User` field, one optional field on `POST /calls/rooms`
+`start` with its reply object and four errors, one room-metadata key, one optional field on the durable
+`group_call` envelope, one Risi kind, one optional field on the `answer` kind. Old apps never see a Risi call
+and render `risi_call_transcript` as `body`.
+
+**Harsha's decisions (2026-10-14):**
+1. **v1 ships without frame E2EE**, with the honest wording of §41.4 on the call screen and `"e2ee": false` in
+   the start reply. Frame encryption to Risi (`call_frame_keys` in Risi's MLS core, crypto C10) comes later.
+2. **The Call Risi button is also on the Risi contact sheet** (the Friends list), with the same rules as the
+   button in the Risi chat (§41.1, §41.3).
+3. **Each Risi call is limited to 30 minutes by default, adjustable in the admin console** (setting
+   `call_risi_max_s`, 60–3600 s, §41.6). The start reply's `max_s` carries the limit in force.
+
+### 41.0 Principles
+- **A call with Risi, not between humans.** It happens only in the caller's own **Risi chat** (§25.2, a `grp:`
+  with one human and Risi). Risi is the other party, so **Risi hears and decrypts this call's audio**. It is
+  never a Private or an Official call between people, and nothing in §16, §19, §20, §27.7 or §36 changes.
+- **Honest label (decision 048):** v1 media is protected per hop (DTLS-SRTP to the SFU, loopback to Risi) but
+  **not frame-encrypted end to end** (§20.6 needs Risi's server-side `call_frame_keys`, crypto C10, later).
+  The call screen says so (§41.4) and the start reply carries `"e2ee": false`.
+- **Visible agent:** the call screen shows from its first frame that Risi hears the call.
+- **No raw audio stored**, anywhere. The transcript is a Risi post in the Risi chat (MLS, encrypted to the
+  user's devices), like any Risi answer.
+
+### 41.1 Capability, switch
+- **Capability `"call_risi"`** in `mls.capabilities` (`device_put_call_risi.json`), only together with
+  `group_calls` and `risi_tools`, once the app implements §41.2–§41.5. The server ignores `call_risi` from a
+  device without both.
+- **`User` (§1.3) gains `"call_risi": true`** (`me_reply_call_risi.json`) while the server switch
+  `RISI_CALL_RISI` applies to that user (`on`, or `canary` and the user is in `RISI_DEV_USERS`); absent
+  otherwise. The app shows **Call Risi** (in the Risi chat's top bar and on the Risi contact sheet) only when
+  this is true, the device has `call_risi`, and (v1) the developer flag `call_risi` is on. The server re-checks
+  on every `start`, so turning the switch `off` hides the button at the next `GET /me` and refuses new calls at
+  once; running calls end within 10 s.
+
+### 41.2 Starting: `POST /api/v1/calls/rooms` `start` with `risi_call`
+Request (`calls_room_request_call_risi.json`):
+```json
+{"conversation_id": "grp:…(the caller's Risi chat)", "call_id": "<uuid-v4>", "media": "audio",
+ "action": "start", "risi_call": true}
+```
+Checks, after §20.2's (in order): `RISI_CALL_RISI` for the caller (**`403 call_risi_off`**,
+`error_call_risi_off.json`) → the conversation is the caller's active Risi chat (`chat_kind: "risi"`) and
+`media` is `"audio"` (**`422 not_risi_chat`**, `error_not_risi_chat.json`) → the device advertises `call_risi`
+(`403 invalid_device`) → fewer than `RISI_CALL_RISI_MAX` (default 2) Risi calls running (**`409 risi_busy`**,
+`error_risi_busy.json`) → speech, TTS and the media worker healthy (**`503 risi_unavailable`**,
+`error_risi_unavailable.json`). Rate limit: `start` as §20.2.
+
+The server creates the room with `max_participants` **2**, `empty_timeout` 60 s, `departure_timeout` 20 s and
+the metadata `{"c": conv, "m": "audio", "k": "risi"}`, starts Risi's voice session, and answers `200`
+(`calls_room_reply_call_risi.json`): the §20.2 reply plus
+```json
+"risi_call": {"state": "joining", "e2ee": false, "risi_identity": "<risi_user_id>/<risi_device_id>",
+              "max_s": 1800, "lang": "en"}
+```
+- `max_s` is this call's length limit in seconds: the admin setting `call_risi_max_s` at the time of `start`
+  (default 1800, always 60–3600, §41.6). The server ends the call at `max_s` (transcript `reason: "max_length"`).
+- `join` on a room with `"k": "risi"` answers `409 call_full` to anyone but the starter's identity
+  (a refresh); `status` works as §20.2. `risi_call` on any other action is `400 bad_request`.
+- Without `risi_call` (or `false`), `start` is exactly v1.47 (parity).
+- **Risi's token** is minted inside the server (never through REST) with the §20.2 claims except
+  `canPublish: true`, `canPublishSources: ["microphone"]`, `canSubscribe: true`, `canPublishData: false`
+  (`livekit_token_claims_call_risi.json`). Risi subscribes only to the caller's microphone track.
+- Risi joins within 10 s; otherwise the session ends and the phone leaves (§41.3). Risi leaves when the caller
+  leaves, at `max_s`, when the switch turns off (reason `switch_off`), or on an error (reason `error`).
+
+### 41.3 The phone (android, normative where it says "must")
+- **Start:** the Call Risi button (the Risi chat's top bar and the Risi contact sheet, same rules) → TURN
+  credentials → `start` with `risi_call: true` → connect (§20.5 options) **without `E2EEOptions`** for this room
+  only (the reply said `"e2ee": false`) → publish the microphone with the WebRTC audio processing **on**: noise
+  suppression, echo cancellation, auto gain control, high-pass (LiveKit defaults, which must not be turned
+  off) → send the durable `group_call` `started` with **`"with": "risi"`**
+  (`group_call_started_call_risi_payload.json`). **No `call_offer`, no ringing**, no `call_member`.
+- **Fail closed:** the only remote participant the app plays is `risi_identity`. Any other identity → leave
+  at once ("This call isn't safe any more").
+- **Timeout:** Risi's identity not in the room 12 s after connect → leave, `group_call` `ended`
+  `reason: "timeout"`, "Risi couldn't answer. Try again in a moment."
+- **End:** hang up = disconnect, then `group_call` `ended` `reason: "hangup"` with `"with": "risi"`
+  (`group_call_ended_call_risi_payload.json`). Risi leaving (e.g. at `max_s`) ends the call the same way.
+  History line: "Call with Risi · 3:12" / "Call with Risi · Didn't connect".
+- Telecom, foreground service, wake lock, audio route: as §20.5.
+
+### 41.4 The call screen (android, normative)
+From the first frame of the call screen until it closes:
+- the title **"Risi"** with Risi's avatar and the agent badge, a state line "Connecting…" → "Listening" →
+  "Thinking…" → "Speaking" (from the room's audio levels: Risi's track speaking = Speaking);
+- a persistent banner **"Risi hears this call"** and below it **"Not end-to-end encrypted: audio is processed
+  by Risi on RisiMe's server. Audio isn't kept."** (never a lock icon);
+- mute, speaker, hang up. No add-people, no video, no screen share, no Transcribe button.
+- The first Risi call shows a one-time sheet: "You're calling Risi. Risi hears what you say and answers. A
+  transcript goes to your Risi chat. Audio isn't kept." [OK].
+
+### 41.5 The transcript: Risi kind `risi_call_transcript` (in the Risi chat)
+(Not `call_transcript`, which §36.5 already uses for a per-turn line.)
+Posted by Risi (§24.11 envelope, `risi` object) once the call ends (`envelope_risi_call_risi_transcript.json`):
+```json
+{"kind": "risi_call_transcript", "call_id": "…", "started_at": "…", "ended_at": "…", "duration_s": 192,
+ "reason": "hangup", "lines": [{"who": "user", "text": "What's on my calendar tomorrow?", "lang": "en",
+ "at": "…"}, {"who": "risi", "text": "Hmm, let me check your calendar…", "lang": "en", "at": "…",
+ "filler": true}, {"who": "risi", "text": "Tomorrow you have two meetings…", "lang": "en", "at": "…",
+ "interrupted": false, "request_id": "…"}],
+ "e2ee": false, "made_by": {…}, "call_ref": null, "notify": [user_id]}
+```
+- `who` is `"user"` or `"risi"`; `text` 1–2 000 chars; at most 400 lines (older lines dropped first, with
+  `"truncated": true`). `lang` is `en` | `si` | `ta`. `filler: true` marks a holding line. `interrupted: true`
+  marks a Risi line cut by the user (only the words Risi actually spoke before the cut are kept; v1 keeps the
+  sentences fully spoken). `request_id` links to the `answer` card a tool turn posted during the call.
+- `reason`: `hangup` | `max_length` | `switch_off` | `error` | `timeout`.
+- `body` (old apps): "Call with Risi · 3:12\nYou: …\nRisi: …".
+- A call with no utterance posts nothing.
+- **Tool answers during the call:** a turn that needs a tool runs the §25 loop as an `ask`; its `answer` card
+  appears in the Risi chat during the call, with the optional **`"call_id"`** of the call
+  (`envelope_risi_answer_call.json`). Confirm cards (writes) work as today and are never confirmed by voice in v1.
+
+### 41.6 Server (normative)
+- Learning log: one row per model call as today (`transcribe`, the answer's `voice_call_answer`, the router
+  if it calls a model), **never** text or audio; plus one `risi_agent_runs` row per turn (agent `voice_call`)
+  with the timings: end-of-turn wait, STT, first token, first sentence, **first audio after the user stopped
+  talking** (the budget: 1.5 s p50, 3 s p95), barge-ins. The daily scoreboard shows the `voice_call` row.
+- At most `RISI_CALL_RISI_MAX` calls at once.
+- **Length limit:** the admin setting **`call_risi_max_s`** (the admin console, Voices page, "Call Risi";
+  resolved as table → env `RISI_CALL_RISI_MAX_S` → default **1800**, live within 5 s, every change
+  audit-logged). Values outside **60–3600** are refused by the console and clamped when read. A call keeps the
+  limit it started with; the server ends it at `max_s`.
+
+### 41.7 Examples, gate
+- **Examples:** `device_put_call_risi.json`, `me_reply_call_risi.json`, `calls_room_request_call_risi.json`,
+  `calls_room_reply_call_risi.json`, `error_call_risi_off.json`, `error_risi_busy.json`,
+  `error_risi_unavailable.json`, `error_not_risi_chat.json`, `livekit_token_claims_call_risi.json`,
+  `group_call_started_call_risi_payload.json`, `group_call_ended_call_risi_payload.json`,
+  `envelope_risi_call_risi_transcript.json`, `envelope_risi_answer_call.json`.
+- **Server:** the order of refusals, the 2-seat `k: "risi"` room, Risi's claims, `join` refused, the reply's
+  `max_s` from the setting (bounds), the session's limit, parity with the flag off or without `risi_call`,
+  every new example.
+- **Android (JVM):** decoders of every new example; the button gating (chat bar and contact sheet); no
+  `E2EEOptions` only for this room; fail closed; the 12-s timeout; the history lines; parity with the flag off.
+
+## Changelog
+- **v1.48** (2026-10-14, decision 090): §41 Call Risi, a voice call in the caller's own Risi chat that Risi
+  answers (flags `RISI_CALL_RISI`, Android developer flag `call_risi`): capability `call_risi`, `User.call_risi`,
+  `start` with `risi_call: true` → a 2-seat room (`k: "risi"`) and the reply's `risi_call` {`state`, `e2ee: false`,
+  `risi_identity`, `max_s`, `lang`}, errors `call_risi_off`/`not_risi_chat`/`risi_busy`/`risi_unavailable`,
+  `group_call` `with: "risi"`, Risi kind `risi_call_transcript`, `answer.call_id`. Harsha: v1 without frame E2EE
+  (honest label; C10 later), the button also on the Risi contact sheet, the length limit `max_s` from the admin
+  setting `call_risi_max_s` (default 1800, 60–3600). Additive; parity with the flags off.
+
 ## 42. Send a message for me (v1.49)
 Applied from `contract/proposals/2026-10-14-send-for-me.md` (P1 2026-10-14, Harsha's phone). Amends §25.4, §26.2,
 §26.3, §26.6, §26.8, §28.4 and §37.8 where the subsections below say so. Server behind `RISI_SEND_FOR_ME`

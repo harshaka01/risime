@@ -111,8 +111,8 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
         }
         return
     }
-    // Proposal 2026-10-14-call-risi §41.5: a Call Risi's whole transcript (it has `lines`; §36.5's lines don't).
-    if (r.kind == ai.risicloud.risime.net.RisiKinds139.CALL_TRANSCRIPT || r.kind == ai.risicloud.risime.calls.risi.CallTranscript.ALT_KIND) {
+    // v1.48 §41.5: a Call Risi's whole transcript (`risi_call_transcript`; an old `call_transcript` with `lines` too).
+    if (r.kind == ai.risicloud.risime.calls.risi.CallTranscript.KIND || r.kind == ai.risicloud.risime.calls.risi.CallTranscript.ALT_KIND) {
         val call = remember(row.systemJson) { ai.risicloud.risime.calls.risi.CallTranscript.parseJson(row.systemJson) }
         if (call != null) {
             Box(modifier.fillMaxWidth().padding(end = 32.dp), contentAlignment = Alignment.CenterStart) {
