@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Health heal gate (incident 2026-10-14, decision 088 amendment, proposal 2026-10-14-health-nudge).
+#   scripts/health-heal-test
+# Server-level scenario against the test databases of THIS checkout (own build path and test partition `hh`, so it
+# never touches :4000, the pilot, risi-l1 or a redroid):
+#  1. H reinstalls while one peer is on the old app (0.2.0-nightly.43 caps, no push token) and another is offline;
+#  2. Official heals without any peer: Health names Risi, Risi's commit with the op re-adds H's new phone;
+#  3. the Private 1:1s wait (Risi never commits there); each peer gets ONE secure_nudge; the operator gets ONE plain
+#     report (names and actions, no ids), naming the peer that can't get notifications;
+#  4. the peers come back: their inbox joins name them, their commits re-add H's phone; the next sweep reports
+#     "fixed" for all three, verified (never assumed);
+#  plus the Health agent suites (repairs per mode and switch, nudge limits, PLAIN=off parity, labels).
+# Prints "HHTEST PASS <check>" per check, then "HHTEST OK", or "HHTEST FAIL <reason>" (exit 1).
+# Log: ~/risime-logs/health-heal-test/<time>.log. Needs the dev databases up (infra/docker-compose.dev.yml).
+set -uo pipefail
+cd "$(dirname "$0")/.."
+M="$HOME/.local/bin/mise exec --"
+LOGD="$HOME/risime-logs/health-heal-test"; mkdir -p "$LOGD"; LOG="$LOGD/$(date -u +%m%d-%H%M).log"
+avail_gb() { awk '/MemAvailable/ {print int($2/1048576)}' /proc/meminfo; }
+for _ in $(seq 1 60); do [ "$(avail_gb)" -ge 8 ] && break; sleep 30; done
+[ "$(avail_gb)" -ge 8 ] || { echo "HHTEST FAIL MemAvailable < 8 GB for 30 min"; exit 1; }
+export ERL_EPMD_ADDRESS=127.0.0.1 MIX_TEST_PARTITION=hh
+run() {
+  local name="$1"; shift
+  if ( cd server && $M mix test "$@" ) >> "$LOG" 2>&1; then echo "HHTEST PASS $name"
+  else echo "HHTEST FAIL $name (see $LOG)"; exit 1; fi
+}
+run scenario test/risime/agent/health_heal_scenario_test.exs
+grep -q "HHTEST PASS scenario" "$LOG" || { echo "HHTEST FAIL scenario did not run (see $LOG)"; exit 1; }
+run health-suites test/risime/agent/health_agent_test.exs test/risime/agent/health_report_test.exs
+echo "HHTEST OK"

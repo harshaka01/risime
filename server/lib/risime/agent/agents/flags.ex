@@ -54,8 +54,16 @@ defmodule RisiMe.Agents.Flags do
     "RISI_AGENT_ROUTER" => "shadow",
     # Decision 088: repairs only for RISI_DEV_USERS' conversations, shadow (detect, record,
     # alert) elsewhere; today's path did nothing at all.
-    "RISI_AGENT_HEALTH" => "canary"
+    "RISI_AGENT_HEALTH" => "canary",
+    # Incident 2026-10-14 (decision 088 amendment): the Health agent's switches, `off | canary | on`
+    # (`switch/1`). Official repairs everywhere (Harsha: "canary first, then all"); the Private
+    # nudge (proposal 2026-10-14-health-nudge) for RISI_DEV_USERS' chats first; the plain-language
+    # report (names and actions, no ids) for everyone.
+    "RISI_HEALTH_OFFICIAL_REPAIR" => "canary",
+    "RISI_HEALTH_NUDGE" => "canary",
+    "RISI_HEALTH_PLAIN" => "on"
   }
+  @switches ~w(RISI_HEALTH_OFFICIAL_REPAIR RISI_HEALTH_NUDGE RISI_HEALTH_PLAIN)
 
   @doc "The valid per-agent modes."
   def modes, do: @modes
@@ -162,6 +170,21 @@ defmodule RisiMe.Agents.Flags do
     end
   end
 
+  @doc """
+  A Health switch (`RISI_HEALTH_OFFICIAL_REPAIR`, `RISI_HEALTH_NUDGE`, `RISI_HEALTH_PLAIN`):
+  `:off | :canary | :on`, resolved like an agent flag (table > env > default); an unknown value
+  is `:off`.
+  """
+  def switch(name) when name in @switches do
+    case raw(name) do
+      v when v in @feature_modes -> String.to_existing_atom(v)
+      _ -> :off
+    end
+  end
+
+  @doc "The Health switches."
+  def switches, do: @switches
+
   @doc "True when `user` is in `RISI_DEV_USERS` (the canary group)."
   def dev_user?(user) when is_binary(user),
     do: String.downcase(user) in Application.get_env(:risime, :risi_dev_users, [])
@@ -212,7 +235,7 @@ defmodule RisiMe.Agents.Flags do
       [
         "RISI_AGENTS",
         "RISI_ROUTER_MODEL" | Enum.map(RisiMe.Agents.names(), &RisiMe.Agents.Agent.flag_name/1)
-      ] ++ Enum.sort(Map.keys(@features))
+      ] ++ Enum.sort(Map.keys(@features)) ++ @switches
 
     t = table()
 
@@ -262,6 +285,8 @@ defmodule RisiMe.Agents.Flags do
   defp validate(name, v) when is_map_key(@features, name) do
     if v in feature_modes(name), do: :ok, else: {:error, :invalid_flag}
   end
+
+  defp validate(name, v) when name in @switches and v in @feature_modes, do: :ok
 
   # The router's model alias (`off` = rules only), e.g. `risi-l1`, later `risi-l2`.
   defp validate("RISI_ROUTER_MODEL", v),

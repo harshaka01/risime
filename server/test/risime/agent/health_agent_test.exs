@@ -127,6 +127,9 @@ defmodule RisiMe.Agents.HealthTest do
 
     Application.put_env(:risime, :risi_dev_users, [])
     on_exit(fn -> Application.delete_env(:risime, :risi_dev_users) end)
+    # Incident 2026-10-14: canary's Official scope follows RISI_HEALTH_OFFICIAL_REPAIR.
+    Application.put_env(:risime, :risi_agent_flags, %{"RISI_HEALTH_OFFICIAL_REPAIR" => "canary"})
+    on_exit(fn -> Application.delete_env(:risime, :risi_agent_flags) end)
 
     for mode <- [:shadow, :canary] do
       r = Health.sweep(mode)
@@ -162,6 +165,28 @@ defmodule RisiMe.Agents.HealthTest do
     rows = RisiMe.Agents.Scoreboard.compute(Date.utc_today())
     assert %{n: n} = Enum.find(rows, &(&1.agent == "health"))
     assert n >= 1
+  end
+
+  test "canary with RISI_HEALTH_OFFICIAL_REPAIR on repairs Official everywhere; off repairs none",
+       ctx do
+    og = official!(ctx)
+    a2 = reinstall_a!(ctx, og)
+    op = Ops.adding_op(og, {ctx.a.user.id, a2})
+    op |> Ecto.Changeset.change(committer_device: nil, committer_user: nil) |> Repo.update!()
+
+    Application.put_env(:risime, :risi_dev_users, [])
+    on_exit(fn -> Application.delete_env(:risime, :risi_dev_users) end)
+    on_exit(fn -> Application.delete_env(:risime, :risi_agent_flags) end)
+
+    Application.put_env(:risime, :risi_agent_flags, %{"RISI_HEALTH_OFFICIAL_REPAIR" => "off"})
+    assert Health.official_scope(:canary) == :none
+    assert Enum.all?(found(Health.sweep(:canary), og), &(&1.action == "shadow"))
+
+    Application.put_env(:risime, :risi_agent_flags, %{"RISI_HEALTH_OFFICIAL_REPAIR" => "on"})
+    assert RisiMe.Agents.Flags.switch("RISI_HEALTH_OFFICIAL_REPAIR") == :on
+    assert Health.official_scope(:canary) == :all
+    assert Health.official_scope(:shadow) == :none
+    assert [%{action: "renamed_risi", repaired: true}] = found(Health.sweep(:canary), og)
   end
 
   test "off does nothing" do
