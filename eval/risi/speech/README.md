@@ -37,3 +37,11 @@ anything that sounds unnatural, especially Sinhala line 15 (විනාඩි �
 `scripts/risi-eval asr-data` writes `~/risime-eval-data/manifest.jsonl`. It includes these clips
 when they exist, plus the public subsets. `scripts/risi-eval asr <model>` reports WER and CER per
 language, after NFC normalisation, lower-casing, punctuation removal and ZWJ removal.
+
+## Tamil line 21: the P1 2026-10-14 language-ID case (text only)
+`ta.txt` line 21 → `ta/21.wav`. A Tamil speaker's Official voice note came out as Tamil sounds in Sinhala script
+(docs/status/incident-2026-10-14-tamil-script.md). The line is a **synthetic** sentence of the same kind (Sri Lankan
+colloquial Tamil, an everyday Official note with one English word), written for this set: it is **not** the real
+note's text, which we don't have. No audio is stored here. Scored like the others, plus: the transcript must come out
+as `ta`, in Tamil script. The speaker's real expected transcript is added only if Harsha supplies it, with the
+speaker's consent.
