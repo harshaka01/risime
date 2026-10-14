@@ -2,3 +2,4 @@
 - 085-intelligence-first.md — AOA first, policy as language, Intelligence Index formulas, consequential actions need a named human (2026-10-13)
 - 086-add-to-call.md — add people to a 1:1 call: escalate into a new group chat + group call (contract v1.45 §40), behind ADD_TO_CALL_ENABLED (2026-10-13)
 - 090-call-risi.md — "Call Risi": Risi joins a Risi-chat LiveKit room through a thin media worker (LiveKit Python rtc, RNNoise, Silero VAD, Kokoro TTS); the Elixir Voice agent owns the turn; v1 not frame-E2EE, said honestly; RISI_CALL_RISI off|canary|on (2026-10-14)
+- 091-tts-candidates-lab.md — TTS candidates (Chatterbox, IndicF5 after code review, Indic Parler-TTS, Orpheus) in a sibling risime-tts-lab on 127.0.0.1:8231: one engine per process, on demand, idle unload, 4 GB MemAvailable floor, live speech first; Kokoro stays resident for Call Risi; licences and production flags on the Voices page; ratings feed the Voice agent (2026-10-14)
