@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Run a heavy command (full mix test, gradle, model load) one at a time across all sessions on spark2
+# (root 2026-10-14: ~11 agents shared the machine and starved each other). Waits for the lock, then for
+# MemAvailable >= HEAVY_MIN_GB (default 5), then runs the command. Usage: scripts/heavy <cmd> [args...]
+set -u
+LOCK="${HEAVY_LOCK:-$HOME/risime-logs/heavy.lock}"; MIN="${HEAVY_MIN_GB:-5}"
+exec 9>"$LOCK"
+echo "heavy: waiting for the lock ($LOCK)" >&2
+flock 9
+while [ $(( $(awk '/MemAvailable/ {print $2}' /proc/meminfo) / 1048576 )) -lt "$MIN" ]; do
+  pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null && echo "heavy: a release is running; waiting" >&2
+  sleep 30
+done
+echo "heavy: running $*" >&2
+"$@"
