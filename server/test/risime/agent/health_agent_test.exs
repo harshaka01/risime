@@ -189,6 +189,12 @@ defmodule RisiMe.Agents.HealthTest do
     assert [%{action: "renamed_risi", repaired: true}] = found(Health.sweep(:canary), og)
   end
 
+  test "the shipped default repairs Official everywhere (Harsha: canary first, then all)" do
+    Application.delete_env(:risime, :risi_agent_flags)
+    assert RisiMe.Agents.Flags.switch("RISI_HEALTH_OFFICIAL_REPAIR") == :on
+    assert Health.official_scope(:canary) == :all
+  end
+
   test "off does nothing" do
     assert %{stuck: 0, found: []} = Health.sweep(:off)
   end

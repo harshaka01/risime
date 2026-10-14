@@ -66,7 +66,7 @@ is exactly their shape. H isn't a member and doesn't need to be. He received the
 - **Official repairs everywhere:** a new switch, `RISI_HEALTH_OFFICIAL_REPAIR` (off|canary|on, default
   **on**), sets the Official scope of Health's `canary`. Shadow still repairs nothing, and Private and DMs are
   never repaired.
-  - The first fast-lane release ships the code default `canary` (H's conversations).
+  - v0.3.0-nightly.7-srv2 (live 03:10 UTC) shipped the code default `canary` (H's conversations). Its 03:15 sweep ran cleanly: it nudged the three peers and sent one plain report. In scope, H's only Official chat is the rebuild (`needs_app`).
   - Once that sweeps cleanly on the pilot, the next fast-lane release ships the default `on`.
 - **Private nudge:** at most once a day per waiting DM, the other person gets a stored `secure_nudge` event
   and the ordinary content-free wake (`RISI_HEALTH_NUDGE`, default `canary`). New apps (with the APK) show

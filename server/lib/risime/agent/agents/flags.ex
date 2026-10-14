@@ -67,7 +67,7 @@ defmodule RisiMe.Agents.Flags do
     # (`switch/1`). Official repairs everywhere (Harsha: "canary first, then all"); the Private
     # nudge (proposal 2026-10-14-health-nudge) for RISI_DEV_USERS' chats first; the plain-language
     # report (names and actions, no ids) for everyone.
-    "RISI_HEALTH_OFFICIAL_REPAIR" => "canary",
+    "RISI_HEALTH_OFFICIAL_REPAIR" => "on",
     "RISI_HEALTH_NUDGE" => "canary",
     "RISI_HEALTH_PLAIN" => "on"
   }
