@@ -392,11 +392,10 @@ defmodule RisiMe.Agent.SpeechHttpTest do
       with_extra(compare_extra_url: "http://127.0.0.1:8210")
       assert {:ok, c} = Http.compare("x")
 
-      # Default list: the 1B and the (streamed, slow) 7B.
+      # Default list: the 1B only (the streamed 7B is a console tick).
       assert [
                %{model: "qwen3-asr-0.6b-sinhala", error: nil},
-               %{model: "omniasr-llm-1b", text: nil, error: "failed"},
-               %{model: "omniasr-llm-7b", text: nil, error: "failed"}
+               %{model: "omniasr-llm-1b", text: nil, error: "failed"}
              ] = c.results
     end
 
@@ -432,7 +431,7 @@ defmodule RisiMe.Agent.SpeechHttpTest do
               [%{id: "omniasr-llm-1b", streamed: false}, %{id: "omniasr-llm-7b", streamed: true}]} =
                Http.extra_models()
 
-      assert Http.extra_default_models() == ["omniasr-llm-1b", "omniasr-llm-7b"]
+      assert Http.extra_default_models() == ["omniasr-llm-1b"]
 
       assert {:ok, c} = Http.compare("x", extra_models: ["omniasr-llm-7b"])
       assert [_, %{model: "omniasr-llm-7b", text: "ඉ", elapsed_ms: 9500}] = c.results

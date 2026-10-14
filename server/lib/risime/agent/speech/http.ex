@@ -17,7 +17,8 @@ defmodule RisiMe.Agent.Speech.Http do
     with the same `/v1/audio/compare` (the omniASR eval service, `infra/omniasr`), it is asked
     after the speech service, with the detected language and `models` =
     `compare_extra_models` (else `RISI_SPEECH_COMPARE_EXTRA_MODELS`, default
-    `omniasr-llm-1b,omniasr-llm-7b`; `opts[:extra_models]` overrides it per call, `[]` = none),
+    `omniasr-llm-1b`; `opts[:extra_models]` overrides it per call, `[]` = none; the console
+    can tick the streamed omniasr-llm-7b),
     and its results are appended (same §36.11 result shape; `chosen` and `language_detected`
     stay the speech service's). Each extra model gets `compare_extra_timeout_ms` (else
     `RISI_SPEECH_COMPARE_EXTRA_TIMEOUT_MS`, default 180 s: omniasr-llm-7b streams its encoder
@@ -375,7 +376,7 @@ defmodule RisiMe.Agent.Speech.Http do
 
     models =
       (cfg[:compare_extra_models] || System.get_env("RISI_SPEECH_COMPARE_EXTRA_MODELS") ||
-         "omniasr-llm-1b,omniasr-llm-7b")
+         "omniasr-llm-1b")
       |> List.wrap()
       |> Enum.flat_map(&String.split(&1, [",", " "], trim: true))
 
