@@ -22,7 +22,9 @@ from the user, and Risi is never a member of Private.**
 3. **Translate: RisiMe's server, after the yes** ("The text will be sent to RisiMe's server to translate, and not
    stored."). `POST /api/v1/translate` carries only the text and the target; risi-l1 on loopback, local only; the
    text is never logged, stored or enqueued; the learning log keeps languages and latency only.
-4. **Sender control:** "Let others transcribe my voice notes" (default on). Off stamps `allow_transcribe: false` in
+4. **Sender control:** Settings → Privacy → "Let others transcribe my voice notes (Sinhala/Tamil go through
+   Google)" (default on); a one-time notice on the first Private voice note ("Others can transcribe your voice
+   notes. Change in Settings", tapping through to Settings), no per-use notice (Harsha 10:31). Off stamps `allow_transcribe: false` in
    the E2EE voice envelope (Private only): no Google, no server translate of that note's transcript; on-device
    English still works. A new field rather than §37.2 `transcribe: false`, whose meaning (Risi, Official, a
    server-checked setting) differs.

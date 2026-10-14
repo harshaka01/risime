@@ -77,8 +77,12 @@ always say where the work was done (decision 048), and the chat keeps its lock.
    the reader's "Don't ask again" for that kind. The phone has **exactly one construction site** of the online
    recogniser, behind a guard that requires the flag, the yes for this note and the sender's allow flag (a unit test
    scans the sources).
-5. **Settings → "Private voice & translate"**: "Let others transcribe my voice notes" (default on) and the two
-   "Don't ask again" choices (Google transcription, server translation), each resettable ("Ask again").
+5. **Settings.** Settings → **Privacy**: **"Let others transcribe my voice notes (Sinhala/Tamil go through
+   Google)"** (default on). Settings → "Private voice & translate": the two "Don't ask again" choices (Google
+   transcription, server translation), each resettable ("Ask again").
+   - **Sender notice (Harsha 10:31):** no per-use notice. A **one-time** notice the first time the user records a
+     Private voice note while §37.12 applies: **"Others can transcribe your voice notes. Change in Settings"**, with
+     [Settings] opening Settings (where the switch is) and [OK]. Never shown again on that phone.
 6. **Official is unchanged:** Risi transcribes on the server (§37.6); the Official translate is its own proposal
    (2026-10-14-voice-translate, flag `RISI_VOICE_TRANSLATE`).
 
