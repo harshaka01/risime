@@ -124,14 +124,15 @@ defmodule RisiMe.Agent.LLM do
     opts = call_opts(req)
     result = attempt(local, body, req.schema, 1, opts)
     confidence_of = Map.get(req, :confidence, &default_confidence/1)
-    fb = fallback_provider()
+    # Decision 092: a `local_only` task (Private translate) never reaches another provider.
+    fb = if req[:local_only], do: RisiMe.Agent.LLM.Fallback.Never, else: fallback_provider()
 
     {provider, result, fallback} =
       case result do
         {:ok, resp, output} ->
           conf = confidence_of.(output)
 
-          if fallback_on?() and conf < threshold() do
+          if fallback_on?() and !req[:local_only] and conf < threshold() do
             case attempt(fb, body, req.schema, 1, Keyword.put(opts, :retries, 0)) do
               {:ok, resp2, output2} -> {fb, {:ok, resp2, output2}, "used"}
               _ -> {local, {:ok, resp, output}, "unavailable"}
@@ -166,7 +167,9 @@ defmodule RisiMe.Agent.LLM do
       latency_ms: latency,
       cost: 0.0,
       source_message_ids: req.source_message_ids,
-      prompt_sha256: prompt_hash(messages)
+      # Decision 092: a Private task keeps not even the prompt's hash (a short text's hash can be
+      # guessed by trying candidates).
+      prompt_sha256: if(req[:no_prompt_hash], do: nil, else: prompt_hash(messages))
     }
 
     # v1.42 §38.7: a task may add non-text facts (`meta`) to its row.

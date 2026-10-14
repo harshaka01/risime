@@ -198,6 +198,9 @@ defmodule RisiMeWeb.Router do
     # Proposal 2026-10-14-transcribe-progress (flag RISI_VOICE_PROGRESS): Stop / Try again.
     post "/me/risi/voice/cancel", MeController, :risi_voice_cancel
     post "/me/risi/voice/retry", MeController, :risi_voice_retry
+    # Decision 092 (proposal 2026-10-14-private-transcribe): the Private translate request.
+    # `log: false`: Phoenix never logs its parameters (the text).
+    post "/translate", TranslateController, :create, log: false
     get "/calls/:call_id/transcribe", CallsController, :transcribe
     post "/calls/:call_id/transcribe/chunks", CallsController, :transcribe_chunk
   end

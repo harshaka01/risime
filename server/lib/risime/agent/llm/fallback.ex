@@ -18,3 +18,21 @@ defmodule RisiMe.Agent.LLM.Fallback do
   @doc "False: no provider is configured (so the router never falls back to it on failure)."
   def configured?, do: false
 end
+
+defmodule RisiMe.Agent.LLM.Fallback.Never do
+  @moduledoc """
+  Decision 092: the "other provider" of a `local_only` task (Private translate). Never
+  configured and never calls anything, so such a task only ever runs on RisiMe's own model,
+  whatever `RISI_FALLBACK` or the configured fallback provider say.
+  """
+  @behaviour RisiMe.Agent.LLM
+
+  @impl true
+  def name, do: "none"
+
+  @impl true
+  def chat(_body, _opts \\ []), do: {:error, :not_configured}
+
+  @doc "Always false."
+  def configured?, do: false
+end

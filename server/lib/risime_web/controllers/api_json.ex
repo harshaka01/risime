@@ -23,8 +23,15 @@ defmodule RisiMeWeb.ApiJSON do
 
     # Decision 090 (proposal 2026-10-14-call-risi §41.1): `call_risi: true` while RISI_CALL_RISI
     # applies to the user (absent otherwise, so off is byte-identical).
-    if RisiMe.Agent.CallRisi.enabled_for?(user.id),
-      do: Map.put(json, :call_risi, true),
+    json =
+      if RisiMe.Agent.CallRisi.enabled_for?(user.id),
+        do: Map.put(json, :call_risi, true),
+        else: json
+
+    # Decision 092 (proposal 2026-10-14-private-transcribe): `private_transcribe: true` while
+    # RISI_PRIVATE_TRANSCRIBE applies to the user (absent otherwise: off is byte-identical).
+    if RisiMeWeb.TranslateController.enabled_for?(user.id),
+      do: Map.put(json, :private_transcribe, true),
       else: json
   end
 

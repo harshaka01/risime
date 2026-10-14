@@ -53,7 +53,10 @@ defmodule RisiMe.Agents.Flags do
     # (RisiMe.Agent.SpeechLang); on for everyone, off = today's route.
     "RISI_VOICE_LANG_ID" => :risi_voice_lang_id,
     # Proposal 2026-10-14-voice-translate (v1.50 §37.13): "Wrong language?" and Translate.
-    "RISI_VOICE_TRANSLATE" => :risi_voice_translate
+    "RISI_VOICE_TRANSLATE" => :risi_voice_translate,
+    # Decision 092 (proposal 2026-10-14-private-transcribe): transcription and translation in
+    # Private, each only after the reader's explicit yes; canary = RISI_DEV_USERS via /me.
+    "RISI_PRIVATE_TRANSCRIBE" => :risi_private_transcribe
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
@@ -66,7 +69,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_SEND_FOR_ME" => "canary",
     "RISI_PERMISSION_FIXIT" => "canary",
     "RISI_VOICE_LANG_ID" => "on",
-    "RISI_VOICE_TRANSLATE" => "canary"
+    "RISI_VOICE_TRANSLATE" => "canary",
+    "RISI_PRIVATE_TRANSCRIBE" => "off"
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000
