@@ -165,7 +165,10 @@ defmodule RisiMe.Agent.VoiceQueue do
       "key" => Base.encode64(note.key),
       "plain_size" => note.plain_size,
       "mime" => note.mime,
-      "duration_ms" => note.duration_ms
+      "duration_ms" => note.duration_ms,
+      # Incident 2026-10-14: the phone/Google transcript (a fallback input only), sealed with the
+      # row and deleted with it.
+      "phone_transcript" => Map.get(note, :phone_transcript)
     }
 
   defp load_note(m) do
@@ -179,7 +182,8 @@ defmodule RisiMe.Agent.VoiceQueue do
          key: key,
          plain_size: m["plain_size"],
          mime: m["mime"],
-         duration_ms: m["duration_ms"]
+         duration_ms: m["duration_ms"],
+         phone_transcript: m["phone_transcript"]
        }}
     else
       _ -> :error

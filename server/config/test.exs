@@ -142,6 +142,9 @@ config :risime, :risi_sender, RisiMe.Agent.TestSender
 config :risime, :risi_speech_http,
   url: "http://127.0.0.1:8200",
   api_key: "test-speech-key",
+  # The test VM loads .env: the pilot's RISI_SPEECH_COMPARE_EXTRA_URL must not leak into tests
+  # (a test that wants the extra service sets it, `with_extra/1`).
+  compare_extra_url: nil,
   req_options: [plug: {Req.Test, RisiMe.Agent.Speech.Http}, retry: false]
 
 # Incident 2026-10-14: tests never write the shared eval pause file (RisiMe.Agent.SpeechGuard).

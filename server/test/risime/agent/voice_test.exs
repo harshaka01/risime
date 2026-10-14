@@ -725,6 +725,35 @@ defmodule RisiMe.Agent.VoiceTest do
       assert [_] = all_enqueued(worker: Job, args: %{"kind" => "request", "request_id" => rid})
     end
 
+    test "the queued row carries the phone/Google transcript, sealed (fallback input only)", w do
+      id = TimeUUID.generate()
+      phone = %{"text" => "හෙට එනවා", "lang" => "si-LK", "engine" => "android-online-google"}
+
+      note = %{
+        blob_id: Ecto.UUID.generate(),
+        size: 100,
+        sha256: :crypto.strong_rand_bytes(32),
+        key: :crypto.strong_rand_bytes(32),
+        plain_size: 80,
+        mime: "audio/ogg; codecs=opus",
+        duration_ms: 3_000,
+        phone_transcript: phone
+      }
+
+      assert {:ok, _} =
+               RisiMe.Agent.VoiceQueue.enqueue(w.rc, id, w.a.user.id, note, Ecto.UUID.generate())
+
+      [sealed] =
+        RisiMe.Repo.all(
+          from q in "risi_voice_queue", where: q.note_message_id == ^id, select: q.sealed
+        )
+
+      refute sealed =~ "හෙට"
+      {:ok, k} = RisiMe.Agent.Seal.data()
+      {:ok, m} = RisiMe.Agent.Seal.open(k, "risi_voice_queue:#{w.rc}:#{id}", sealed)
+      assert m["phone_transcript"] == phone
+    end
+
     test "speech down past the bound: the failed card and an honest answer, never 'type it'", w do
       Application.put_env(:risime, :fake_speech_down, true)
       Application.put_env(:risime, :risi_voice_queue, max_ms: 0)
