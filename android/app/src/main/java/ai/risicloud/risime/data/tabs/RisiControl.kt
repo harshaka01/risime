@@ -18,7 +18,7 @@ object RisiControl {
     const val TYPE_ACTION = "risi_action"
 
     val REQUEST_ACTIONS = setOf("ask", "summarise", "report")
-    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + ai.risicloud.risime.net.RisiActions129.ALL + ai.risicloud.risime.net.RisiActions130.ALL + ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE + ai.risicloud.risime.net.RisiActions142.ALL + ai.risicloud.risime.net.RisiActions143.ITEM_CLAIM +
+    val ACTIONS = setOf("confirm", "decline", "edit", "done", "offer_yes", "offer_not_now") + V125_ACTIONS + V126_ACTIONS + V127_ACTIONS + ai.risicloud.risime.net.RisiActions129.ALL + ai.risicloud.risime.net.RisiActions130.ALL + ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE + ai.risicloud.risime.net.VoiceTranslate150.ACTION_TRANSCRIPT_LANGUAGE + ai.risicloud.risime.net.RisiActions142.ALL + ai.risicloud.risime.net.RisiActions143.ITEM_CLAIM +
         // Proposal 2026-10-14-permission-fixit §43.3: the answers to a `needs_permission` card (target = resume_id).
         ai.risicloud.risime.net.RisiFixit143.ACTIONS
 
@@ -126,6 +126,7 @@ object RisiControl {
             "offer_not_now" -> "Said not now to Risi's offer"
             "confirm_write" -> "Tapped Add"
             ai.risicloud.risime.net.RisiKinds141.ACTION_TRANSCRIPT_DELETE -> "Deleted Risi's transcript of a voice note"
+            ai.risicloud.risime.net.VoiceTranslate150.ACTION_TRANSCRIPT_LANGUAGE -> "Asked Risi to transcribe a voice note in another language"
             "cancel_write" -> "Cancelled"
             "me_too" -> "Me too"
             "not_me" -> "Not me"

@@ -57,6 +57,26 @@ fun RisiVoiceSection(c: AppContainer) {
             Text(VoiceStrings.ACTION_ITEMS_SETTING, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             Switch(checked = actionItems, enabled = !saving, onCheckedChange = { save(transcribe, it) }, modifier = Modifier.testTag("settings_voice_action_items"))
         }
+        // Proposal 2026-10-14-voice-translate (v1.50 §37.13.2): only while Translate is available to this user.
+        val available by c.voice.translateAvailable.collectAsStateWithLifecycle()
+        val always by c.voice.alwaysTranslate.collectAsStateWithLifecycle()
+        if (available) {
+            Text(ai.risicloud.risime.net.VoiceTranslate150.ALWAYS_SETTING, style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                for (v in listOf(ai.risicloud.risime.net.VoiceTranslate150.OFF) + listOf("en", "si", "ta")) {
+                    androidx.compose.material3.FilterChip(
+                        selected = always == v, enabled = !saving,
+                        onClick = {
+                            saving = true
+                            error = null
+                            scope.launch { if (!c.voice.setAlwaysTranslate(v)) error = "Couldn't save. Try again"; saving = false }
+                        },
+                        label = { Text(if (v == ai.risicloud.risime.net.VoiceTranslate150.OFF) "Off" else ai.risicloud.risime.net.VoiceTranslate150.name(v)) },
+                        modifier = Modifier.testTag("settings_always_translate_$v"),
+                    )
+                }
+            }
+        }
         error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }
 }

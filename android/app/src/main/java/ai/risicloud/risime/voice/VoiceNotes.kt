@@ -67,6 +67,28 @@ class VoiceNotes(
     private val _actionItems = MutableStateFlow(prefs?.getBoolean(KEY_ACTION_ITEMS, true) ?: true)
     val actionItems: StateFlow<Boolean> = _actionItems
 
+    private val _translateAvailable = MutableStateFlow(prefs?.getBoolean(KEY_TRANSLATE, false) ?: false)
+
+    /** Proposal 2026-10-14-voice-translate: "Wrong language?" and Translate are on for this user (server flag). */
+    val translateAvailable: StateFlow<Boolean> = _translateAvailable
+
+    private val _alwaysTranslate = MutableStateFlow(prefs?.getString(KEY_ALWAYS, null) ?: ai.risicloud.risime.net.VoiceTranslate150.OFF)
+
+    /** Settings → Risi → "Always translate voice notes to": off | en | si | ta. */
+    val alwaysTranslate: StateFlow<String> = _alwaysTranslate
+
+    /** The per-viewer translations (memory only, never Room). */
+    val translations = VoiceTranslations()
+
+    /** Sets "Always translate voice notes to"; false when the server didn't take it. */
+    suspend fun setAlwaysTranslate(target: String): Boolean {
+        val r = runCatching {
+            api.putRisiVoice(RisiVoiceSettings(_transcribeMine.value, _actionItems.value, alwaysTranslate = target))
+        }.getOrNull() as? ApiResult.Ok ?: return false
+        store(r.value)
+        return true
+    }
+
     /** This phone can record voice notes (Opus encoder: Android 10+, and the media core for the E2EE blob). */
     fun canRecord(): Boolean = mediaReady() && StreamingOpusEncoder.available()
 
@@ -99,7 +121,13 @@ class VoiceNotes(
     private fun store(s: RisiVoiceSettings) {
         _transcribeMine.value = s.transcribe
         _actionItems.value = s.actionItems
-        runCatching { prefs?.edit()?.putBoolean(KEY_MINE, s.transcribe)?.putBoolean(KEY_ACTION_ITEMS, s.actionItems)?.apply() }
+        _translateAvailable.value = s.translateAvailable
+        val always = if (s.translateAvailable) s.alwaysTranslate ?: ai.risicloud.risime.net.VoiceTranslate150.OFF else ai.risicloud.risime.net.VoiceTranslate150.OFF
+        _alwaysTranslate.value = always
+        runCatching {
+            prefs?.edit()?.putBoolean(KEY_MINE, s.transcribe)?.putBoolean(KEY_ACTION_ITEMS, s.actionItems)
+                ?.putBoolean(KEY_TRANSLATE, s.translateAvailable)?.putString(KEY_ALWAYS, always)?.apply()
+        }
     }
 
     /**
@@ -141,6 +169,8 @@ class VoiceNotes(
         private const val KEY_SERVER = "voice_transcribe_on"
         private const val KEY_MINE = "voice_transcribe_mine"
         private const val KEY_ACTION_ITEMS = "voice_action_items"
+        private const val KEY_TRANSLATE = "voice_translate_available"
+        private const val KEY_ALWAYS = "voice_always_translate"
         private const val KEY_NOTE_SHOWN = "voice_official_note_shown"
     }
 }

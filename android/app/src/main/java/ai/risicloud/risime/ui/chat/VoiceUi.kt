@@ -273,12 +273,14 @@ fun VoiceTranscriptBlock(t: RisiVoiceTranscript, mine: Boolean, onDelete: (() ->
 /** §37.6 the transcript row of [note] among [rows] (a Risi `voice_transcript` whose `message_id` is the note's). */
 fun transcriptFor(note: MessageEntity, rows: List<MessageEntity>): RisiVoiceTranscript? {
     val id = note.messageId ?: return null
+    val found = mutableListOf<Pair<Long, RisiVoiceTranscript>>()
     for (r in rows) {
         if (r.kind != MessageEntity.KIND_TEXT || r.systemJson == null || !r.systemJson.contains(RisiKinds141.VOICE_TRANSCRIPT)) continue
         val t = RisiVoiceTranscript.parse(r.systemJson) ?: continue
-        if (t.messageId.equals(id, true)) return t
+        if (t.messageId.equals(id, true)) found += r.localTs to t
     }
-    return null
+    // Proposal 2026-10-14-voice-translate (v1.50 §37.13.1): a later ("Wrong language?") transcript replaces the earlier.
+    return ai.risicloud.risime.net.VoiceTranslate150.current(found)
 }
 
 /**
@@ -332,7 +334,9 @@ fun voiceTap(c: AppContainer, m: MessageEntity) {
  */
 @Composable
 fun VoiceFooter(m: MessageEntity, x: ChatMessaging?) {
-    if (!m.voice || x == null) return
+    if (x == null) return
+    // Proposal 2026-10-14-voice-translate (v1.50 §37.13.2): a typed Sinhala/Tamil message in Official gets Translate.
+    if (!m.voice) { TypedTranslateFooter(m, x); return }
     // Proposal 2026-10-14: the sender phone's own on-device transcript (inside the E2EE note; any tab). Absent on every
     // note sent without the developer `phone_stt` flag, so nothing changes for those.
     val meta = remember(m.systemJson) { VoiceMeta.decode(m.systemJson) }
@@ -437,6 +441,8 @@ private fun RisiVoiceFooter(m: MessageEntity, x: ChatMessaging, t: RisiVoiceTran
             }
         }) else null,
     )
+    // Proposal 2026-10-14-voice-translate (v1.50 §37.13): "Wrong language?" and Translate (Official, flag on).
+    if (t.status != RisiKinds141.STATUS_FAILED) TranscriptLanguageTools(m, x, t)
 }
 
 /** The note this transcript row belongs to, if it is on the phone (then the row draws nothing of its own). */

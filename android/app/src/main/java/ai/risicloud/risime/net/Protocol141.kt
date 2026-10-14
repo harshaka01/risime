@@ -19,6 +19,12 @@ const val ACK_PLAYED = "played"
 data class RisiVoiceSettings(
     val transcribe: Boolean = true,
     @SerialName("action_items") val actionItems: Boolean = true,
+    /** Proposal 2026-10-14-voice-translate (v1.50 §37.13.2): off | en | si | ta; never sent when null (the server keeps it). */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("always_translate") val alwaysTranslate: String? = null,
+    /** Read-only (absent = false): Translate and "Wrong language?" are on for this user. Never sent. */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("translate_available") val translateAvailable: Boolean = false,
 )
 
 object RisiKinds141 {
@@ -53,6 +59,8 @@ data class RisiVoiceTranscript(
     val model: String? = null,
     /** Proposal 2026-10-14-phone-transcript-fallback (v1.48): `"phone"` = Risi posted the sender phone's transcript. */
     val source: String? = null,
+    /** Proposal 2026-10-14-voice-translate (v1.50 §37.13.1): a "Wrong language?" re-transcription; replaces the earlier one. */
+    val relang: RisiRelang? = null,
 ) {
     val ok: Boolean get() = status == RisiKinds141.STATUS_OK && !text.isNullOrBlank()
 

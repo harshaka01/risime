@@ -155,6 +155,9 @@ class ApiClient(
 
     suspend fun putRisiVoice(settings: RisiVoiceSettings): ApiResult<RisiVoiceSettings> = call("PUT", "me/risi/voice", settings)
 
+    /** Proposal 2026-10-14-voice-translate (v1.50 §37.13.2): one Official message translated for this viewer only. */
+    suspend fun risiTranslate(req: TranslateRequest): ApiResult<TranslateReply> = call("POST", "risi/translate", req)
+
     /** Proposal 2026-10-14 (v1.48 §37.11) Stop: 200 cancelled, 404 not_running. */
     suspend fun cancelVoiceTranscribe(target: VoiceTranscribeTarget): ApiResult<VoiceTranscribeReply> = call("POST", "me/risi/voice/cancel", target)
 
