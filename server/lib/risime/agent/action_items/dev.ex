@@ -9,7 +9,7 @@ defmodule RisiMe.Agent.ActionItems.Dev do
   The model call writes its usual `extract_actions` learning-log row (counts only).
 
       # on spark2, against the running release (decision 023):
-      ~/risime-run/current/bin/risime rpc 'RisiMe.Agent.ActionItems.Dev.print_call("grp:…", "<session_id>", "<member user id>")'
+      scripts/risi-rpc 'RisiMe.Agent.ActionItems.Dev.print_call("grp:…", "<session_id>", "<member user id>")'
       # in a dev checkout:
       mix risime.action_items.preview --conversation grp:… --session <id> --member <user id>
       mix risime.action_items.preview --conversation grp:… --note <message id> --member <user id>

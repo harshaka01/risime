@@ -26,3 +26,15 @@ Restarts and config changes on the live pilot (`risime.service`) outside a relea
   1. `Flags.all` showed `RISI_AGENTS=on` (from the default).
   2. `Flags.put("RISI_AGENTS","legacy")` set master `:legacy` and `legacy?` true.
   3. `Flags.clear("RISI_AGENTS")` brought master back to `:on` (`legacy?` false), with no deploy.
+
+## scripts/risi-rpc (2026-10-14)
+Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps the form above: it loads `.env` and
+`infra/pilot/pilot.env` without printing them, uses the client port range 4371–4399 and epmd on 127.0.0.1. The short form
+`ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc …` fails ("node is not alive") because it doesn't load the distribution settings.
+
+## Flag changes on the pilot
+| When (UTC) | Flag | Value | By |
+|---|---|---|---|
+| 2026-10-14 ~02:10 | RISI_VOICE_TRANSCRIBE | canary | root (Harsha asked, P1) |
+| 2026-10-14 ~02:10 | RISI_ACTION_ITEMS | canary | root (Harsha asked); stays canary until Harsha says |
+| 2026-10-14 03:52 (09:22 SLT) | RISI_VOICE_TRANSCRIBE | **on** (everyone) | Harsha |

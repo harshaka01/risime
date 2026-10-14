@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Run an Elixir expression on the pilot node (loopback Erlang distribution, docs/status/pilot-ops.md).
+#   scripts/risi-rpc '<expr>'        e.g. scripts/risi-rpc 'RisiMe.Agents.Flags.all()'
+#   scripts/risi-rpc -f <file.exs>   the contents of a file as the expression
+# Loads .env and infra/pilot/pilot.env (never printed: the cookie and secrets stay in the environment), uses a
+# client port range of its own (4371-4399, so it never clashes with the node's) and epmd on 127.0.0.1 only.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [ "${1:-}" = "-f" ]; then expr="$(cat "${2:?file}")"; else expr="${1:?usage: scripts/risi-rpc '<expr>' | -f <file.exs>}"; fi
+set -a; . ./.env; . infra/pilot/pilot.env; set +a
+export ERL_AFLAGS="-kernel inet_dist_listen_min 4371 -kernel inet_dist_listen_max 4399" ERL_EPMD_ADDRESS=127.0.0.1
+exec "$HOME/risime-run/current/bin/risime" rpc "$expr"

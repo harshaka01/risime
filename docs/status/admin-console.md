@@ -69,7 +69,7 @@ Each page shows Auto's current basis.
 ## Operating notes
 - Add or remove admins over rpc until the Users and admins page exists (both are audit-logged; the last admin
   can never be removed):
-  `ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc 'RisiMe.Admin.add_admin("<user id>", "<your user id>")'`
+  `scripts/risi-rpc 'RisiMe.Admin.add_admin("<user id>", "<your user id>")'`
 - Each setting can also come from the environment (`RISI_SPEECH_ROUTE_SI=<model>`). The table wins over the
   environment.
 - A manual model adds one language detection per chunk (the detector is already resident). If the model

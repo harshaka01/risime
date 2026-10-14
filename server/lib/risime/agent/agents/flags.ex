@@ -13,7 +13,7 @@ defmodule RisiMe.Agents.Flags do
   `put/2` and `clear/1` refresh the calling node at once. An unknown value counts as
   `off`; a database error reads as env/default (never a crash).
 
-      ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_AGENTS", "legacy")'
+      scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_AGENTS", "legacy")'
 
   Tests may set `config :risime, :risi_agent_flags, %{"RISI_AGENT_ROUTER" => "on"}`, which wins
   over everything (and skips the table).
@@ -24,7 +24,7 @@ defmodule RisiMe.Agents.Flags do
   environment when it says `canary` **>** the application env set by `config/runtime.exs` from
   the same variable (`true` = on; tests set it directly). Defaults stay `off`.
 
-      ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_VOICE_TRANSCRIBE", "canary")'
+      scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_VOICE_TRANSCRIBE", "canary")'
   """
   import Ecto.Query
 

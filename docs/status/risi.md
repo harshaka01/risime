@@ -64,7 +64,7 @@ there for Harsha and root.
   and transcripts still render. A per-user value would need the server role to pass the caller to
   `config_on?`.
 - Flip with no deploy (live within 5 s):
-  `ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_VOICE_TRANSCRIBE", "canary")'`
+  `scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_VOICE_TRANSCRIBE", "canary")'`
   (and `"RISI_ACTION_ITEMS"`; `Flags.clear/1` returns to env).
 
 **4. Agent design (decision 084/085).**
@@ -141,7 +141,7 @@ Design, flags, budgets, GPU memory budget: `docs/decisions/084-deep-agents.md`. 
   telemetry, no text); `Runs` (`risi_agent_runs`); `ToolRegistry` (MCP-style descriptors over today's
   `Agent.Tools`, `call/3` = authorize + the same `run`).
 - **Flags without deploy:** `risi_agent_flags` table > env > default, 5-s cache.
-  `ERL_EPMD_ADDRESS=127.0.0.1 ~/risime-run/current/bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_AGENTS", "legacy")'`
+  `scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_AGENTS", "legacy")'`
   (or the psql upsert in decision 084). `RISI_AGENTS=legacy` = every agent off, no shadow, no timing rows.
 - **Shadow (step 2):** `Agent.Turn` calls `RisiMe.Agents.Shadow.turn/4` once per turn after choosing its
   route (an observer: rescue-wrapped, never changes the route). It logs the router's route vs today's

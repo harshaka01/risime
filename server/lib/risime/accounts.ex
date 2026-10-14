@@ -266,7 +266,7 @@ defmodule RisiMe.Accounts do
   @doc """
   The email's privacy-safe tag for logs (§21.7): the first 12 hex digits of
   HMAC-SHA256(secret_key_base, lowercased email). Admins compute it for a complaint with
-  `bin/risime rpc 'IO.puts RisiMe.Accounts.email_hash("name@example.com")'`.
+  `scripts/risi-rpc 'IO.puts RisiMe.Accounts.email_hash("name@example.com")'`.
   """
   def email_hash(email) when is_binary(email) do
     secret = Application.fetch_env!(:risime, RisiMeWeb.Endpoint)[:secret_key_base]

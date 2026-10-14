@@ -13,7 +13,7 @@ defmodule RisiMe.Admin do
 
   Adding or removing admins has no console page yet ("Users and admins" comes later):
 
-      ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc 'RisiMe.Admin.add_admin("<user id>", "<admin user id>")'
+      scripts/risi-rpc 'RisiMe.Admin.add_admin("<user id>", "<admin user id>")'
   """
   import Ecto.Query
 

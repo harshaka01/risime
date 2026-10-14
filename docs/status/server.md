@@ -56,7 +56,7 @@ transcripts (`CallTranscribe.Summary`, the §36.7 trigger) and Official voice-no
   `decision`/`question`/`number` items aren't yet viewable/deletable via §35.3 REST (they expire at 30 days and go
   with Official off).
 - **Dev preview (sample card from a real call, nothing posted or stored):** within 24 h of the call, on spark2:
-  `~/risime-run/current/bin/risime rpc 'RisiMe.Agent.ActionItems.Dev.print_call("grp:<official id>", "<session_id>", "<member user id>")'`
+  `scripts/risi-rpc 'RisiMe.Agent.ActionItems.Dev.print_call("grp:<official id>", "<session_id>", "<member user id>")'`
   (or `print_note(conv, note_message_id, member)`). Only works for an Official conversation the member is in; prints
   the card JSON (items, owners, dues, line refs), never the transcript. The model call writes one `extract_actions`
   log row (counts). Session ids: `risi_call_transcribe_sessions` (conversation_id, state ended/stopped, discard false).

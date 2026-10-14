@@ -139,7 +139,7 @@ an incident is logged. Versions are kept, so a rollback is a pointer change.
   survives restarts. To flip:
   ```
   # in the release (loopback epmd):
-  ERL_EPMD_ADDRESS=127.0.0.1 ~/risime-run/current/bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_AGENTS", "legacy")'
+  scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_AGENTS", "legacy")'
   # or straight in Postgres:
   docker exec risime-dev-postgres-1 psql -U risime -d risime_dev -c \
     "INSERT INTO risi_agent_flags (name, value, updated_at) VALUES ('RISI_AGENTS','legacy',now())

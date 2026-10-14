@@ -11,7 +11,7 @@ PROTOCOL.md; root/Harsha to review).
    - `scripts/voice-setup` (venv `~/risime-voice/venv`, worker `~/risime-voice/risi_voice_worker.py`).
 2. **LiveKit reachability from spark2 itself** (needed before the pilot can use it; see "Gaps" 1).
 3. **Server switch:** `RISI_CALL_RISI=canary` (Harsha is in `RISI_DEV_USERS`), live in 5 s:
-   `ERL_EPMD_ADDRESS=127.0.0.1 bin/risime rpc 'RisiMe.Agents.Flags.put("RISI_CALL_RISI", "canary")'`.
+   `scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_CALL_RISI", "canary")'`.
    The release must contain commits d7f7294c + 6cc89f37 (server) and 62222874 (android).
 4. **Phone:** Settings → About → tap the version 7 times → Developer → "Call Risi (voice call with Risi)".
    The Call Risi button appears in the Risi chat's top bar.
