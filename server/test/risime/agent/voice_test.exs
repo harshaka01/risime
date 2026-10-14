@@ -1217,6 +1217,46 @@ defmodule RisiMe.Agent.VoiceTest do
       assert VoiceJobs.lookup(w.og, id) == nil
     end
 
+    test "the phone transcript is ignored when Risi's model answers, and while the flag is off",
+         w do
+      phone = %{"text" => "PHONE-TEXT", "lang" => "en-US", "engine" => "android-on-device"}
+
+      # Risi's model answers: the phone's text is nowhere in the post.
+      Application.put_env(:risime, :risi_agent_flags, %{"RISI_VOICE_PHONE_FALLBACK" => "on"})
+      {env, _, _} = note!(w.a.user.id, w.og, "en:from the model", %{"phone_transcript" => phone})
+      {_, s} = receive_note(w.og, w.a.user, env)
+      {body, risi} = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert risi["text"] == "from the model" and not Map.has_key?(risi, "source")
+      refute body =~ "PHONE-TEXT"
+
+      # The flag off (v1.47): a failing service gives `failed`, never the phone's text.
+      Application.put_env(:risime, :risi_agent_flags, %{"RISI_VOICE_PHONE_FALLBACK" => "off"})
+      {env, _, _} = note!(w.a.user.id, w.og, "fail", %{"phone_transcript" => phone})
+      {_, s} = receive_note(w.og, w.a.user, env)
+      {body, risi} = await_post(w.og, "voice_transcript", fn r -> r["status"] == "failed" end)
+      await_done(s)
+      assert risi["text"] == nil
+      refute body =~ "PHONE-TEXT"
+    end
+
+    test "flag on: a failing service falls back to the phone transcript (source phone)", w do
+      Application.put_env(:risime, :risi_agent_flags, %{"RISI_VOICE_PHONE_FALLBACK" => "on"})
+      phone = %{"text" => "from the phone", "lang" => "en-US", "engine" => "android-on-device"}
+      {env, _, _} = note!(w.a.user.id, w.og, "fail", %{"phone_transcript" => phone})
+      {_, s} = receive_note(w.og, w.a.user, env)
+      {_body, risi} = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+
+      assert %{
+               "status" => "ok",
+               "text" => "from the phone",
+               "model" => "phone-on-device",
+               "source" => "phone",
+               "made_by" => %{"provider" => "phone"}
+             } = risi
+    end
+
     test "flag on: a failed note can be tried again", w do
       Application.put_env(:risime, :risi_agent_flags, %{"RISI_VOICE_PROGRESS" => "on"})
       RisiMe.Messaging.subscribe(w.a.user.id)

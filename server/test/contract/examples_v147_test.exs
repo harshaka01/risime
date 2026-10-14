@@ -21,7 +21,12 @@ defmodule RisiMe.Contract.ExamplesV147Test do
              example("voice_payload_phone_transcript.json")["phone_transcript"]
   end
 
-  test "Risi ignores the field: the validated note carries nothing of it" do
+  # Proposal 2026-10-14-phone-transcript-fallback (§37.10 amendment, v1.48): the validated note
+  # may carry a valid phone transcript ONLY as a speech-fallback input (RisiMe.Agent.Speech.
+  # transcribe_note/2, behind RISI_VOICE_PHONE_FALLBACK, default off). It is never posted, never
+  # used for extraction and never logged while Risi's own model answers (voice_test.exs
+  # "incident 2026-10-14 … the phone transcript is ignored").
+  test "Risi carries the field only as a fallback input; everything else is unchanged" do
     {:ok, with} = Voice.validate(example("voice_payload_phone_transcript.json"))
 
     {:ok, without} =
@@ -29,6 +34,14 @@ defmodule RisiMe.Contract.ExamplesV147Test do
         Map.delete(example("voice_payload_phone_transcript.json"), "phone_transcript")
       )
 
-    assert with == without
+    assert Map.delete(with, :phone_transcript) == Map.delete(without, :phone_transcript)
+    assert without.phone_transcript == nil
+
+    assert with.phone_transcript ==
+             example("voice_payload_phone_transcript.json")["phone_transcript"]
+
+    # A malformed field (no lang) is ignored entirely: not even a fallback input.
+    {:ok, bad} = Voice.validate(example("voice_payload_phone_transcript_bad.json"))
+    assert bad.phone_transcript == nil
   end
 end
