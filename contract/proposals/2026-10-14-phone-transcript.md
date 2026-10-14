@@ -41,10 +41,11 @@ Example `voice_payload_phone_transcript_bad.json` (the field is malformed: no `l
   chosen language has no installed on-device pack, the note goes without `phone_transcript` and the UI says so. No
   audio leaves the phone except the §37.2 E2EE blob.
 - Only the device that **recorded** the note writes it, from its own recording, before encryption.
-- **Not written:** in the user's Risi chat (§37.8: the note is a request; Risi transcribes); on a note with
-  `transcribe: false` (the sender opted out of transcription in Official, so no text of that note goes to Risi's
-  leaf either); on a **forward** (§37.3: dropped like `transcribe`/`request_id`).
-- Allowed in Private and Official. It is part of the MLS-encrypted content (never plaintext metadata).
+- **Not written:** on a note with `transcribe: false` (the sender opted out of transcription in Official, so no
+  text of that note goes to Risi's leaf either); on a **forward** (§37.3: dropped like `transcribe`/`request_id`).
+- Allowed in Private, Official **and the user's Risi chat** (amended 2026-10-14, Harsha: the server Sinhala model
+  hallucinates on real speech, so Risi compares the phone's text and may fall back to it; see the server's §37.10
+  fallback amendment). It is part of the MLS-encrypted content (never plaintext metadata).
 - Best effort: the recogniser may take at most a few seconds after the recording stops (Android: 8 s); after that
   the note is sent without it. Never delays a note beyond that, never blocks it.
 
@@ -61,9 +62,12 @@ Example `voice_payload_phone_transcript_bad.json` (the field is malformed: no `l
 ### Server / Risi
 - The server sees only a larger ciphertext (it already learns the envelope size). Honest note for decision 048:
   nothing else is learned.
-- **Risi's device in Official can decrypt the field.** In v1.47 Risi **ignores it**: it still transcribes per §37.6,
-  doesn't post it, doesn't use it for §38 extraction, never writes it to the learning log, buffer or logs. (A later
-  version may use it as a compare candidate in the §36 compare view; that needs its own proposal.)
+- **Risi's device in Official and the Risi chat can decrypt the field** (Risi is a visible member there). Amended
+  2026-10-14: Risi may **compare** it with its own §37.6 transcript and **fall back** to it (e.g. Sinhala), under
+  the separate §37.10 fallback amendment being written by the server/risi side; until that lands, Risi ignores it.
+  Either way it is never written to the learning log, server logs or pushes as text; a §37.10 `voice_transcript`
+  built from it must say so (e.g. `model: "phone"`), never claim a server model heard it. Never in Private (Risi
+  isn't a member there).
 
 ### Size
 Envelope bound stays 22 KiB (§14.4): 12 000 bytes of text + ≈ 600 bytes of the rest fit.

@@ -1,7 +1,25 @@
 # Phone (on-device) speech candidate: status and Harsha's phone checklist
 
+## Do this now (Harsha, 3 steps)
+1. **Turn it on:** install the next nightly → Settings → About → tap the version 7 times → **Developer** → switch on
+   **"Phone transcript on my voice notes (on-device)"** (language: Sinhala / Singlish, si-LK).
+2. **Check Sinhala offline:** tap **Check on-device languages**. The first two lines say, for Sinhala and Tamil, **"offline: YES"**,
+   **"offline: NOT YET, a pack exists"** or **"online only on this phone (no offline pack)"**. If it says NOT YET, tap **Download Sinhala** (Wi-Fi), wait a minute, check again. Send me
+   that line and the "Installed on-device" list.
+3. **Test it:** under **Phone recogniser test**, Choose a voice note (a real Sinhala one) → **Run all languages** →
+   **Copy results** and paste them to me. Then send one Sinhala voice note in an Official chat and one in the Risi
+   chat: both now carry the phone transcript, so the server can compare it and fall back to it.
+   (Keep Settings → Risi → "Transcribe my voice notes in Official chats" on: a note that opts out carries no
+   phone transcript.)
+
 Part 12 quick fix 2 (2026-10-14). Developer flag **`phone_stt`**, off for everyone; contract proposal
 `contract/proposals/2026-10-14-phone-transcript.md` (v1.47 candidate, field `voice.phone_transcript`).
+
+## Not built yet: the Google opt-in (Harsha 2026-10-14)
+"Use Google for Sinhala and Tamil voice (your voice is sent to Google)" is **not in this build**. The agent writing it
+was stopped by a Claude Code auto-mode permission check (classified as data exfiltration: code that sends voice to
+Google's online recogniser), so this app still never builds the online recogniser. To build it, Harsha has to
+explicitly allow that work (for example with a permission rule, or by running the session with that check approved).
 
 ## What it is
 - Android's **on-device** recogniser (`SpeechRecognizer.createOnDeviceSpeechRecognizer`, Android 13+ here because
@@ -12,8 +30,9 @@ Part 12 quick fix 2 (2026-10-14). Developer flag **`phone_stt`**, off for everyo
   No audio goes to Google.
 - While the flag is on, the recorder's frames are also streamed (16 kHz) to the on-device recogniser. When you stop,
   the app waits at most 2–8 s for the final text, then sends the note with the text **inside the encrypted voice
-  note**. Recipients see "Transcript (sender's phone) ▾" under the bubble (Private and Official). Not in the Risi chat,
-  not on a note with `transcribe: false`, dropped on forward.
+  note**. Recipients see "Transcript (sender's phone) ▾" under the bubble (Private and Official). Also attached in the Risi
+  chat (Harsha 2026-10-14: the server compares it and falls back to it, §37.10 in progress); not on a note with
+  `transcribe: false`, dropped on forward.
 - Until root applies the proposal as v1.47, Risi on the server ignores the field (and older apps ignore it, §0).
 
 ## Agent design
@@ -39,7 +58,7 @@ send path is unchanged (no session opens). Nothing in the gates depends on a rec
    If a run says "no result in time" or "failed", try again with **Real-time pacing** on and say which worked.
 6. Send test: with the flag on, send a voice note in a Private chat with a second phone (or Kamal's). Check that:
    - the note arrives and plays as usual; the other phone shows "Transcript (sender's phone) ▾" with the text;
-   - in the Risi chat no phone transcript is attached;
+   - Official and Risi-chat notes carry it too (the server's compare / fallback uses it once §37.10 lands);
    - with the language set to one that's not on-device you get "Phone transcript: … isn't available on-device …" and
      the note still goes;
    - the extra wait after you release the mic (2–8 s) is acceptable or not.
