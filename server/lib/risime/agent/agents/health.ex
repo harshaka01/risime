@@ -742,7 +742,12 @@ defmodule RisiMe.Agents.Health do
         end
 
       others != [] ->
-        {shown, rest} = Enum.split(others, 3)
+        # Stable order: named people first, alphabetically (members can join in the same instant).
+        {shown, rest} =
+          others
+          |> Enum.sort_by(&{name(names, &1) == "a contact", name(names, &1), &1})
+          |> Enum.split(3)
+
         more = if rest == [], do: "", else: " and #{length(rest)} more"
         "the group with #{Enum.map_join(shown, ", ", &name(names, &1))}#{more}"
 
