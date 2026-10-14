@@ -229,6 +229,10 @@ defmodule RisiMe.Workers.Risi do
         "transcript_delete" ->
           RisiMe.Agent.Voice.transcript_delete(conv, user, env["target"])
 
+        # Proposal 2026-10-14-voice-translate (v1.50 §37.13.1): "Wrong language?" by any member.
+        "transcript_language" ->
+          RisiMe.Agent.Voice.transcript_language(conv, user, env)
+
         "done" ->
           if risi_chat?(conv),
             do: LedgerActions.act(conv, user, env),

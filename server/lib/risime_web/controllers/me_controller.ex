@@ -109,15 +109,41 @@ defmodule RisiMeWeb.MeController do
 
   @doc "`GET /api/v1/me/risi/voice` (v1.41 §37.7): `{\"transcribe\": bool, \"action_items\": bool}`."
   def risi_voice(conn, _params) do
-    json(conn, RisiMe.Agent.Voice.setting(conn.assigns.current_user.id))
+    user = conn.assigns.current_user.id
+    json(conn, with_translate(RisiMe.Agent.Voice.setting(user), user))
   end
 
-  @doc "`PUT /api/v1/me/risi/voice` (v1.41 §37.7): both booleans required; `200` the same shape."
+  @doc """
+  `PUT /api/v1/me/risi/voice` (v1.41 §37.7): both booleans required; `200` the same shape.
+  Proposal 2026-10-14-voice-translate (§37.13.2): optional `always_translate` (`off | en | si |
+  ta`; absent keeps the stored value) while Translate is available to the user.
+  """
   def put_risi_voice(conn, params) do
-    case RisiMe.Agent.Voice.put_setting(conn.assigns.current_user.id, params) do
-      {:ok, setting} -> json(conn, setting)
+    user = conn.assigns.current_user.id
+    translate? = RisiMe.Agent.VoiceTranslate.enabled_for?(user)
+
+    with :ok <- put_always_translate(user, params, translate?),
+         {:ok, setting} <- RisiMe.Agent.Voice.put_setting(user, params) do
+      json(conn, with_translate(setting, user))
+    else
       {:error, :bad_request} -> ApiError.send_error(conn, 422, :bad_request)
     end
+  end
+
+  defp put_always_translate(user, %{"always_translate" => v}, true),
+    do: RisiMe.Agent.VoiceTranslate.put_always_translate(user, v)
+
+  defp put_always_translate(_user, _params, _translate?), do: :ok
+
+  # The v1.41 shape unchanged while Translate isn't available to the user (absent = false).
+  defp with_translate(setting, user) do
+    if RisiMe.Agent.VoiceTranslate.enabled_for?(user),
+      do:
+        Map.merge(setting, %{
+          always_translate: RisiMe.Agent.VoiceTranslate.always_translate(user),
+          translate_available: true
+        }),
+      else: setting
   end
 
   @doc """

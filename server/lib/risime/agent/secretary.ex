@@ -284,12 +284,20 @@ defmodule RisiMe.Agent.Secretary do
        do: %{
          message_id: row.message_id,
          sender_id: row.sender_id,
-         text: t,
+         # Proposal 2026-10-14-voice-translate §37.13.4: the original plus Risi's internal
+         # English rendering of a Sinhala or Tamil note (the Ledger, summaries, answers).
+         text: with_english(t, env["text_en"]),
          voice: true,
          duration_ms: env["duration_ms"]
        }
 
   defp said(_env, _row), do: nil
+
+  @doc false
+  def with_english(text, en) when is_binary(en) and en != "" and en != text,
+    do: text <> " [English: " <> en <> "]"
+
+  def with_english(text, _en), do: text
 
   @doc "Active human members of `conv` with names, in join order: `[%{user_id, name}]`."
   def members(conv) do

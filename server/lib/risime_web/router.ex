@@ -129,6 +129,8 @@ defmodule RisiMeWeb.Router do
     post "/chats/:chat_id/official", ChatController, :create_official
     # v1.24 §24.11.
     post "/risi/feedback", RisiController, :feedback
+    # Proposal 2026-10-14-voice-translate (v1.50 §37.13.2): per-viewer Translate.
+    post "/risi/translate", RisiController, :translate
     post "/risi/chat", RisiController, :create_chat
     get "/risi/facts", RisiController, :facts
     delete "/risi/facts/:fact_id", RisiController, :delete_fact

@@ -49,7 +49,9 @@ defmodule RisiMe.Agents.Flags do
     "RISI_SEND_FOR_ME" => :risi_send_for_me,
     # P1 2026-10-14 (Tamil notes in Sinhala script): the Voice agent's language decision
     # (RisiMe.Agent.SpeechLang); on for everyone, off = today's route.
-    "RISI_VOICE_LANG_ID" => :risi_voice_lang_id
+    "RISI_VOICE_LANG_ID" => :risi_voice_lang_id,
+    # Proposal 2026-10-14-voice-translate (v1.50 §37.13): "Wrong language?" and Translate.
+    "RISI_VOICE_TRANSLATE" => :risi_voice_translate
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
@@ -60,7 +62,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_VOICE_PHONE_FALLBACK" => "off",
     "RISI_SPEECH_COMPARE_DEV" => "canary",
     "RISI_SEND_FOR_ME" => "canary",
-    "RISI_VOICE_LANG_ID" => "on"
+    "RISI_VOICE_LANG_ID" => "on",
+    "RISI_VOICE_TRANSLATE" => "canary"
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000

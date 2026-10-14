@@ -575,6 +575,8 @@ defmodule RisiMe.Agent.Voice do
 
     risi = if t.script, do: Map.put(risi, "script", script_json(t.script)), else: risi
     risi = if t.romanised, do: Map.put(risi, "romanised", true), else: risi
+    # Proposal 2026-10-14-voice-translate: a "Wrong language?" re-transcription.
+    risi = if t[:relang], do: Map.put(risi, "relang", t.relang), else: risi
     {body, phone_source(risi, t)}
   end
 
@@ -601,10 +603,14 @@ defmodule RisiMe.Agent.Voice do
               note_message_id: note_id,
               transcript_message_id: mid,
               speaker: Ecto.UUID.dump!(sender),
+              # Proposal 2026-10-14-voice-translate: "Wrong language?" is honoured only for
+              # the note's own audio (ids and the ciphertext hash; never the key).
+              blob_id: Map.get(note, :blob_id),
+              blob_sha256: Map.get(note, :sha256),
               inserted_at: DateTime.utc_now()
             }
           ],
-          on_conflict: {:replace, [:transcript_message_id, :inserted_at]},
+          on_conflict: {:replace, [:transcript_message_id, :blob_id, :blob_sha256, :inserted_at]},
           conflict_target: [:conversation_id, :note_message_id]
         )
 
@@ -656,6 +662,15 @@ defmodule RisiMe.Agent.Voice do
       "parts" => t.parts,
       "duration_ms" => duration_ms
     }
+
+    # Proposal 2026-10-14-voice-translate §37.13.4: Risi's understanding of a Sinhala or Tamil
+    # note works from the original plus an English rendering (sealed here, never posted/logged).
+    env =
+      case t.status == "ok" and
+             RisiMe.Agent.VoiceTranslate.english(t.text, t.language, conv, sender) do
+        en when is_binary(en) and en != "" -> Map.put(env, "text_en", en)
+        _ -> env
+      end
 
     # The note may have been deleted for everyone while it was being transcribed: then nothing
     # of it is kept or learned.
@@ -880,7 +895,7 @@ defmodule RisiMe.Agent.Voice do
     _ -> :ok
   end
 
-  defp log(conv, t, note, latency) do
+  defp log(conv, t, note, latency, extra \\ %{}) do
     LearningLog.record(%{
       call_id: TimeUUID.generate(),
       conversation_id: conv,
@@ -892,11 +907,13 @@ defmodule RisiMe.Agent.Voice do
       status: t.status,
       latency_ms: t.elapsed_ms || latency,
       source_message_ids: [],
-      meta: %{
-        "source" => "voice_note",
-        "language" => t.language,
-        "audio_s" => Float.round(note.duration_ms / 1000, 1)
-      },
+      meta:
+        %{
+          "source" => "voice_note",
+          "language" => t.language,
+          "audio_s" => Float.round(note.duration_ms / 1000, 1)
+        }
+        |> Map.merge(extra),
       output: nil
     })
   rescue
@@ -983,6 +1000,124 @@ defmodule RisiMe.Agent.Voice do
   end
 
   def transcript_delete(_conv, _user, _note_id), do: :ok
+
+  ## "Wrong language?" (proposal 2026-10-14-voice-translate, v1.50 §37.13.1)
+
+  @relang_limit {3, 600_000}
+
+  @doc """
+  `risi_action` `transcript_language` from member `user`: re-transcribes the note with the asked
+  language forced, replaces Risi's transcript (a new post with `relang`, the old post and what was
+  learned from it deleted), moves the speaker's language profile and writes the learning-log row
+  (codes only). Honoured only in Official with `RISI_VOICE_TRANSLATE` on for `user`, for a note
+  Risi transcribed whose blob id and SHA-256 match the request's; at most 3 per note per 10 min.
+  Returns `:ok` (also for every ignored request) or `{:ok, :relang}`.
+  """
+  def transcript_language(conv, user, %{"target" => target, "language" => lang} = env)
+      when lang in ~w(si ta en) and is_binary(target) do
+    note_id = String.downcase(target)
+
+    with true <- RisiMe.Agent.VoiceTranslate.enabled_for?(user),
+         true <- RisiMe.Agent.official?(conv),
+         false <- RisiMe.Groups.Tabs.risi_chat?(conv),
+         true <- Secretary.active_human?(conv, user),
+         {:ok, note} <- relang_note(env["voice"]),
+         %{speaker: speaker, blob_id: b, blob_sha256: sha} <- relang_row(conv, note_id),
+         true <- b == note.blob_id and sha == note.sha256,
+         :ok <- relang_rate(conv, note_id) do
+      relang(conv, note_id, Ecto.UUID.cast!(speaker), user, note, lang)
+    else
+      _ -> :ok
+    end
+  rescue
+    e ->
+      Logger.warning("Risi transcript_language skipped in #{conv}: #{inspect(e.__struct__)}")
+      :ok
+  end
+
+  def transcript_language(_conv, _user, _env), do: :ok
+
+  # The note's §37.2 blob/enc as the request carries them (mime and waveform aren't needed).
+  defp relang_note(%{"blob" => _, "enc" => _, "duration_ms" => _} = v) do
+    validate(
+      Map.merge(v, %{
+        "type" => "voice",
+        "mime" => "audio/ogg; codecs=opus",
+        "waveform" => Base.encode64(:binary.copy(<<0>>, 64))
+      })
+    )
+  end
+
+  defp relang_note(_), do: :error
+
+  defp relang_row(conv, note_id) do
+    Repo.one(
+      from v in "risi_voice_transcripts",
+        where: v.conversation_id == ^conv and v.note_message_id == ^note_id,
+        select: %{speaker: v.speaker, blob_id: v.blob_id, blob_sha256: v.blob_sha256}
+    )
+  end
+
+  defp relang_rate(conv, note_id) do
+    {limit, window} = @relang_limit
+    RisiMe.RateLimiter.hit(:risi_relang, {conv, note_id}, limit, window)
+  end
+
+  defp relang(conv, note_id, speaker, by, note, lang) do
+    previous =
+      case Secretary.envelope(conv, note_id) do
+        %{"type" => "voice_transcript", "language" => l} when l in ~w(si ta en) -> l
+        _ -> nil
+      end
+
+    t0 = System.monotonic_time(:millisecond)
+
+    result =
+      with {:ok, audio} <- audio(conv, note) do
+        Speech.transcribe(audio,
+          language: lang,
+          priority: "live",
+          timeout: Speech.budget_ms(note.duration_ms)
+        )
+      end
+
+    latency = System.monotonic_time(:millisecond) - t0
+    :erlang.garbage_collect()
+
+    case result do
+      {:ok, r} ->
+        # The language follows the text's script (P1 2026-10-14).
+        r =
+          case Speech.script_lang(r.text) do
+            "en" -> r
+            l -> %{r | language: l}
+          end
+
+        t =
+          classify({:ok, r}, note)
+          |> Map.put(:relang, %{"from" => previous, "to" => lang, "by" => by})
+
+        # The earlier transcript and what was learned from it go first (as transcript_delete).
+        _ = delete_transcripts(conv, [note_id])
+        Secretary.message_deleted(conv, [note_id])
+        Transcript.delete(conv, [note_id])
+
+        log(conv, t, note, latency, %{
+          "relang" => true,
+          "from" => previous,
+          "to" => lang
+        })
+
+        RisiMe.Agent.SpeechLang.correct(speaker, previous, lang, note.duration_ms)
+        post(conv, note_id, speaker, note, t)
+        buffer(conv, note_id, speaker, t, :official, nil, note)
+        {:ok, :relang}
+
+      _ ->
+        # The speech service failed: the earlier transcript stays.
+        :ok
+    end
+  end
 
   @doc "Official off / Risi removed: the mapping rows go (the posts stay on phones, rule 9)."
   def forget(conv) do

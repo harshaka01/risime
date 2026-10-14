@@ -16,6 +16,28 @@ defmodule RisiMeWeb.RisiController do
 
   defp me(conn), do: conn.assigns.current_user.id
 
+  @doc """
+  `POST /api/v1/risi/translate` (proposal 2026-10-14-voice-translate, v1.50 §37.13.2): one
+  Official message (a transcribed note or a typed message Risi holds) translated for the caller
+  only. `200` the translation; `403 not_available`, `404 not_found`, `422 bad_request`,
+  `429 rate_limited`, `503 unavailable`. Nothing is posted, stored or logged.
+  """
+  def translate(conn, params) do
+    case RisiMe.Agent.VoiceTranslate.translate_message(
+           me(conn),
+           params["conversation_id"],
+           params["message_id"],
+           params["target"]
+         ) do
+      {:ok, reply} -> json(conn, reply)
+      {:error, :not_available} -> conn |> put_status(403) |> json(%{error: "not_available"})
+      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not_found"})
+      {:error, :rate_limited} -> conn |> put_status(429) |> json(%{error: "rate_limited"})
+      {:error, :unavailable} -> conn |> put_status(503) |> json(%{error: "unavailable"})
+      {:error, _} -> ApiError.send_error(conn, 422, :bad_request)
+    end
+  end
+
   @doc "`POST /api/v1/risi/chat` (v1.25 §25.2): `201` new, `200` existing `{chat, group}`."
   def create_chat(conn, _params) do
     case RisiMe.RisiChat.create(me(conn), RisiMeWeb.MLSController.caller_device(conn)) do

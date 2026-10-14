@@ -186,8 +186,19 @@ defmodule RisiMe.Agent.ActionItems do
 
   @doc false
   def voice_lines(src, env) do
-    for p <- parts(env["parts"], env["text"]),
-        do: line(src, src.speaker, p["t"], env["language"], p["o"], nil, src.started_at)
+    lines =
+      for p <- parts(env["parts"], env["text"]),
+          do: line(src, src.speaker, p["t"], env["language"], p["o"], nil, src.started_at)
+
+    # Proposal 2026-10-14-voice-translate §37.13.4: a Sinhala or Tamil note is extracted from
+    # the original plus Risi's internal English rendering of the whole note (on its last line).
+    case {env["text_en"], Enum.split(lines, -1)} do
+      {en, {rest, [last]}} when is_binary(en) and en != "" ->
+        rest ++ [%{last | text: Secretary.with_english(last.text, en)}]
+
+      _ ->
+        lines
+    end
   end
 
   @doc """
