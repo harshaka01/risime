@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Harsha-approved (2026-10-14 01:26 SLT) 01:52 SLT) TTS: Kokoro-82M, then Chatterbox (ungated repos only (CLAUDE.md rule 10), resumable (curl -C -).
+#   hexgrad/Kokoro-82M (0.36 GB, Apache-2.0), ResembleAI/chatterbox safetensors (~8.6 GB, MIT, built-in watermark); runs at 1 MB/s beside the omniASR queue
+# Default: 10 MB/s, only 16:30–00:30 UTC (22:00–06:00 SLT). DL_DAYTIME=1 is Harsha's one-off daytime exception
+# (2026-10-13 08:16 SLT); DL_RATE sets the curl rate (Harsha capped it at 50 MB/s and ≤ ~70 % of the measured line).
+# Pauses (kills curl, resumes later) while a release gate runs (scripts/nightly-release) or DL_PAUSE_FILE exists.
+# Log: ~/risime-eval-data/dl/downloads-2026-10-14-tts.log.
+set -u
+RATE="${DL_RATE:-1M}"; DAY="${DL_DAYTIME:-0}"; PAUSE_FILE="${DL_PAUSE_FILE:-$HOME/risime-eval-data/dl/PAUSE}"
+L="$HOME/risime-eval-data/dl/downloads-2026-10-14-tts.log"; B="$HOME/risime-eval-models"
+mkdir -p "$(dirname "$L")"
+log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$L"; }
+in_window() { local h; h=$((10#$(date -u +%H%M))); [ "$DAY" = 1 ] || [ "$h" -ge 1630 ] || [ "$h" -lt 30 ]; }
+busy() { pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null || [ -e "$PAUSE_FILE" ]; }
+get() { # repo file dest
+  mkdir -p "$(dirname "$3")"
+  log "start $1/$2 (rate $RATE)"
+  while :; do
+    in_window || { log "STOP: outside the night window, before $1/$2"; exit 1; }
+    while busy; do sleep 30; done
+    curl -fL --retry 5 --retry-delay 10 -C - --limit-rate "$RATE" -s -o "$3" "https://huggingface.co/$1/resolve/main/$2" &
+    local pid=$! paused=0
+    while kill -0 "$pid" 2>/dev/null; do
+      sleep 10
+      if busy; then kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; paused=1; log "paused $1/$2 (release gate or PAUSE file)"; break; fi
+    done
+    [ "$paused" = 1 ] && continue
+    if wait "$pid"; then log "done $1/$2 $(stat -c %s "$3") bytes"; return 0; fi
+    log "FAIL $1/$2"; return 1
+  done
+}
+repo_files() { curl -s "https://huggingface.co/api/models/$1" | python3 -c 'import json,sys;[print(s["rfilename"]) for s in json.load(sys.stdin)["siblings"]]'; }
+for f in $(repo_files hexgrad/Kokoro-82M); do get hexgrad/Kokoro-82M "$f" "$B/kokoro-82m/$f"; done
+for f in $(repo_files ResembleAI/chatterbox | grep -vE '\.pt$|t3_23lang' ); do get ResembleAI/chatterbox "$f" "$B/chatterbox/$f"; done
+get ResembleAI/chatterbox conds.pt "$B/chatterbox/conds.pt"
+get ResembleAI/chatterbox ve.pt "$B/chatterbox/ve.pt"
+log "ALL FINISHED"
