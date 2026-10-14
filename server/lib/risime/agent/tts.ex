@@ -24,42 +24,122 @@ defmodule RisiMe.Agent.TTS do
   alias RisiMe.Admin.Settings
 
   @type voice :: %{id: String.t(), name: String.t(), languages: [String.t()]}
+  # `load_ms` (the model load this request caused) and `audio_ms` (the audio's length) are
+  # optional: an engine that is always resident leaves them out.
   @type audio :: %{
-          audio: binary,
-          content_type: String.t(),
-          first_audio_ms: non_neg_integer,
-          total_ms: non_neg_integer
+          required(:audio) => binary,
+          required(:content_type) => String.t(),
+          required(:first_audio_ms) => non_neg_integer,
+          required(:total_ms) => non_neg_integer,
+          optional(:load_ms) => non_neg_integer,
+          optional(:audio_ms) => non_neg_integer | nil
         }
 
   @callback engine() :: %{id: String.t(), name: String.t()}
-  @callback voices() :: {:ok, [voice]} | {:error, :unavailable}
+  @callback voices() :: {:ok, [voice]} | {:error, :unavailable | :downloading | :review_pending}
   @callback synthesize(text :: String.t(), voice_id :: String.t(), opts :: keyword) ::
-              {:ok, audio} | {:error, :unavailable | :timeout | :failed}
+              {:ok, audio} | {:error, atom}
 
   @langs ~w(si mixed ta en)
 
-  # Display catalogue (Part 12): engines Harsha expects; only registered engines are installed.
+  # Display catalogue (Part 12; candidates 2026-10-14): every engine Harsha compares, installed or
+  # not, with its licence and whether it may be Risi's production voice. `production`: `:yes`,
+  # `:conditional` (allowed with the stated condition) or `:no`. Risi's voice is always a built-in
+  # or stock voice of the engine, never a clone of a real person from a recording.
   @catalogue [
-    {"kokoro", "Kokoro"},
-    {"orpheus", "Orpheus"},
-    {"chatterbox", "Chatterbox"},
-    {"mms", "MMS"},
-    {"indic-parler", "Indic Parler"},
-    {"phone", "Phone TTS (on the phone, not a server voice)"}
+    %{
+      id: "kokoro",
+      name: "Kokoro",
+      languages: ~w(en),
+      licence: "Apache-2.0 (Kokoro-82M weights), MIT (misaki G2P)",
+      production: :yes,
+      note: "Built-in voices. Call Risi's voice, resident for live calls."
+    },
+    %{
+      id: "orpheus",
+      name: "Orpheus",
+      languages: ~w(en),
+      licence:
+        "Apache-2.0 (Canopy Labs) + Llama 3.2 Community Licence (fine-tuned from Llama 3.2 3B)",
+      production: :conditional,
+      note:
+        "Only under the Llama 3.2 licence as well: \"Built with Llama\" attribution, Meta's acceptable " <>
+          "use policy, the 700 M monthly-user clause. Stock voices (tara, leah, …). Console test only."
+    },
+    %{
+      id: "chatterbox",
+      name: "Chatterbox",
+      languages: ~w(en),
+      licence: "MIT (Resemble AI)",
+      production: :yes,
+      note:
+        "Every output carries Resemble's PerTh watermark: inaudible, survives MP3 and edits, and marks " <>
+          "the audio as AI-made for anyone with Resemble's open detector. Built-in default voice only " <>
+          "(no cloning). No Sinhala or Tamil among its 23 languages."
+    },
+    %{
+      id: "indicf5",
+      name: "IndicF5",
+      languages: ~w(ta),
+      licence: "MIT (AI4Bharat); its custom code is reviewed before it runs",
+      production: :no,
+      note:
+        "No built-in voice: every sentence copies the voice of a reference recording (its stock prompts " <>
+          "are dataset speakers). Not Risi's voice until a licensed or synthetic reference voice exists. " <>
+          "No Sinhala."
+    },
+    %{
+      id: "indic-parler",
+      name: "Indic Parler-TTS",
+      languages: ~w(ta en),
+      licence: "Apache-2.0 (AI4Bharat)",
+      production: :yes,
+      note: "Stock named speakers or a described voice (no cloning). Tamil yes; no Sinhala."
+    },
+    %{
+      id: "mms",
+      name: "MMS",
+      languages: ~w(ta),
+      licence: "CC-BY-NC-4.0 (Meta MMS-TTS)",
+      production: :no,
+      note: "Non-commercial only, and there is no Sinhala model.",
+      unavailable: "not available (licence)"
+    },
+    %{
+      id: "phone",
+      name: "Phone TTS (on the phone, not a server voice)",
+      languages: ~w(si ta en),
+      licence: "The phone's own engine (Google / Samsung), on-device voices only",
+      production: :conditional,
+      note:
+        "Phone-side only: on-device voices, never network synthesis. Sinhala and Tamil are checked on " <>
+          "Harsha's phone (docs/status/phone-tts.md).",
+      unavailable: "on the phone only, not a server voice"
+    }
   ]
 
   @doc "The languages with a choice."
   def languages, do: @langs
 
   @doc "The engines Harsha expects (`{id, name}`), installed or not."
-  def catalogue, do: @catalogue
+  def catalogue, do: Enum.map(@catalogue, &{&1.id, &1.name})
+
+  @doc """
+  Every catalogue entry: `%{id, name, languages, licence, production, note}`, plus `unavailable`
+  for an engine that is never a server voice (MMS, Phone).
+  """
+  def catalogue_info, do: @catalogue
+
+  @doc "The catalogue entry of engine `id`, or nil."
+  def info(id), do: Enum.find(@catalogue, &(&1.id == id))
 
   @doc "The registered engine modules."
   def engines, do: Application.get_env(:risime, :risi_tts_engines, [])
 
   @doc """
-  Every registered engine with its voices: `[%{id, name, module, status: :ok | :unavailable,
-  voices: [voice]}]`. An engine that raises or doesn't answer is `:unavailable`.
+  Every registered engine with its voices: `[%{id, name, module, status, voices: [voice]}]`.
+  `status` is `:ok`, `:downloading` (its weights haven't arrived), `:review_pending` (its shipped
+  code isn't cleared yet) or `:unavailable` (it raises or doesn't answer).
   """
   def installed do
     for mod <- engines() do
@@ -69,6 +149,7 @@ defmodule RisiMe.Agent.TTS do
         try do
           case mod.voices() do
             {:ok, vs} when is_list(vs) -> {:ok, vs}
+            {:error, r} when r in [:downloading, :review_pending] -> {r, []}
             _ -> {:unavailable, []}
           end
         rescue

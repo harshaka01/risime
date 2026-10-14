@@ -147,6 +147,11 @@ config :risime, :risi_speech_http,
   compare_extra_url: nil,
   req_options: [plug: {Req.Test, RisiMe.Agent.Speech.Http}, retry: false]
 
+# TTS candidates (2026-10-14): risime-tts-lab only ever through a Req.Test stub.
+config :risime, :risi_tts_lab,
+  url: "http://127.0.0.1:8231",
+  req_options: [plug: {Req.Test, RisiMe.Agent.TTS.Lab}]
+
 # Incident 2026-10-14: tests never write the shared eval pause file (RisiMe.Agent.SpeechGuard).
 config :risime, :risi_speech_pause_file, false
 # Harsha's sealed Sinhala gold set (RisiMe.Agent.SpeechGold): tests set a temp dir themselves.

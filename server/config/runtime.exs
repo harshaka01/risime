@@ -250,7 +250,18 @@ if config_env() != :test do
     ] ++ if(key = System.get_env("TTS_API_KEY"), do: [tts_key: key], else: [])
 
   config :risime, :risi_call_risi_config, call_risi
-  config :risime, :risi_tts_engines, [RisiMe.Agent.TTS.Kokoro]
+
+  # TTS candidates (2026-10-14): risime-tts-lab (infra/docker-compose.tts-lab.yml) on RISI_TTS_LAB_URL
+  # (loopback only, default http://127.0.0.1:8231), console tests only; Call Risi stays on Kokoro.
+  config :risime, :risi_tts_lab, url: System.get_env("RISI_TTS_LAB_URL", "http://127.0.0.1:8231")
+
+  config :risime, :risi_tts_engines, [
+    RisiMe.Agent.TTS.Kokoro,
+    RisiMe.Agent.TTS.Chatterbox,
+    RisiMe.Agent.TTS.IndicF5,
+    RisiMe.Agent.TTS.IndicParler,
+    RisiMe.Agent.TTS.Orpheus
+  ]
 end
 
 if v = System.get_env("RISI_DEV_USERS") do

@@ -1,13 +1,21 @@
 defmodule RisiMeWeb.Admin.VoicesLive do
   @moduledoc """
-  Admin console page 2, Voices / text-to-speech (decision 089, Part 12 item 2).
+  Admin console page 2, Voices / text-to-speech (decision 089, Part 12 item 2; candidates
+  2026-10-14).
 
   * Per language (Sinhala, Mixed / Singlish, Tamil, English): Auto or an installed voice
     (`RisiMe.Agent.TTS`, the engines registered in `:risi_tts_engines`). Saving applies within
-    5 s, no deploy; audit-logged. Catalogue engines that aren't registered show "not installed".
-  * Test: a sentence the admin types, spoken by every installed voice one after another, each
-    with its time to first audio and a player. The sentence is neither logged nor stored (the
-    audit log records only its length).
+    5 s, no deploy; audit-logged. Catalogue engines that aren't registered show "not installed";
+    engines whose weights haven't arrived show "downloading tonight".
+  * Engines: each with its languages, licence and a "production OK?" flag (no non-commercial;
+    Llama-derived only under the Llama licence; watermark noted). Risi's voice is a built-in or
+    stock voice, never a clone of a real person.
+  * Test: a sentence the admin types, spoken by one voice per engine (or every voice), one after
+    another (the machine is shared), each with its load time, time to first audio, real-time
+    factor and a player. Results appear as each voice finishes. The sentence is neither logged
+    nor stored (the audit log records only its length).
+  * Rating: 👍 / 👎 per reply (`RisiMe.Agent.TTS.Ratings`: audit-logged with the reply's latency,
+    summed into the Voice agent's scoreboard row).
   """
   use RisiMeWeb, :live_view
 
@@ -22,7 +30,7 @@ defmodule RisiMeWeb.Admin.VoicesLive do
     "en" => "English"
   }
   @max_text 300
-  @max_audio 5 * 1024 * 1024
+  @max_audio 8 * 1024 * 1024
 
   @impl true
   def mount(_params, _session, socket) do
@@ -31,7 +39,11 @@ defmodule RisiMeWeb.Admin.VoicesLive do
       |> assign(:page_title, "Voices · RisiMe admin")
       |> assign(:installed, :loading)
       |> assign(:test, nil)
+      |> assign(:results, [])
+      |> assign(:pending, [])
       |> assign(:text, "")
+      |> assign(:which, "each_engine")
+      |> assign(:test_lang, "any")
       |> assign(:notice, nil)
       |> assign(:auto, RisiMe.Agent.VoiceAuto.status(:tts))
       |> load_choices()
@@ -66,10 +78,11 @@ defmodule RisiMeWeb.Admin.VoicesLive do
     {:noreply, socket |> assign(:notice, notice) |> load_choices()}
   end
 
-  def handle_event("test", %{"text" => text}, socket) when is_binary(text) do
+  def handle_event("test", %{"text" => text} = params, socket) when is_binary(text) do
     text = String.trim(text)
-    installed = if is_list(socket.assigns.installed), do: socket.assigns.installed, else: []
-    voices = voices(socket)
+    which = if params["which"] == "each_engine", do: "each_engine", else: "all"
+    lang = if params["lang"] in TTS.languages(), do: params["lang"], else: "any"
+    picked = pick(voices(socket), which, lang)
 
     cond do
       socket.assigns.test == :running ->
@@ -79,25 +92,40 @@ defmodule RisiMeWeb.Admin.VoicesLive do
         {:noreply,
          assign(socket, :notice, {:error, "Type a sentence (up to #{@max_text} characters)."})}
 
-      voices == [] ->
-        {:noreply, assign(socket, :notice, {:error, "No voice is installed yet."})}
+      picked == [] ->
+        {:noreply,
+         assign(socket, :notice, {:error, "No voice is installed for that choice yet."})}
 
       true ->
         Admin.audit(
           socket.assigns.admin_id,
           "tts_test",
-          "#{length(voices)} voices",
+          "#{length(picked)} voices",
           nil,
           "#{String.length(text)} characters"
         )
 
+        installed = if is_list(socket.assigns.installed), do: socket.assigns.installed, else: []
+
         socket =
           socket
-          |> assign(:test, :running)
-          |> assign(:text, text)
-          |> start_async(:speak, fn -> speak_all(text, voices, installed) end)
+          |> assign(test: :running, text: text, which: which, test_lang: lang, notice: nil)
+          |> assign(results: [], pending: picked)
+          |> next_voice(installed)
 
         {:noreply, socket}
+    end
+  end
+
+  def handle_event("rate", %{"i" => i, "score" => score}, socket)
+      when score in ["up", "down"] do
+    with {n, ""} <- Integer.parse(to_string(i)),
+         %{result: {:ok, a}, rated: nil} = r <- Enum.at(socket.assigns.results, n) do
+      RisiMe.Agent.TTS.Ratings.rate(socket.assigns.admin_id, r.voice.id, score, a)
+      results = List.replace_at(socket.assigns.results, n, %{r | rated: score})
+      {:noreply, assign(socket, :results, results)}
+    else
+      _ -> {:noreply, socket}
     end
   end
 
@@ -107,35 +135,86 @@ defmodule RisiMeWeb.Admin.VoicesLive do
   end
 
   @impl true
-  def handle_async(:speak, {:ok, results}, socket), do: {:noreply, assign(socket, :test, results)}
+  def handle_async(:speak, {:ok, result}, socket) do
+    installed = if is_list(socket.assigns.installed), do: socket.assigns.installed, else: []
+
+    {:noreply,
+     socket |> assign(:results, socket.assigns.results ++ [result]) |> next_voice(installed)}
+  end
 
   def handle_async(:speak, {:exit, _}, socket),
-    do: {:noreply, assign(socket, :test, {:error, :failed})}
+    do: {:noreply, assign(socket, test: {:error, :failed}, pending: [])}
 
-  @doc false
-  # One voice after another (the machine is shared): `[%{voice, result}]`.
-  def speak_all(text, voices, installed) do
-    for v <- voices do
-      r =
-        case TTS.synthesize(text, v.id, installed: installed) do
-          {:ok, %{audio: a} = ok} when byte_size(a) <= @max_audio ->
-            {:ok,
-             %{
-               first_audio_ms: ok.first_audio_ms,
-               total_ms: ok.total_ms,
-               src: "data:#{ok.content_type};base64," <> Base.encode64(a)
-             }}
+  defp next_voice(socket, installed) do
+    case socket.assigns.pending do
+      [] ->
+        assign(socket, :test, :done)
 
-          {:ok, _} ->
-            {:error, :too_large}
+      [v | rest] ->
+        text = socket.assigns.text
 
-          {:error, e} ->
-            {:error, e}
-        end
-
-      %{voice: v, result: r}
+        socket
+        |> assign(:pending, rest)
+        |> start_async(:speak, fn -> speak_one(text, v, installed) end)
     end
   end
+
+  @doc false
+  # The voices a test speaks: every one, or the first of each engine; optionally one language.
+  def pick(voices, which, lang) do
+    voices = if lang == "any", do: voices, else: TTS.candidates(voices, lang)
+
+    if which == "each_engine",
+      do: Enum.uniq_by(voices, & &1[:engine]),
+      else: voices
+  end
+
+  @doc false
+  # One voice after another (the machine is shared): `[%{voice, result, rated}]`.
+  def speak_all(text, voices, installed), do: Enum.map(voices, &speak_one(text, &1, installed))
+
+  @doc false
+  def speak_one(text, v, installed) do
+    r =
+      case TTS.synthesize(text, v.id, installed: installed) do
+        {:ok, %{audio: a} = ok} when byte_size(a) <= @max_audio ->
+          {:ok,
+           %{
+             first_audio_ms: ok.first_audio_ms,
+             total_ms: ok.total_ms,
+             load_ms: Map.get(ok, :load_ms, 0),
+             rtf: rtf(ok),
+             src: "data:#{ok.content_type};base64," <> Base.encode64(a)
+           }}
+
+        {:ok, _} ->
+          {:error, :too_large}
+
+        {:error, e} ->
+          {:error, e}
+      end
+
+    %{voice: v, result: r, rated: nil}
+  end
+
+  # Real-time factor: synthesis time (without the model load) ÷ audio length. < 1 is faster than
+  # real time. The audio length comes from the engine, or from a 16-bit mono WAV's size.
+  defp rtf(%{total_ms: total} = ok) do
+    audio_ms = ok[:audio_ms] || wav_ms(ok[:audio])
+
+    if is_integer(audio_ms) and audio_ms > 0,
+      do: Float.round(max(total - Map.get(ok, :load_ms, 0), 0) / audio_ms, 2),
+      else: nil
+  end
+
+  defp wav_ms(
+         <<"RIFF", _::32, "WAVE", "fmt ", 16::little-32, 1::little-16, 1::little-16,
+           sr::little-32, _::32, _::16, 16::little-16, "data", size::little-32, _::binary>>
+       )
+       when sr > 0,
+       do: div(size * 1000, sr * 2)
+
+  defp wav_ms(_), do: nil
 
   defp voices(socket) do
     case socket.assigns.installed do
@@ -217,6 +296,10 @@ defmodule RisiMeWeb.Admin.VoicesLive do
             today's route: the voice service's own default voice for the language. {@auto.text}
           </span>
         </p>
+        <p class="muted">
+          Call Risi speaks only with Kokoro voices (resident for live calls); the other engines are
+          for comparing on this page.
+        </p>
       </div>
 
       <div class="card">
@@ -225,10 +308,19 @@ defmodule RisiMeWeb.Admin.VoicesLive do
           <tr>
             <th>Engine</th>
             <th>On this server</th>
+            <th>Languages</th>
+            <th>Licence</th>
+            <th>Production OK?</th>
           </tr>
-          <tr :for={{id, name} <- RisiMe.Agent.TTS.catalogue()}>
-            <td>{name}</td>
-            <td>{engine_status(@installed, id)}</td>
+          <tr :for={e <- RisiMe.Agent.TTS.catalogue_info()}>
+            <td>{e.name}</td>
+            <td>{engine_status(@installed, e)}</td>
+            <td>{Enum.join(e.languages, ", ")}</td>
+            <td>{e.licence}</td>
+            <td>
+              <strong class={production_class(e.production)}>{production(e.production)}</strong>
+              <div class="muted">{e.note}</div>
+            </td>
           </tr>
         </table>
       </div>
@@ -236,8 +328,9 @@ defmodule RisiMeWeb.Admin.VoicesLive do
       <div class="card">
         <strong>Test</strong>
         <p class="muted">
-          Type a sentence; every installed voice speaks it, one after another, with the time to first
-          audio. The sentence is not stored.
+          Type a sentence; the chosen voices speak it one after another, with the time to load the
+          model, to the first audio, and the real-time factor (below 1 is faster than real time).
+          Rate each reply 👍 or 👎: it feeds the Voice agent's score. The sentence is not stored.
         </p>
         <form phx-submit="test" class="row">
           <input
@@ -248,41 +341,29 @@ defmodule RisiMeWeb.Admin.VoicesLive do
             style="flex:1 1 260px;font:inherit;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg)"
             aria-label="Sentence to speak"
           />
+          <select name="which" aria-label="Which voices">
+            <option value="each_engine" selected={@which == "each_engine"}>
+              One voice per engine
+            </option>
+            <option value="all" selected={@which == "all"}>Every voice</option>
+          </select>
+          <select name="lang" aria-label="Language">
+            <option value="any" selected={@test_lang == "any"}>Any language</option>
+            <option :for={l <- @langs} value={l} selected={@test_lang == l}>{@labels[l]}</option>
+          </select>
           <button class="btn primary" type="submit" disabled={@test == :running}>
             {if @test == :running, do: "Speaking…", else: "Test"}
           </button>
         </form>
-        <.speak_result test={@test} />
+        <.speak_result results={@results} test={@test} pending={length(@pending)} />
       </div>
     </RisiMeWeb.Admin.Layouts.shell>
     """
   end
 
+  attr :results, :list, required: true
   attr :test, :any, required: true
-
-  defp speak_result(%{test: list} = assigns) when is_list(list) do
-    ~H"""
-    <table>
-      <tr>
-        <th>Voice</th>
-        <th>First audio (s)</th>
-        <th>Total (s)</th>
-        <th>Listen</th>
-      </tr>
-      <tr :for={r <- @test}>
-        <td>{r.voice[:name] || r.voice.id}</td>
-        <%= case r.result do %>
-          <% {:ok, a} -> %>
-            <td>{seconds(a.first_audio_ms)}</td>
-            <td>{seconds(a.total_ms)}</td>
-            <td><audio controls preload="none" src={a.src}></audio></td>
-          <% {:error, e} -> %>
-            <td colspan="3" class="bad">{e}</td>
-        <% end %>
-      </tr>
-    </table>
-    """
-  end
+  attr :pending, :integer, required: true
 
   defp speak_result(%{test: {:error, _}} = assigns) do
     ~H"""
@@ -290,10 +371,68 @@ defmodule RisiMeWeb.Admin.VoicesLive do
     """
   end
 
+  defp speak_result(%{results: [_ | _]} = assigns) do
+    ~H"""
+    <table>
+      <tr>
+        <th>Voice</th>
+        <th>Load (s)</th>
+        <th>First audio (s)</th>
+        <th>Total (s)</th>
+        <th>RTF</th>
+        <th>Listen</th>
+        <th>Rate</th>
+      </tr>
+      <tr :for={{r, i} <- Enum.with_index(@results)}>
+        <td>{r.voice[:name] || r.voice.id}</td>
+        <%= case r.result do %>
+          <% {:ok, a} -> %>
+            <td>{seconds(a[:load_ms])}</td>
+            <td>{seconds(a.first_audio_ms)}</td>
+            <td>{seconds(a.total_ms)}</td>
+            <td>{a[:rtf] || "-"}</td>
+            <td><audio controls preload="none" src={a.src}></audio></td>
+            <td>
+              <%= if r.rated do %>
+                <span class="muted">{if r.rated == "up", do: "👍", else: "👎"} saved</span>
+              <% else %>
+                <button class="btn" phx-click="rate" phx-value-i={i} phx-value-score="up">👍</button>
+                <button class="btn" phx-click="rate" phx-value-i={i} phx-value-score="down">
+                  👎
+                </button>
+              <% end %>
+            </td>
+          <% {:error, e} -> %>
+            <td colspan="6" class="bad">{error_text(e)}</td>
+        <% end %>
+      </tr>
+    </table>
+    <p :if={@test == :running} class="muted">Speaking… {@pending} more to go.</p>
+    """
+  end
+
+  defp speak_result(%{test: :running} = assigns) do
+    ~H"""
+    <p class="muted">Speaking…</p>
+    """
+  end
+
   defp speak_result(assigns), do: ~H""
 
   defp seconds(ms) when is_integer(ms), do: :erlang.float_to_binary(ms / 1000, decimals: 2)
   defp seconds(_), do: "-"
+
+  @doc false
+  def error_text(:live_call), do: "skipped: a Call Risi call is running (live calls first)"
+  def error_text(:no_memory), do: "refused: not enough free memory to load the model now"
+  def error_text(:paused), do: "paused: live speech needs the machine now"
+  def error_text(:busy), do: "busy: another test is using the voice lab"
+  def error_text(:downloading), do: "downloading tonight"
+  def error_text(:review_pending), do: "waiting for its code review"
+  def error_text(:not_installed), do: "not installed"
+  def error_text(:timeout), do: "timed out"
+  def error_text(:too_large), do: "the audio is too long for the page"
+  def error_text(e), do: to_string(e)
 
   defp options(voices, lang, choice) do
     vs = TTS.candidates(voices, lang)
@@ -303,15 +442,24 @@ defmodule RisiMeWeb.Admin.VoicesLive do
       else: vs ++ [%{id: choice, name: choice <> " (not installed)"}]
   end
 
-  defp engine_status(:loading, _), do: "…"
+  defp production(:yes), do: "yes"
+  defp production(:conditional), do: "with conditions"
+  defp production(:no), do: "no"
 
-  defp engine_status(installed, "phone") when is_list(installed),
-    do: "On the phone only, not a server voice"
+  defp production_class(:yes), do: "ok"
+  defp production_class(:no), do: "bad"
+  defp production_class(_), do: nil
 
-  defp engine_status(installed, id) when is_list(installed) do
+  @doc false
+  def engine_status(:loading, _), do: "…"
+  def engine_status(_installed, %{unavailable: text}), do: text
+
+  def engine_status(installed, %{id: id}) when is_list(installed) do
     case Enum.find(installed, &(&1.id == id)) do
       nil -> "not installed"
-      %{status: :unavailable} -> "installed, not answering"
+      %{status: :downloading} -> "downloading tonight"
+      %{status: :review_pending} -> "weights here; waiting for its code review"
+      %{status: :unavailable} -> "registered, but its service is not answering"
       %{voices: vs} -> "installed: #{length(vs)} voices"
     end
   end
