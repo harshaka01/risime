@@ -464,6 +464,9 @@ defmodule RisiMe.Agent.Voice do
         not r.speech -> "no_speech"
         String.trim(r.text || "") == "" -> "no_speech"
         is_number(p) and p < @min_probability -> "low_confidence"
+        # The hallucination guard (`RisiMe.Agent.SpeechQuality`, Harsha 2026-10-14): a
+        # repeated or implausible text is not posted and nothing acts on it.
+        is_binary(Map.get(r, :rejected)) -> "low_confidence"
         romanised -> "script_check"
         true -> nil
       end

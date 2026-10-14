@@ -68,6 +68,8 @@ defmodule RisiMe.Agent.Speech do
               {:ok, result} | {:error, :timeout | :unavailable | :failed}
   @optional_callbacks fallback_transcribe: 2
 
+  require Logger
+
   @langs ~w(si ta en)
   @models ~w(whisper-small-sinhala tamil-asr-qwen3 faster-whisper-large-v3)
 
@@ -148,10 +150,33 @@ defmodule RisiMe.Agent.Speech do
     t0 = System.monotonic_time(:millisecond)
     primary_opts = Keyword.take(opts, [:language_hint]) ++ [timeout: budget, priority: "live"]
 
+    phone_text =
+      case phone_transcript(opts[:phone_transcript]) do
+        {:ok, t, _} -> t
+        _ -> nil
+      end
+
     {result, why} =
       case primary(audio, primary_opts, t0, budget) do
-        {:ok, r} -> {{:ok, Map.merge(r, %{fallback: nil, fallback_reason: nil})}, nil}
-        {:error, why} -> {fallback(audio, opts, why), why}
+        {:ok, r} ->
+          case guard(r, dur, phone_text) do
+            :ok ->
+              {{:ok, Map.merge(r, %{fallback: nil, fallback_reason: nil})}, nil}
+
+            {:reject, code} ->
+              # The hallucination guard: the fallbacks get a chance; else the note is unclear.
+              case fallback(audio, opts, "rejected_" <> code, dur, phone_text) do
+                {:ok, _} = ok ->
+                  {ok, "rejected_" <> code}
+
+                {:error, _} ->
+                  {{:ok, Map.merge(r, %{fallback: nil, fallback_reason: nil, rejected: code})},
+                   nil}
+              end
+          end
+
+        {:error, why} ->
+          {fallback(audio, opts, why, dur, phone_text), why}
       end
 
     elapsed = System.monotonic_time(:millisecond) - t0
@@ -177,14 +202,48 @@ defmodule RisiMe.Agent.Speech do
     end
   end
 
-  defp fallback(audio, opts, why) do
+  defp fallback(audio, opts, why, dur, phone_text) do
     reason = to_string(why)
 
-    with :none <- phone_fallback(opts),
-         :none <- ctc_fallback(audio, opts) do
+    # Each candidate passes the hallucination guard too (the phone's own text isn't compared
+    # with itself).
+    with :none <- guarded(phone_fallback(opts), dur, nil),
+         :none <- guarded(ctc_fallback(audio, opts), dur, phone_text) do
       {:error, :failed}
     else
       {:ok, r} -> {:ok, Map.put(r, :fallback_reason, reason)}
+    end
+  end
+
+  defp guarded({:ok, r} = ok, dur, phone_text) do
+    case guard(r, dur, phone_text) do
+      :ok -> ok
+      {:reject, _} -> :none
+    end
+  end
+
+  defp guarded(other, _dur, _phone_text), do: other
+
+  # The hallucination guard (`RisiMe.Agent.SpeechQuality`; `RISI_SPEECH_HALLUCINATION_GUARD=off`
+  # switches it off). Codes and numbers only in the log.
+  defp guard(r, dur, phone_text) do
+    if System.get_env("RISI_SPEECH_HALLUCINATION_GUARD") == "off" do
+      :ok
+    else
+      case RisiMe.Agent.SpeechQuality.check(r, dur, phone_text) do
+        :ok ->
+          :ok
+
+        {:reject, code, m} ->
+          Logger.info(
+            "speech guard: rejected #{code} model=#{r[:model]} tokens=#{m.tokens} " <>
+              "max_run=#{m.max_run} ngram_cover=#{m.ngram_cover} unique=#{m.unique_ratio} " <>
+              "compression=#{m.compression} chars_per_s=#{m.chars_per_s} " <>
+              "logprob=#{m.avg_logprob} phone_cer=#{m.phone_cer}"
+          )
+
+          {:reject, code}
+      end
     end
   end
 
@@ -304,6 +363,9 @@ defmodule RisiMe.Agent.Speech do
   defp record_run(result, why, elapsed, budget, opts) do
     {status, model, fell_back, reason, lang} =
       case result do
+        {:ok, %{rejected: code} = r} when is_binary(code) ->
+          {"rejected", r.model, false, "rejected_" <> code, r.language}
+
         {:ok, %{fallback: nil} = r} ->
           {"ok", r.model, false, nil, r.language}
 

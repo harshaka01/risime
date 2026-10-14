@@ -187,8 +187,30 @@ defmodule RisiMe.Agent.Speech.Http do
       language_probability: probability(b),
       script: script(b["script"]),
       # v1.42 §38.3: the segments' offsets in the audio (an item's `offset_ms`).
-      segments: segments(b["segments"])
+      segments: segments(b["segments"]),
+      # The hallucination guard (`RisiMe.Agent.SpeechQuality`): Whisper's own confidences.
+      avg_logprob: seg_mean(b["segments"], "avg_logprob"),
+      no_speech_prob: seg_max(b["segments"], "no_speech_prob")
     }
+  end
+
+  defp seg_values(list, key) when is_list(list),
+    do: for(%{^key => v} <- list, is_number(v), do: v)
+
+  defp seg_values(_, _), do: []
+
+  defp seg_mean(list, key) do
+    case seg_values(list, key) do
+      [] -> nil
+      vs -> Float.round(Enum.sum(vs) / length(vs), 4)
+    end
+  end
+
+  defp seg_max(list, key) do
+    case seg_values(list, key) do
+      [] -> nil
+      vs -> Enum.max(vs)
+    end
   end
 
   defp segments(list) when is_list(list) do

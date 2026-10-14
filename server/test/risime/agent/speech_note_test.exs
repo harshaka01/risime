@@ -196,6 +196,34 @@ defmodule RisiMe.Agent.SpeechNoteTest do
              )
   end
 
+  test "hallucination guard: a looping transcript is rejected; the CPU model answers" do
+    loop = "මම ඒක " <> String.duplicate("කරන්නේ ", 20)
+
+    script(%{
+      primary: [ok(loop, "si", "faster-whisper-large-v3")],
+      ctc: [ok("හෙට උදේ දහයට හමුවෙමු", "en", "omnilingual-ctc-1b")]
+    })
+
+    assert {:ok, r} = Speech.transcribe_note("audio", duration_ms: 16_000)
+    assert r.fallback == "ctc" and r.fallback_reason == "rejected_repeat_token"
+    refute Map.get(r, :rejected)
+    assert [%{status: "ok", fell_back: true, reason: "rejected_repeat_token_ctc"}] = runs()
+  end
+
+  test "hallucination guard: every candidate rejected → the note is marked rejected" do
+    loop = String.duplicate("කරන්නේ ", 20)
+
+    script(%{
+      primary: [ok(loop, "si", "faster-whisper-large-v3")],
+      ctc: [ok(loop, "si", "omnilingual-ctc-1b")]
+    })
+
+    assert {:ok, r} = Speech.transcribe_note("audio", duration_ms: 16_000)
+    assert r.rejected == "repeat_token" and r.model == "faster-whisper-large-v3"
+
+    assert [%{status: "rejected", fell_back: false, reason: "rejected_repeat_token"}] = runs()
+  end
+
   test "a fast error is retried once (as before), then the fallbacks, then failed" do
     script(%{
       primary: [{:error, :unavailable}, {:error, :unavailable}],

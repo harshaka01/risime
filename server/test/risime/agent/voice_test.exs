@@ -539,6 +539,19 @@ defmodule RisiMe.Agent.VoiceTest do
       end
     end
 
+    test "hallucination guard: a looping transcript is unclear; Risi asks again; no ask", w do
+      rid = Ecto.UUID.generate()
+      loop = "si:මම ඒක " <> String.duplicate("කරන්නේ ", 20)
+      {env, _, _} = note!(w.a.user.id, w.rc, loop, %{"request_id" => rid})
+      {_, s} = receive_note(w.rc, w.a.user, env)
+      {_, card} = await_post(w.rc, "voice_transcript", fn _ -> true end)
+      assert card["status"] == "unclear" and card["text"] == nil
+      {body, _} = await_post(w.rc, "answer", &(&1["request_id"] == rid))
+      await_done(s)
+      assert body == "I couldn't hear that clearly. Could you say it again?"
+      assert all_enqueued(worker: Job, args: %{"kind" => "request"}) == []
+    end
+
     test "a note under 1 s: the 'very short' line at once, no speech call, no ask", w do
       Application.put_env(:risime, :risi_test_pid, self())
       RisiMe.Messaging.subscribe(w.a.user.id)
@@ -1255,6 +1268,22 @@ defmodule RisiMe.Agent.VoiceTest do
                "source" => "phone",
                "made_by" => %{"provider" => "phone"}
              } = risi
+    end
+
+    test "hallucination guard in Official: 'couldn't hear', no text, nothing acts on it", w do
+      Application.put_env(:risime, :risi_ledger, true)
+      Application.put_env(:risime, :risi_action_items, true)
+      loop = "si:මම ඒක " <> String.duplicate("කරන්නේ ", 20)
+      {env, _, _} = note!(w.a.user.id, w.og, loop)
+      {id, s} = receive_note(w.og, w.a.user, env)
+      {body, risi} = await_post(w.og, "voice_transcript", fn _ -> true end)
+      await_done(s)
+      assert risi["status"] == "unclear" and risi["text"] == nil
+      assert body =~ "couldn't hear"
+      refute body =~ "කරන්නේ"
+      # No §38 extraction job and no typed-message understanding of it.
+      assert all_enqueued(worker: Job, args: %{"kind" => "voice_items", "message_id" => id}) == []
+      assert all_enqueued(worker: Job, args: %{"kind" => "action", "message_id" => id}) == []
     end
 
     test "flag on: a failed note can be tried again", w do
