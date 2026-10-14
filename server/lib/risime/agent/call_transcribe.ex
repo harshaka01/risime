@@ -540,6 +540,15 @@ defmodule RisiMe.Agent.CallTranscribe do
     if not s.compare and rt.chunks > 0, do: log_session(s, rt)
     if not s.discard, do: note_speech(s, rt)
 
+    # P0 2026-10-14 (never silent): the speech service failed for 60 s and the session stopped.
+    if not s.discard and s.reason == "unavailable",
+      do:
+        RisiMe.Agent.CallTranscribe.Summary.say(
+          s.conversation_id,
+          s,
+          RisiMe.Agent.CallTranscribe.Summary.unavailable_text(rt.speech_ms > 0)
+        )
+
     if not s.discard and s.state in ["ended", "stopped"] and rt.speech_ms > 0 do
       %{
         "kind" => "call_transcribe_summary",

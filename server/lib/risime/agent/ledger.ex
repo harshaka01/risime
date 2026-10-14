@@ -400,7 +400,9 @@ defmodule RisiMe.Agent.Ledger do
 
         # v1.36 §35.4: a discussion with ≥ 3 key points is summarised to the chat even without
         # an item or a notes user.
-        if found.items == [] and not note_worthy?(found) do
+        # P0 2026-10-14: a transcribed call is always summarised (one key point is enough).
+        if found.items == [] and not note_worthy?(found) and
+             not (source == :call and found.raw_points >= 1) do
           # No item and nothing worth a summary: nothing is posted; the cutoff moves on.
           move_cutoff(conv, newest, false)
           :nothing

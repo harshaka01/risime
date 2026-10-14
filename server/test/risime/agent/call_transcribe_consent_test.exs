@@ -209,6 +209,10 @@ defmodule RisiMe.Agent.CallTranscribeConsentTest do
       assert {202, _} = upload!(w, :a, sid, "fail")
       eventually(fn -> session!(sid).state == "stopped" end)
       assert session!(sid).reason == "unavailable"
+
+      # P0 2026-10-14: never silent.
+      {body, _} = await_post(w.og, "answer", fn _ -> true end, 3_000)
+      assert body == "I couldn't transcribe this call: the speech service was busy."
     end
 
     test "Official off stops a live session (official_off)", w do

@@ -166,16 +166,22 @@ defmodule RisiMe.Workers.Risi do
     end
   end
 
-  def perform(%Oban.Job{args: %{"conv" => conv} = args}) do
+  def perform(%Oban.Job{args: %{"conv" => conv} = args} = job) do
     cond do
       not RisiMe.Risi.enabled?() -> {:cancel, :risi_off}
       not Out.ready?() -> {:snooze, 60}
       not Agent.may_act?(conv) -> :ok
-      true -> run(args)
+      true -> run(with_attempt(args, job))
     end
   end
 
   def perform(_job), do: :ok
+
+  # The after-call summary says once that it failed (its first attempt) and then retries.
+  defp with_attempt(%{"kind" => "call_transcribe_summary"} = args, %Oban.Job{attempt: n}),
+    do: Map.put(args, "attempt", n || 1)
+
+  defp with_attempt(args, _job), do: args
 
   defp run(%{"kind" => "extract", "conv" => conv}), do: Commitments.extract(conv)
 
@@ -186,8 +192,8 @@ defmodule RisiMe.Workers.Risi do
   defp run(%{"kind" => "discussion_quiet", "conv" => conv}), do: RisiMe.Agent.Ledger.quiet(conv)
 
   # v1.39 §36.7: the summary of a transcribed 1:1 Official call (ids only).
-  defp run(%{"kind" => "call_transcribe_summary", "conv" => conv, "session_id" => sid}),
-    do: RisiMe.Agent.CallTranscribe.Summary.run(conv, sid)
+  defp run(%{"kind" => "call_transcribe_summary", "conv" => conv, "session_id" => sid} = a),
+    do: RisiMe.Agent.CallTranscribe.Summary.run(conv, sid, Map.get(a, "attempt", 1))
 
   # v1.27 §27.6: a ledger item's reminder, follow-up or nudge.
   defp run(%{"kind" => "item_reminder"} = args), do: RisiMe.Agent.LedgerReminders.fire(args)

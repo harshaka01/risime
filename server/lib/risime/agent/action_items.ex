@@ -149,7 +149,7 @@ defmodule RisiMe.Agent.ActionItems do
       result =
         case env["status"] do
           "unclear" -> post_unclear(src, env["reason"] || "no_speech")
-          "ok" -> run(src, voice_lines(src, env))
+          "ok" -> src |> run(voice_lines(src, env)) |> none_to(:ok)
           _ -> :ok
         end
 
@@ -213,7 +213,9 @@ defmodule RisiMe.Agent.ActionItems do
       cond do
         consenting == [] -> :ok
         reason = gate(rows) -> post_unclear(src, reason)
-        true -> run(src, call_lines(src, consenting))
+        # P0 2026-10-14: a call with no action items still gets its summary (the caller falls
+        # back to the §27 discussion summary); a voice note with none posts nothing (§38).
+        true -> src |> run(call_lines(src, consenting)) |> none_to(:no_items)
       end
     else
       :ok
@@ -306,11 +308,14 @@ defmodule RisiMe.Agent.ActionItems do
 
   ## The extraction
 
-  defp run(_src, []), do: :ok
+  defp none_to(:none, value), do: value
+  defp none_to(other, _value), do: other
+
+  defp run(_src, []), do: :none
 
   defp run(src, lines) do
     case extract(src, lines) do
-      {:ok, %{items: []}} -> :ok
+      {:ok, %{items: []}} -> :none
       {:ok, found} -> store_and_publish(src, found)
       {:error, :rate_limited} -> {:snooze, 30}
       {:error, reason} -> {:error, reason}

@@ -23,12 +23,25 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
   @min_speech_ms 30_000
   @min_speakers 2
 
-  @doc "Oban result."
-  def run(conv, session_id) do
+  @doc """
+  Oban result. P0 2026-10-14 (never silent): a call too short to summarise gets one line; a
+  summary that fails says so once (`attempt` 1) and the job retries from the buffered segments
+  (they are dropped only after a summary is posted); a transcript stopped before the call ended
+  is summarised with a line saying which part it covers.
+  """
+  def run(conv, session_id, attempt \\ 1) do
     case Repo.get(Session, session_id) do
       %Session{conversation_id: ^conv, discard: false, state: state} = s
       when state in ["ended", "stopped"] ->
-        summarise(conv, s)
+        case summarise(conv, s) do
+          {:error, reason} = err ->
+            Logger.warning("call transcribe: summary failed: #{inspect(reason)}")
+            if attempt == 1, do: say(conv, s, failed_text())
+            err
+
+          other ->
+            other
+        end
 
       _ ->
         :ok
@@ -47,15 +60,21 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
     cond do
       total < @min_speech_ms or map_size(by_speaker) < @min_speakers ->
         drop(conv, ids)
+        say(conv, s, short_text(total, map_size(by_speaker)))
         :ok
 
       # v1.42 §38: with RISI_ACTION_ITEMS on, the extraction makes the action-items cards.
-      # PART 9: `canary` = a dev user among the call's speakers.
+      # PART 9: `canary` = a dev user among the call's speakers. P0 2026-10-14: no action
+      # items → the §27 discussion summary as before (the call always gets its summary).
       RisiMe.Agent.ActionItems.on_for?(Map.keys(by_speaker)) ->
         case RisiMe.Agent.ActionItems.from_call(conv, s, rows) do
           :ok ->
+            partial(conv, s)
             drop(conv, ids)
             :ok
+
+          :no_items ->
+            legacy(conv, s, rows, ids, by_speaker)
 
           other ->
             other
@@ -64,6 +83,64 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
       true ->
         legacy(conv, s, rows, ids, by_speaker)
     end
+  end
+
+  ## One-line notices (P0 2026-10-14: never silent)
+
+  @doc false
+  def short_text(total_ms, speakers) when speakers < @min_speakers and total_ms >= @min_speech_ms,
+    do: "I only heard one person on this call, so there's no summary."
+
+  def short_text(_total_ms, _speakers),
+    do: "This call had too little speech to summarise."
+
+  @doc false
+  def unavailable_text(true),
+    do:
+      "I couldn't transcribe the rest of this call: the speech service was busy. I'll summarise what I have."
+
+  def unavailable_text(false),
+    do: "I couldn't transcribe this call: the speech service was busy."
+
+  @doc false
+  def failed_text,
+    do: "I couldn't summarise this call just now. I'll try again from what I transcribed."
+
+  @doc false
+  def partial_text(min),
+    do: "Summary of the first #{min} min; transcription was turned off after that."
+
+  # A transcript stopped while the call went on (`stopped`, not `ended`): say which part the
+  # summary covers.
+  defp partial(conv, %Session{state: "stopped"} = s) do
+    case duration_s(s) do
+      sec when is_integer(sec) -> say(conv, s, partial_text(max(div(sec + 30, 60), 1)))
+      _ -> :ok
+    end
+  end
+
+  defp partial(_conv, _s), do: :ok
+
+  @doc false
+  def say(conv, s, text) do
+    risi = %{
+      "kind" => "answer",
+      "request_id" => s.session_id,
+      "answer" => text,
+      "refs" => [],
+      "confidence" => 1.0,
+      "call_ref" => nil,
+      "notify" => []
+    }
+
+    case RisiMe.Agent.Out.post(conv, text, risi) do
+      {:ok, _} -> :ok
+      other -> Logger.warning("call transcribe: notice not posted: #{inspect(other)}")
+    end
+
+    :ok
+  rescue
+    e -> Logger.warning("call transcribe: notice failed: #{inspect(e.__struct__)}")
   end
 
   defp legacy(conv, s, rows, ids, by_speaker) do
@@ -84,6 +161,7 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
 
     case Ledger.call_ended(conv, call) do
       :ok ->
+        partial(conv, s)
         drop(conv, ids)
         :ok
 
