@@ -39,6 +39,10 @@ git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"
 # Every gate step has a hard timeout (default 30 min, GATE_STEP_TIMEOUT seconds); a hung step fails the release.
 STEP_T="${GATE_STEP_TIMEOUT:-1800}"
 step() { timeout -k 60 "$STEP_T" "$@" || { rc=$?; [ "$rc" -ge 124 ] && echo "GATE STEP TIMED OUT after ${STEP_T}s: $*"; return "$rc"; }; }
+# RELEASE_CORE=1 (Harsha 2026-10-14 reset): only the standard gates block (server, android, interop, canary, boot,
+# official-start, call-summary, risi reinstall, upgrade/rule 9). The other redroid product gates are not run; run them
+# after the release and log failures in docs/status/overnight.md.
+core_skip() { if [ "${RELEASE_CORE:-0}" = 1 ]; then echo "==> not run in a core release (RELEASE_CORE=1): $*"; return 0; fi; step "$@"; }
 
 REQ=(); EXPLICIT=""; PUBLISH=1; UT_VIA=updater
 while [ $# -gt 0 ]; do case "$1" in
@@ -207,9 +211,9 @@ gate_ports CALLTEST_LLM_PORT=8197 CALLTEST_PORT=4410 CALLTEST_REDROID_A_PORT=573
 # says "This phone is offline"; C = the Official banner is its own row below the tabs at 720 px, font 1.0 and 1.3.
 if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   echo "==> server reach (scripts/server-reach-test, bug B)"
-  STEP_T=900 step scripts/server-reach-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "SERVER REACH FAILED: not releasing"; exit 1; }
+  STEP_T=900 core_skip scripts/server-reach-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "SERVER REACH FAILED: not releasing"; exit 1; }
   echo "==> Official banner layout (scripts/official-banner-check, bug C)"
-  STEP_T=1800 step scripts/official-banner-check --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "OFFICIAL BANNER CHECK FAILED: not releasing"; exit 1; }
+  STEP_T=1800 core_skip scripts/official-banner-check --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "OFFICIAL BANNER CHECK FAILED: not releasing"; exit 1; }
   # P0 2026-10-13 (decision 088, contract v1.46 §12.12.9): Official never waits for a human. Three redroids: a simultaneous
   # start gives one working Official; an offline peer catches up; a stalled creator shows Try again and is taken over;
   # a reinstalled phone is re-added by Risi while the other app stays closed; Private unchanged. "OSTEST OK".
@@ -218,26 +222,28 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   # Incident 2026-10-14 (Health): a reinstall while peers are on the old app / offline heals (Official via Risi, Private
   # after the peers return; nudged once; one plain report). Server-level, ~1 min. "HHTEST OK".
   echo "==> Health heal (scripts/health-heal-test, incident 2026-10-14)"
+  if [ "${RELEASE_CORE:-0}" = 1 ]; then echo "==> not run in a core release (RELEASE_CORE=1): scripts/health-heal-test"; else
   hh_out="$(STEP_T=1800 step scripts/health-heal-test 2>&1)" || true; echo "$hh_out" | tail -20
   echo "$hh_out" | grep -q "HHTEST OK" || { echo "HEALTH HEAL TEST FAILED: not releasing"; exit 1; }
+  fi
   echo "==> call -> back cycles (scripts/call-back-test, bug E: no black screen after a call)"
-  STEP_T=2700 step scripts/call-back-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-BACK TEST FAILED: not releasing"; exit 1; }
+  STEP_T=2700 core_skip scripts/call-back-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-BACK TEST FAILED: not releasing"; exit 1; }
   echo "==> Official-call transcription (scripts/call-transcribe-test, §36: consent, speakers, Stop, no audio left, Private untouched)"
-  STEP_T=2700 step scripts/call-transcribe-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-TRANSCRIBE TEST FAILED: not releasing"; exit 1; }
+  STEP_T=2700 core_skip scripts/call-transcribe-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-TRANSCRIBE TEST FAILED: not releasing"; exit 1; }
   # P0 2026-10-14: the after-call summary with the pilot's flags (RISI_ACTION_ITEMS=canary): a card within 30 s on both
   # phones with one item, with zero items, and after Stop mid-call ("Summary of the first … min"); Private posts nothing.
   echo "==> after-call summary (scripts/call-summary-test, P0 2026-10-14: zero action items still give the summary card)"
   STEP_T=2700 step scripts/call-summary-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-SUMMARY TEST FAILED: not releasing"; exit 1; }
   echo "==> encryption clarity (scripts/e2ee-clarity-test: list markers, no silent plaintext, hold after a reinstall)"
-  STEP_T=2400 step scripts/e2ee-clarity-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "E2EE CLARITY TEST FAILED: not releasing"; exit 1; }
+  STEP_T=2400 core_skip scripts/e2ee-clarity-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "E2EE CLARITY TEST FAILED: not releasing"; exit 1; }
   echo "==> talking to Risi (scripts/risi-chat-test: replies, offline notice, @Risi in Official, Private hint)"
-  STEP_T=2400 step scripts/risi-chat-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "RISI CHAT TEST FAILED: not releasing"; exit 1; }
+  STEP_T=2400 core_skip scripts/risi-chat-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "RISI CHAT TEST FAILED: not releasing"; exit 1; }
   echo "==> voice notes (scripts/voice-note-test: record, play, played receipt, Official transcript, forward, ciphertext only)"
-  STEP_T=2400 step scripts/voice-note-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "VOICE NOTE TEST FAILED: not releasing"; exit 1; }
+  STEP_T=2400 core_skip scripts/voice-note-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "VOICE NOTE TEST FAILED: not releasing"; exit 1; }
   echo "==> send for me (scripts/send-for-me-test: one card, one tap, delivered, ✓ Sent; en/si, text/voice)"
-  STEP_T=2400 step scripts/send-for-me-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "SEND FOR ME TEST FAILED: not releasing"; exit 1; }
+  STEP_T=2400 core_skip scripts/send-for-me-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "SEND FOR ME TEST FAILED: not releasing"; exit 1; }
   echo "==> messaging polish (scripts/messaging-polish-test: swipe-to-reply, sender-side link previews, no URL on the server)"
-  STEP_T=2400 step scripts/messaging-polish-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "MESSAGING POLISH TEST FAILED: not releasing"; exit 1; }
+  STEP_T=2400 core_skip scripts/messaging-polish-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "MESSAGING POLISH TEST FAILED: not releasing"; exit 1; }
 fi
 
 # Background delivery gate (P0 2026-10-08): scripts/push-device-test with this build's debug APK on its
