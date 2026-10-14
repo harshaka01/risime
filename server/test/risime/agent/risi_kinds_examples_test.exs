@@ -22,8 +22,7 @@ defmodule RisiMe.Agent.RisiKindsExamplesTest do
   )
 
   # Posted kinds without an example yet (a contract gap root fills; remove the entry with it).
-  #   risi_call_transcript: proposal 2026-10-14-call-risi §41.5 (Android draws it: CallTranscript.ALT_KIND).
-  @known_gaps ~w(risi_call_transcript)
+  @known_gaps ~w()
 
   # `"kind" => "…"` literals in server/lib that are not Risi message kinds: Oban job args, item and
   # draft kinds, inbox/store rows.
