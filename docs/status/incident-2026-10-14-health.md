@@ -81,6 +81,20 @@ is exactly their shape. H isn't a member and doesn't need to be. He received the
 - **The rebuild:** reported as "needs the next app update; nothing on the phones is lost" (action
   `needs_app`). The app fix is in the proposal (§4) and needs an APK.
 
+## Result on the pilot
+- **v0.3.0-nightly.7-srv2** (03:10 UTC) shipped Official repair `canary`.
+  - Its 03:15 sweep nudged peers A, B and C once each and sent H one plain report.
+  - Nothing in H's scope was repairable: his group is the rebuild, `needs_app`.
+- **v0.3.0-nightly.7-srv3** (03:34 UTC) shipped Official repair `on`.
+  - The 03:35 sweep named Risi in both Risi chats (rows 1 and 2), and Risi committed both re-adds at
+    **03:35:18 UTC** (epoch 2 in each). The owners' phones are now members, and neither owner had to do
+    anything.
+  - The 03:40 sweep verified both gone and reported them "fixed".
+  - E's chat keeps one ordinary op: removing E's old leaf, which E's own phone commits.
+- **Still open:**
+  - H's group rebuild (row 3) waits for the app fix (proposal §4).
+  - The three Private 1:1s (rows 4–6) wait for A, B and C to open RisiMe.
+
 ## Gate
 `scripts/health-heal-test` (`HHTEST OK`) runs a server-level scenario:
 1. H reinstalls while one peer is on the old app with no push token and another is offline.
