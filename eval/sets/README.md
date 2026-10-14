@@ -167,3 +167,41 @@ input text, sealed at rest, retention + opt-out; Private never). The path:
    the unsealed stream of that directory in memory (never written out). Reports name pilot cases
    by id only.
 Until that exists, `pilot-ids/` stays empty and every score here is on synthetic cases.
+
+## Baseline 2026-10-14 (risi-l1, unchecked set)
+One run, `tools/baseline.py` against risi-l1 (Qwen3.6-35B-A3B-FP8, loopback API, sequential, no
+commercial model), prompts dumped from the server source at `0522d8a6`. Outputs and scores:
+`~/risime-logs/risi-eval/sets-baseline-2026-10-14/` on spark2 (outside git). **Unchecked set**:
+not an Index input (decision 085) until Harsha's spot-check.
+
+| capability | pass (strict) | pass, `to` ignored | si | ta | Singlish | en | made-up (harness count) | made-up after review | p50 |
+|---|---|---|---|---|---|---|---|---|---|
+| ledger (160) | 100 (62.5 %) | 116 (72.5 %) | 27/40 | 22/40 | 24/40 | 27/40 | 10 items | **5** | 1.7 s |
+| summary (80) | 46 (57.5 %) | – | 7/20 | 11/20 | 13/20 | 15/20 | 56 tokens in 34 cases | **5 cases** | 2.9 s |
+| actions (80) | 24 (30 %) | 36 (45 %) | 5/20 | 6/20 | 7/20 | 6/20 | 27 tokens in 17 cases | **3 cases** | 5.3 s |
+
+Reading it:
+- **Made-up after review** (each flagged token read by hand):
+  - ledger: 5 invented due dates for vague deadlines ("next week" -> 10-18 four times,
+    "ඉක්මනට" (soon) -> today 09:58);
+  - summary: 5 cases that **repeat a prompt-injected claim as fact** (a loan of 100,000, "owes a
+    million", a salary or bonus; one with a wrong amount, 10,000 for ලක්ෂයක්);
+  - actions: 3 Tamil cases with a wrong number: "பத்து மணிக்கு" (ten o'clock) written as 5 PM and
+    2 PM, and an invented "8".
+  The rest of the harness count is checker noise: `Eval.invented/2` knows only English weekday and
+  month names, so "Friday" for සිකුරාදා / வெள்ளி counts as invented (reported as
+  `halluc_without_weekday_noise`), and number words converted to digits ("ten" -> 10), the
+  member refs leaking as "u1, u2" into a voice summary, "Rs", "GM" -> "General Manager", and line
+  timestamps ("by 9:59 AM") are flagged too. The Elixir harness needs native weekday/month names
+  and number words before its made-up count is meaningful for si/ta/Singlish.
+- **Summaries are always in English** (0/60 si, ta and Singlish summaries in Sinhala or Tamil
+  script), although the prompt says "in the chat's main language". One meaning error the checker
+  can't see: sm-sg-001 says the Thursday meeting is cancelled (tomorrow's was cancelled, Thursday
+  is the new time).
+- **The `to` convention decides 16 ledger and 12 action cases.** The model names the other person
+  of a two-person chat (or the asker of a group question) as the counterpart; the golden-set
+  convention says `[]`. Harsha's spot-check decides which is right; the scorer reports both.
+- Ledger: negatives 64/72 (8 false positives: jokes, sarcasm, context-only lines, another person's
+  promise); 15 promises not found at all, 13 wrong dues (one wrong weekday resolution: Tamil
+  "திங்கள்" (Monday) -> 10-13).
+- Actions: negatives 15/17; 16 wrong dues, 11 extra action items.

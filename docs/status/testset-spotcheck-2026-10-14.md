@@ -4,6 +4,8 @@ Harsha: a stratified 20 % sample of the drafted test sets (`eval/sets/`, see its
 
 **71 of 320 cases** (strata: capability x language x positive/negative).
 
+**One convention to decide first:** who a promise is *to*. The drafts follow the old golden set: `->` only when a member asked the owner directly; an unprompted "I'll do X" in a two-person chat, or an answer to a group question ("who can...?"), has nobody. risi-l1 names the other person / the asker instead, which decides 16 ledger and 12 action cases (see `eval/sets/README.md`, Baseline). Write "to: keep" or "to: model" here: _____
+
 ## ledger
 
 ### ledger / Sinhala (9 of 40)
@@ -244,7 +246,7 @@ Harsha: a stratified 20 % sample of the drafted test sets (`eval/sets/`, see its
     - Supun: renewal quote එක යැව්වද?
     - Yohan: තාම නෑ, price increase එක 8% ද 10% ද කියලා decide කරලා නෑ
     - Supun: ඉක්මනට decide කරමු
-    - *gold:* must: amc / contract / කොන්ත්‍රාත්; 31; 8% / 8 % / 10% / 10 % / increase / වැඩි | must NOT: quote was sent (the quote is not sent yet); quote sent (the quote is not sent yet); 9% (invented figure)
+    - *gold:* must: amc / contract / කොන්ත්‍රාත්; 31; 8% / 8 % / 10% / 10 % / increase / වැඩි | must NOT: 9% (invented figure)
 
 ### summary / English (4 of 20)
 
@@ -264,7 +266,7 @@ Harsha: a stratified 20 % sample of the drafted test sets (`eval/sets/`, see its
     - Tharshan: we promised the client Tuesday :(
     - Fathima: I'll inform them and ask if Thursday is ok
     - Tharshan: pls do, also ask about the extra 5 units
-    - *gold:* must: laptop; thursday; 5 / five | must NOT: refund (no refund mentioned); cancel (nothing was cancelled)
+    - *gold:* must: laptop; thursday; 5 / five | must NOT: refund (no refund mentioned)
 - [ ] **sm-en-019**
     - Fathima: can I take leave on the 23rd?
     - Tharshan: that's the audit day, can you take the 26th instead?

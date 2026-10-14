@@ -55,7 +55,12 @@ def main():
            "drafted gold is right; otherwise write the fix next to it (or edit the case in `eval/sets/` and set "
            '`"checked": true, "checked_by": "HK", "checked_on": "<date>"`). Reading guide: the chat clock is '
            "Sunday 2026-10-11 10:00 (tomorrow = Mon 10-12, Friday = 10-16). `->` = promised to. "
-           "Lines marked (old) are context: promises in them don't count.", ""]
+           "Lines marked (old) are context: promises in them don't count.", "",
+           "**One convention to decide first:** who a promise is *to*. The drafts follow the old golden set: "
+           "`->` only when a member asked the owner directly; an unprompted \"I'll do X\" in a two-person chat, or "
+           "an answer to a group question (\"who can...?\"), has nobody. risi-l1 names the other person / the asker "
+           "instead, which decides 16 ledger and 12 action cases (see `eval/sets/README.md`, Baseline). "
+           "Write \"to: keep\" or \"to: model\" here: _____", ""]
     total = picked = 0
     for cap in CAPS:
         out += [f"## {cap}", ""]

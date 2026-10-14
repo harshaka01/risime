@@ -114,6 +114,43 @@ def invented(source, output):
     return out
 
 
+# Eval.invented/2 knows only English weekday names, so "Friday" in a summary of a Sinhala chat that
+# says සිකුරාදා is counted as invented. Those tokens (and a weekday that is the clock's resolution of
+# today/tomorrow) are reported separately as checker noise; the headline number keeps them, as the
+# Elixir harness would.
+NATIVE_DAYS = {
+    "monday": ["සඳුදා", "සදුදා", "sanduda", "திங்கள"],
+    "tuesday": ["අඟහරුවාදා", "අගහරුවාදා", "angaharuwada", "செவ்வாய"],
+    "wednesday": ["බදාදා", "badada", "புதன"],
+    "thursday": ["බ්‍රහස්පතින්දා", "බ්රහස්පතින්දා", "brahaspathinda", "வியாழ"],
+    "friday": ["සිකුරාදා", "sikurada", "வெள்ளி"],
+    "saturday": ["සෙනසුරාදා", "senasurada", "சனி"],
+    "sunday": ["ඉරිදා", "irida", "ஞாயிறு"],
+}
+RELATIVE = {
+    "monday": ["tomorrow", "tmrw", "tmr", "heta", "හෙට", "நாளை"],
+    "sunday": ["today", "tonight", "ada ", "අද", "இன்று", "இன்டைக்கு", "இன்னைக்கு", "இண்டைக்கு"],
+}
+
+
+NATIVE_MONTHS = {
+    "october": ["ඔක්තෝබර්", "ඔක්තෝම්බර්", "ஒக்டோபர்", "அக்டோபர்", "oktobar"],
+    "november": ["නොවැම්බර්", "நவம்பர்"],
+    "december": ["දෙසැම්බර්", "டிசம்பர்"],
+    "january": ["ජනවාරි", "ஜனவரி"],
+}
+
+
+def noise(source, tokens):
+    """Tokens Eval.invented/2 flags that are translations, not inventions: an English weekday or
+    month whose Sinhala/Tamil/romanised name (or today/tomorrow) is in the chat, and "00" (the
+    minutes of a time the chat gives as "2pm" / "2ට")."""
+    low = source.lower()
+    names = {**NATIVE_DAYS, **NATIVE_MONTHS}
+    return [t for t in tokens if t == "00" or (t in names and any(
+        w.lower() in low for w in names[t] + RELATIVE.get(t, [])))]
+
+
 ## The model call
 
 def chat(url, key, model, system, user, schema_name, schema, max_tokens, timeout=180):
@@ -159,14 +196,14 @@ def kw_hit(e, text):
     return any(k.lower() in t for k in e["kw"])
 
 
-def match(expect, got, same_kind):
+def match(expect, got, same_kind, ignore_to=False):
     left, n, missed = list(got), 0, []
     for e in expect:
         # A meeting is matched on its words and day only (who "owns" a meeting is ambiguous).
         meet = e.get("kind") == "meeting"
         g = next((g for g in left if same_kind(e, g)
                   and (meet or g["owner"] == e.get("owner"))
-                  and (meet or sorted(x or "?" for x in g["to"]) == sorted(e["to"]))
+                  and (meet or ignore_to or sorted(x or "?" for x in g["to"]) == sorted(e["to"]))
                   and g["due"] == e["due"] and kw_hit(e, g["text"])), None)
         if g is None:
             missed.append(e)
@@ -184,22 +221,25 @@ def item_of(i, names):
             "text": i.get("text") or "", "kind": i.get("kind")}
 
 
-def score_ledger(c, out):
+def score_ledger(c, out, ignore_to=False):
     _, names = render(c["members"], c["messages"], True)
     got = [item_of(i, names) for i in out.get("commitments", [])]
     src = source_of(c) + "\n" + " ".join(c["members"])
     no_due = all(e["due"] is None for e in c["expect"])
-    inv, halluc = [], 0
+    inv, halluc, adj = [], 0, 0
     for g in got:
         bad_inv = invented(src, g["text"])
         inv += bad_inv
-        if (g["owner"] is None or None in g["to"] or (no_due and g["due"] and c["expect"]) or bad_inv):
+        other = g["owner"] is None or None in g["to"] or (no_due and g["due"] and c["expect"])
+        if other or bad_inv:
             halluc += 1
-    n, extra, _ = match(c["expect"], got, lambda e, g: True)
+        if other or set(bad_inv) - set(noise(src, bad_inv)):
+            adj += 1
+    n, extra, _ = match(c["expect"], got, lambda e, g: True, ignore_to)
     ok = n == len(c["expect"]) and len(got) == len(c["expect"]) and halluc == 0
     why = [] if ok else ([f"missed {len(c['expect']) - n}"] if n < len(c["expect"]) else []) + \
         ([f"extra {len(extra)}"] if extra else []) + ([f"halluc {halluc}"] if halluc else [])
-    return {"ok": ok, "halluc": halluc, "invented": inv, "forbid": [], "n_got": len(got),
+    return {"ok": ok, "halluc": halluc, "halluc_adj": adj, "invented": inv, "forbid": [], "n_got": len(got),
             "false_pos": len(extra) if not c["expect"] else 0, "why": why}
 
 
@@ -210,18 +250,21 @@ def score_summary(c, out):
     low = allt.lower()
     missing = [g for g in c.get("must", []) if not any(s.lower() in low for s in g)]
     forbid = [f for f in c.get("forbid", []) if f.lower() in low]
-    inv = invented(source_of(c) + "\n" + " ".join(c["members"]), allt)
+    src = source_of(c) + "\n" + " ".join(c["members"])
+    inv = invented(src, allt)
     halluc = len(inv) + (1 if forbid else 0)
+    adj = len(set(inv) - set(noise(src, inv))) + (1 if forbid else 0)
     ok = not missing and halluc == 0
     why = ([f"missing {missing}"] if missing else []) + ([f"forbid {forbid}"] if forbid else []) + \
         ([f"invented {inv}"] if inv else [])
-    return {"ok": ok, "halluc": halluc, "invented": inv, "forbid": forbid, "missing": len(missing), "why": why}
+    return {"ok": ok, "halluc": halluc, "halluc_adj": adj, "invented": inv, "forbid": forbid,
+            "missing": len(missing), "why": why}
 
 
 ACT = {"promise", "task", "meeting"}
 
 
-def score_actions(c, out):
+def score_actions(c, out, ignore_to=False):
     _, names = render(c["members"], c["lines"], False)
     items = [i for i in out.get("items", [])
              if (i.get("text") or "").strip() and (i.get("confidence") or 0) >= MIN_CONF]
@@ -232,21 +275,23 @@ def score_actions(c, out):
     inv = invented(src, "\n".join(texts))
     forbid = [f for f in c.get("forbid", []) if f.lower() in "\n".join(texts).lower()]
     halluc = len(inv) + len(forbid)
+    adj = len(set(inv) - set(noise(src, inv))) + len(forbid)
     for g in got:
         if (g["owner_ref"] and g["owner"] is None) or None in g["to"] or \
                 (g["kind"] in ACT and no_due and g["due"] and c["expect"]):
             halluc += 1
+            adj += 1
     act = [g for g in got if g["kind"] in ACT]
     def same_kind(e, g):
         return e["kind"] == g["kind"] or {e["kind"], g["kind"]} <= {"promise", "task"}
-    n, extra, _ = match(c["expect"], act, same_kind)
+    n, extra, _ = match(c["expect"], act, same_kind, ignore_to)
     extra_owned = [g for g in extra if g["owner"] and g["kind"] != "meeting"]
     ok = n == len(c["expect"]) and not extra_owned and halluc == 0
     why = ([f"missed {len(c['expect']) - n}"] if n < len(c["expect"]) else []) + \
         ([f"extra owned {len(extra_owned)}"] if extra_owned else []) + \
         ([f"invented {inv}"] if inv else []) + ([f"forbid {forbid}"] if forbid else []) + \
         ([f"halluc {halluc}"] if halluc and not inv and not forbid else [])
-    return {"ok": ok, "halluc": halluc, "invented": inv, "forbid": forbid, "n_got": len(act),
+    return {"ok": ok, "halluc": halluc, "halluc_adj": adj, "invented": inv, "forbid": forbid, "n_got": len(act),
             "false_pos": len(extra_owned) if not c["expect"] else 0, "why": why}
 
 
@@ -334,6 +379,9 @@ def main():
             else:
                 s = SCORE[cap](c, r["out"])
                 s["ms"] = r["ms"]
+                # The "to" convention (golden set: [] unless someone asked) is open for Harsha's
+                # spot-check: the score with "to" ignored is reported next to the strict one.
+                s["ok_any_to"] = SCORE[cap](c, r["out"], ignore_to=True)["ok"] if cap != "summary" else s["ok"]
             neg = cap != "summary" and not c["expect"]
             results.append({"id": c["id"], "lang": c["lang"], "neg": neg, "tags": c["tags"], **s})
         n = len(results)
@@ -349,8 +397,12 @@ def main():
         rep = {"capability": cap, "model": a.model, "mode": "live", "checked": "unchecked set (decision 085)",
                "n": n, "ok": sum(r["ok"] for r in results),
                "accuracy": round(sum(r["ok"] for r in results) / n, 3) if n else None,
+               "ok_any_to": sum(r.get("ok_any_to", False) for r in results),
                "halluc": sum(r["halluc"] for r in results),
                "halluc_cases": sum(1 for r in results if r["halluc"]),
+               "halluc_without_weekday_noise": sum(r.get("halluc_adj", 0) for r in results),
+               "invented_list": {r["id"]: r["invented"] + r["forbid"] for r in results
+                                 if r["invented"] or r["forbid"]},
                "invented_tokens": sum(len(r["invented"]) for r in results),
                "forbid_hits": sum(len(r["forbid"]) for r in results),
                "positives": {"n": len(pos), "ok": sum(r["ok"] for r in pos)},
@@ -362,7 +414,7 @@ def main():
         json.dump(rep, open(os.path.join(a.out, f"{cap}.score.json"), "w", encoding="utf-8"),
                   ensure_ascii=False, indent=1)
         report[cap] = rep
-        print(f"{cap}: {rep['ok']}/{n} ok ({rep['accuracy']}), made-up items {rep['halluc']} in "
+        print(f"{cap}: {rep['ok']}/{n} ok ({rep['accuracy']}; any to: {rep['ok_any_to']}), made-up items {rep['halluc']} in "
               f"{rep['halluc_cases']} cases, negatives {rep['negatives']['ok']}/{rep['negatives']['n']}, "
               f"p50 {rep['p50_ms']} ms, by lang {by_lang}", flush=True)
     return report
