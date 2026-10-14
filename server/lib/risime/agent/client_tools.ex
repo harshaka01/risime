@@ -344,7 +344,8 @@ defmodule RisiMe.Agent.ClientTools do
     %{
       name: "schedule_message",
       description:
-        "schedule a message the asker wrote, sent later by their phone (always confirmed): to " <>
+        "schedule a message for LATER, only when the asker gives a time or a repeat (\"tomorrow " <>
+          "9am\", \"every day\"); sent at that time by their phone (always confirmed): to " <>
           "(a friend's name for a 1:1 chat, or \"this chat\" for this Official chat when the " <>
           "asker says so), text (exactly the asker's words), at (ISO or a phrase like " <>
           "\"tomorrow 6am\"), repeat: \"daily\" or null",
@@ -378,7 +379,8 @@ defmodule RisiMe.Agent.ClientTools do
          {:ok, conv, name} <- recipient(to, ctx),
          {:ok, t, kind} <- time(at, ctx),
          true <- kind == :datetime || {:error, "failed", "ambiguous_time: ask for the time"},
-         :ok <- future(t, ctx) do
+         :ok <- future(t, ctx),
+         :ok <- has_time(t, ctx) do
       local = Clock.local(t, ctx.tz)
       hhmm = Calendar.strftime(local, "%H:%M")
       day = Calendar.strftime(local, "%a %-d %b")
@@ -401,12 +403,31 @@ defmodule RisiMe.Agent.ClientTools do
          when: %{"start" => wire["at"], "end" => nil, "all_day" => false},
          text: text,
          personal: true,
-         skill_id: "scheduled_messages"
+         skill_id: "scheduled_messages",
+         # Proposal 2026-10-14-send-for-me §41.4: the one-tap card's display (risi_send devices).
+         send:
+           RisiMe.Agent.SendForMe.send_display(
+             %{name: who, user_id: nil, tab: tab_of(conv)},
+             Map.get(ctx, :lang, "en")
+           )
        }}
     end
   end
 
   defp run_schedule(_args, _ctx), do: {:error, "failed", "bad_args"}
+
+  defp tab_of("dm:" <> _), do: "private"
+
+  defp tab_of(conv),
+    do: if(RisiMe.Groups.Tabs.official?(conv), do: "official", else: "private")
+
+  # Proposal 2026-10-14-send-for-me §41.4: scheduled only with a time. "Now" (under 2 minutes
+  # ahead) is `send_message` while that switch is on for the asker.
+  defp has_time(t, ctx) do
+    if RisiMe.Agent.SendForMe.on_for?(ctx.asker) and DateTime.diff(t, ctx.now) < 120,
+      do: {:error, "failed", "no_time: no time was given, so use send_message to send it now"},
+      else: :ok
+  end
 
   # §26.6: a conversation of a chat the asker is an active member of, never a Risi chat:
   # a friend's 1:1 (Private is the default), or this Official chat only when asked.

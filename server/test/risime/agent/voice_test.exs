@@ -518,6 +518,24 @@ defmodule RisiMe.Agent.VoiceTest do
       assert job.args["message_id"] == id and job.args["user_id"] == w.a.user.id
     end
 
+    test "P1 2026-10-14: the request carries the note's sending device (its skills, its tools)",
+         w do
+      rid = Ecto.UUID.generate()
+      dev = Ecto.UUID.generate()
+      {env, _, _} = note!(w.a.user.id, w.rc, "en:send Upali a message", %{"request_id" => rid})
+      id = TimeUUID.generate()
+
+      s =
+        Voice.received(w.rc, %{message_id: id, sender_id: w.a.user.id, sender_device: dev}, env)
+
+      {_, _} = await_post(w.rc, "voice_transcript", fn _ -> true end)
+      await_done(s)
+
+      # Before the fix the buffered request had `sender_device: nil`, so the turn ran with no
+      # device and every phone skill read "permission is off on this phone".
+      assert %{"request_id" => ^rid, "__device" => ^dev} = Secretary.envelope(w.rc, id)
+    end
+
     test "unclear: the transcript card says so and Risi answers the fixed sentence; no ask", w do
       # Harsha 2026-10-14: empty/noise-only = "very short"; a low-confidence guess = "say it
       # again"; never "type it".

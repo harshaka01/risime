@@ -207,8 +207,8 @@ defmodule RisiMe.Agent.Voice do
   Returns `:skip`, `:dropped` (malformed), `{:started, pid}` or (the Risi chat while Risi can't
   listen) `{:replied, pid}`.
   """
-  def received(conv, %{message_id: id, sender_id: sender}, env) do
-    case validate(env) do
+  def received(conv, %{message_id: id, sender_id: sender} = m, env) do
+    case validate(env) |> with_device(m) do
       :error ->
         # Never the content: the conversation and the message id only.
         Logger.info("Risi dropped a malformed voice note #{id} in #{conv}")
@@ -241,6 +241,10 @@ defmodule RisiMe.Agent.Voice do
       Logger.warning("Risi voice note skipped in #{conv}: #{inspect(e.__struct__)}")
       :skip
   end
+
+  # P1 2026-10-14 (proposal send-for-me §41.5): the note's sending device (nil when unknown).
+  defp with_device({:ok, note}, m), do: {:ok, Map.put(note, :sender_device, m[:sender_device])}
+  defp with_device(other, _m), do: other
 
   @doc false
   # §37.6 "When": `{:ok, :official | :risi_chat}`, `{:reply, :off | :too_long}` (Risi chat only)
@@ -393,14 +397,21 @@ defmodule RisiMe.Agent.Voice do
   defp finish(conv, note_id, sender, note, mode, request_id, result, latency) do
     # A blob that can't be read (not the speech service) keeps the §37.8 "try again" answer.
     t = classify(result, note) |> Map.put(:blob_error, result == {:error, :blob})
+    t = if mode == :risi_chat, do: fix_name(t), else: t
     log(conv, t, note, latency)
     note_speech(conv, sender, t, note)
     posted = post(conv, note_id, sender, note, t)
     VoiceJobs.finished(conv, note_id, sender, t.status)
-    buffer(conv, note_id, sender, t, mode, request_id, note.duration_ms)
+    buffer(conv, note_id, sender, t, mode, request_id, note)
     if mode == :risi_chat, do: risi_chat(conv, note_id, sender, t, request_id)
     posted
   end
+
+  # Proposal 2026-10-14-send-for-me §41.6: in the user's own Risi chat, "Rishi, …" is "Risi, …".
+  defp fix_name(%{text: text} = t) when is_binary(text),
+    do: %{t | text: RisiMe.Agent.Hotwords.fix_risi(text)}
+
+  defp fix_name(t), do: t
 
   # The speech service's `language_hint` (decision 071 amendment d): the sender's language and
   # the chat's. Only the codes are logged.
@@ -423,7 +434,10 @@ defmodule RisiMe.Agent.Voice do
           duration_ms: note.duration_ms,
           phone_transcript: Map.get(note, :phone_transcript),
           phone_fallback: phone_fallback?(sender, note),
-          sender: sender
+          sender: sender,
+          # Proposal 2026-10-14-send-for-me §42.6: "Risi" spelt right; the sender's own contacts
+          # in their own Risi chat. Per request, never logged or stored.
+          hotwords: RisiMe.Agent.Hotwords.for_note(conv, sender)
         ]
 
     case audio(conv, note) do
@@ -627,7 +641,7 @@ defmodule RisiMe.Agent.Voice do
   end
 
   # The 24-h working copy (sealed): a `voice_transcript` in Official, the request in a Risi chat.
-  defp buffer(conv, note_id, sender, t, :official, rid, duration_ms) do
+  defp buffer(conv, note_id, sender, t, :official, rid, %{duration_ms: duration_ms}) do
     env = %{
       "v" => 1,
       "type" => "voice_transcript",
@@ -679,7 +693,7 @@ defmodule RisiMe.Agent.Voice do
     :ok
   end
 
-  defp buffer(conv, note_id, sender, %{status: "ok"} = t, :risi_chat, rid, _duration_ms) do
+  defp buffer(conv, note_id, sender, %{status: "ok"} = t, :risi_chat, rid, note) do
     env = %{
       "v" => 1,
       "type" => "risi_request",
@@ -690,10 +704,12 @@ defmodule RisiMe.Agent.Voice do
       "via" => "voice"
     }
 
-    put_buffer(conv, note_id, sender, env)
+    # P1 2026-10-14: the request is the sending device's (nil after a voice-queue retry: the
+    # turn then uses the asker's most recent Risi device, `Skills.request_device/3`).
+    put_buffer(conv, note_id, sender, env, Map.get(note, :sender_device))
   end
 
-  defp buffer(_conv, _note_id, _sender, _t, :risi_chat, _rid, _duration_ms), do: :ok
+  defp buffer(_conv, _note_id, _sender, _t, :risi_chat, _rid, _note), do: :ok
 
   # §37.11 never silent: addressed to Risi but unclear (or borderline) → Risi asks back; the chip
   # on a note Risi couldn't hear → the "couldn't hear" answer.
@@ -733,11 +749,11 @@ defmodule RisiMe.Agent.Voice do
     Map.get(@ask_back, lang, @ask_back["en"])
   end
 
-  defp put_buffer(conv, note_id, sender, env) do
+  defp put_buffer(conv, note_id, sender, env, device \\ nil) do
     m = %{
       message_id: note_id,
       sender_id: sender,
-      sender_device: nil,
+      sender_device: device,
       plaintext: Jason.encode!(env)
     }
 

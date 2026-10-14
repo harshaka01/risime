@@ -203,7 +203,22 @@ defmodule RisiMe.Agent.Writes do
       &if(tool.name == "calendar_add", do: Map.put(&1, "calendar", card[:calendar]), else: &1)
     )
     |> then(&if(tool.name == "risi_calendar_add", do: risi_calendar_card(&1, card), else: &1))
+    |> then(&send_card(&1, tool.name, card, ctx))
   end
+
+  # Proposal 2026-10-14-send-for-me §41.2/§41.4: the one-tap card. `send_message` is [Send]
+  # [Edit] (Cancel small) with the `send` display object; a `schedule_message` card for a
+  # `risi_send` device is [Schedule] [Edit] the same way (older devices keep [Add] [Cancel]).
+  defp send_card(risi, "send_message", card, _ctx),
+    do: Map.merge(risi, %{"buttons" => ["send", "edit", "cancel"], "send" => card[:send]})
+
+  defp send_card(risi, "schedule_message", card, ctx) do
+    if is_map(card[:send]) and RisiMe.Devices.risi_send_device?(ctx.asker, ctx.device_id),
+      do: Map.merge(risi, %{"buttons" => ["schedule", "edit", "cancel"], "send" => card[:send]}),
+      else: risi
+  end
+
+  defp send_card(risi, _tool, _card, _ctx), do: risi
 
   # v1.34 §33.15: the PDF card is [Send] [Cancel], has no time, and names its source and target
   # in `export` (built from server-held data; the phone checks its tool call against it).
@@ -324,11 +339,22 @@ defmodule RisiMe.Agent.Writes do
       end)
   end
 
+  # Proposal 2026-10-14-send-for-me §41.2/§41.4: the text of a message, only.
+  defp edit_ok?(%Write{tool: tool}, %{"text" => t} = e)
+       when tool in ~w(send_message schedule_message) and map_size(e) == 1 do
+    is_binary(t) and String.trim(t) != "" and String.length(String.trim(t)) <= 4096
+  end
+
   defp edit_ok?(_w, _edit), do: false
 
   defp uuid?(s), do: is_binary(s) and match?({:ok, _}, Ecto.UUID.cast(s))
 
   defp edited(args, nil), do: {:ok, args}
+
+  # §41.2: a message's edited text (the wire's `text`; nothing else changes).
+  defp edited(%{"wire" => %{"text" => _} = wire} = args, %{"text" => t} = e)
+       when map_size(e) == 1 and not is_map_key(wire, "start"),
+       do: {:ok, %{args | "wire" => Map.put(wire, "text", String.trim(t))}}
 
   defp edited(%{"wire" => %{"tz" => _} = wire} = args, %{} = e) do
     times = e |> Map.take(@edit_keys) |> Map.update("title", nil, &String.trim/1) |> drop_nil()

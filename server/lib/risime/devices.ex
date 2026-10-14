@@ -148,7 +148,7 @@ defmodule RisiMe.Devices do
   @known_capabilities ~w(groups images deletes calls member_devices history_share video
                          group_calls call_switch screen_share tabs risi_tools risi_skills
                          risi_ledger risi_events risi_notes google_calendar files pdf_export
-                         risi_items call_transcribe voice add_to_call call_risi)
+                         risi_items call_transcribe voice add_to_call call_risi risi_send)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
@@ -165,6 +165,8 @@ defmodule RisiMe.Devices do
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["pdf_export"]
       # v1.35 §34: `risi_items` (Phase 2), kept only with `risi_tools`.
       caps = if "risi_tools" in caps, do: caps, else: caps -- ["risi_items"]
+      # Proposal 2026-10-14-send-for-me §41.1: `risi_send`, kept only with `risi_tools`.
+      caps = if "risi_tools" in caps, do: caps, else: caps -- ["risi_send"]
 
       caps =
         if "group_calls" in caps and "call_switch" in caps,
@@ -390,6 +392,41 @@ defmodule RisiMe.Devices do
       {:ok, d} -> risi_skills?(Repo.get_by(Device, user_id: user_id, device_id: d))
       :error -> false
     end
+  end
+
+  @doc """
+  Proposal 2026-10-14-send-for-me §41.1: true if `device_id` (may be nil) names a `risi_tools`
+  device of the user that also advertises `risi_send` (the one-tap send card and the phone send).
+  """
+  def risi_send_device?(_user_id, nil), do: false
+
+  def risi_send_device?(user_id, device_id) do
+    case Ecto.UUID.cast(device_id) do
+      {:ok, d} ->
+        dev = Repo.get_by(Device, user_id: user_id, device_id: d)
+        risi_tools?(dev) and "risi_send" in (dev.capabilities || [])
+
+      :error ->
+        false
+    end
+  end
+
+  @doc """
+  Proposal 2026-10-14-send-for-me §41.5: the user's `risi_tools` device seen most recently (its
+  `device_id`), or nil. The device of a request that arrived without one (a voice-queue retry).
+  """
+  def latest_risi_tools_device(user_id) do
+    Repo.all(
+      from d in Device,
+        where:
+          d.user_id == ^user_id and not is_nil(d.mls_signature_key) and
+            "tabs" in d.capabilities and "groups" in d.capabilities and
+            "risi_tools" in d.capabilities,
+        order_by: [desc_nulls_last: d.last_seen_at, desc: d.updated_at],
+        limit: 1,
+        select: d.device_id
+    )
+    |> List.first()
   end
 
   @doc "v1.26 §26.9: true if any device of the user advertises `risi_skills`."

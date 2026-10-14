@@ -49,9 +49,9 @@ defmodule RisiMe.Agent.ToolCalls do
   @max_body 16_384
 
   @tools ~w(calendar_check calendar_add set_alarm schedule_message cancel_scheduled
-            calendar_remove export_pdf)
+            calendar_remove export_pdf send_message)
   @v126 ~w(set_alarm schedule_message cancel_scheduled calendar_remove)
-  @writes ~w(calendar_add set_alarm schedule_message cancel_scheduled export_pdf)
+  @writes ~w(calendar_add set_alarm schedule_message cancel_scheduled export_pdf send_message)
 
   @doc "The client tools this server knows (§25.3, §26.6)."
   def tools, do: @tools
@@ -135,9 +135,10 @@ defmodule RisiMe.Agent.ToolCalls do
 
     # v1.26 §26.6: `undo_entry_id` on the v1.26 tools (and every undo); absent for v1.25 ones.
     data =
-      if Map.has_key?(spec, :undo_entry_id) or v126?(spec.tool) or spec.tool == "export_pdf",
-        do: Map.put(data, "undo_entry_id", Map.get(spec, :undo_entry_id)),
-        else: data
+      if Map.has_key?(spec, :undo_entry_id) or v126?(spec.tool) or
+           spec.tool in ~w(export_pdf send_message),
+         do: Map.put(data, "undo_entry_id", Map.get(spec, :undo_entry_id)),
+         else: data
 
     event = %{event_id: event_id, kind: "risi_tool_call", data: data}
     :ok = Messaging.publish_device(spec.user, to_device, event, @ttl_s)
@@ -362,6 +363,10 @@ defmodule RisiMe.Agent.ToolCalls do
     do: st in ~w(sent queued) and is_integer(p) and p in 1..200
 
   defp valid_ok?("set_alarm", %{"alarm_set" => true} = r) when map_size(r) == 1, do: true
+
+  # Proposal 2026-10-14-send-for-me §41.2: `sent` (the server took it) or `queued` (the outbox).
+  defp valid_ok?("send_message", %{"state" => st} = r) when map_size(r) == 1,
+    do: st in ~w(sent queued)
 
   defp valid_ok?("schedule_message", %{"schedule_id" => id} = r) when map_size(r) == 1,
     do: match?({:ok, _}, Ecto.UUID.cast(id || ""))

@@ -214,6 +214,8 @@ defmodule RisiMe.Agent.Tools do
         RisiMe.Agent.CalendarTools.risi_calendar_check(),
         RisiMe.Agent.CalendarTools.risi_calendar_add(),
         ClientTools.set_alarm(),
+        # Proposal 2026-10-14-send-for-me (§41.2): send now, one card (RISI_SEND_FOR_ME).
+        RisiMe.Agent.SendForMe.tool(),
         ClientTools.schedule_message(),
         ClientTools.cancel_scheduled(),
         # v1.34 §33.15: "send this as a PDF" (only for a `pdf_export` device).

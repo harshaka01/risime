@@ -90,7 +90,7 @@ defmodule RisiMe.Agent.Turn do
   @calendar_checks ~w(calendar_check risi_calendar_check)
   @calendar_tools ~w(calendar_check calendar_add calendar_remove risi_calendar_check risi_calendar_add)
   # v1.35 §34.5: the writes whose people are checked against the asker's friends first.
-  @named_writes ~w(calendar_add risi_calendar_add set_reminder schedule_message)
+  @named_writes ~w(calendar_add risi_calendar_add set_reminder schedule_message send_message)
   @settings_chip %{
     "label" => "Calendar settings",
     "action" => "open",
@@ -155,7 +155,9 @@ defmodule RisiMe.Agent.Turn do
 
     ctx = %{
       asker: asker,
-      device_id: env["__device"],
+      # P1 2026-10-14 (proposal send-for-me §41.5): a request that lost its device (a voice
+      # note retried from the queue) runs for the asker's most recent Risi device.
+      device_id: Skills.request_device(asker, env["__device"], conv),
       # §25.5: times resolve from the request's `server_ts` and the asker's zone.
       now: request_ts(env["__ts"], now),
       tz: Clock.user_tz(asker),
@@ -758,6 +760,15 @@ defmodule RisiMe.Agent.Turn do
           status == "ok" and is_map(meta[:risi_items]) ->
             items_final(st, ctx, meta[:risi_items])
 
+          # Proposal 2026-10-14-send-for-me §41.2: a tool's own server-built answer ends the
+          # turn (who isn't a contact, no 1:1 chat, the Phase 1 draft), never the model's words.
+          is_binary(meta[:answer]) ->
+            answer_final(st, ctx, meta[:answer])
+
+          # §41.2: the send card is the action (§28.3): a short fixed line, no more model calls.
+          status == "ok" and name == "send_message" ->
+            answer_final(st, ctx, RisiMe.Agent.SendForMe.card_line(ctx, args))
+
           # v1.36 §35.2: the memory's coverage travels to the answer (the honesty line).
           status == "ok" and is_map(meta[:memory]) ->
             loop(Map.put(st, :memory_meta, meta[:memory]), ctx)
@@ -767,6 +778,11 @@ defmodule RisiMe.Agent.Turn do
         end
     end
   end
+
+  # A server-built answer that ends the turn (personal: it goes to the Risi chat).
+  defp answer_final(st, ctx, text),
+    do:
+      finish(Map.put(%{st | rule_made: true, personal: true}, :prebuilt, true), ctx, text, [], [])
 
   @pdf_answer "Tap PDF to create it on your phone."
 
@@ -1023,6 +1039,14 @@ defmodule RisiMe.Agent.Turn do
 
       {:error, status, reason} when is_binary(status) and is_binary(reason) ->
         {status, nil, %{reason: reason}}
+
+      # Proposal 2026-10-14-send-for-me §41.2: the tool's own question ("Which Upali?", the
+      # §34.5 clarify form) or its own server-built answer.
+      {:clarify, %{} = c} ->
+        {"clarify", nil, %{clarify: c}}
+
+      {:answer, status, text} when is_binary(status) and is_binary(text) ->
+        {status, nil, %{answer: text}}
 
       {:error, status} when is_binary(status) ->
         {status, nil, %{}}
@@ -1810,17 +1834,21 @@ defmodule RisiMe.Agent.Turn do
 
     opts = for o <- c.options, do: %{"name" => o.name, "user_id" => o.user_id}
     keep_text = "Keep #{c.said}"
+    # §41.2: "Which Upali?" (several exact matches) has no Keep: one chip per person, up to 3.
+    keep? = Map.get(c, :keep, true)
 
     chips =
       for(
-        o <- Enum.take(opts, 2),
+        o <- Enum.take(opts, if(keep?, do: 2, else: 3)),
         do: %{"label" => o["name"], "action" => "ask", "text" => "Use #{o["name"]}"}
-      ) ++ [%{"label" => ~s(Keep "#{c.said}"), "action" => "ask", "text" => keep_text}]
+      ) ++
+        if(keep?,
+          do: [%{"label" => ~s(Keep "#{c.said}"), "action" => "ask", "text" => keep_text}],
+          else: []
+        )
 
-    chip_map =
-      opts
-      |> Map.new(&{String.downcase("Use #{&1["name"]}"), &1})
-      |> Map.put(String.downcase(keep_text), nil)
+    chip_map = Map.new(opts, &{String.downcase("Use #{&1["name"]}"), &1})
+    chip_map = if keep?, do: Map.put(chip_map, String.downcase(keep_text), nil), else: chip_map
 
     :ok =
       Writes.hold_clarify(ctx, c.tool, wid, target, %{
@@ -1830,14 +1858,14 @@ defmodule RisiMe.Agent.Turn do
         "chips" => chip_map
       })
 
-    q = "Did you mean #{or_list(Enum.map(opts, & &1["name"]))}?"
+    q = Map.get(c, :question) || "Did you mean #{or_list(Enum.map(opts, & &1["name"]))}?"
 
     field = %{
       "about" => "name",
       "write_id" => wid,
       "said" => c.said,
       "options" => opts,
-      "keep" => true
+      "keep" => keep?
     }
 
     st = Map.put(%{st | rule_made: true, personal: true}, :clarify, %{chips: chips, field: field})
@@ -1854,6 +1882,10 @@ defmodule RisiMe.Agent.Turn do
 
     args =
       case choice do
+        # §41.2: the person is named exactly; the message text is never rewritten.
+        %{"name" => _} = o when w.tool == "send_message" ->
+          RisiMe.Agent.SendForMe.resolved_args(args, o)
+
         %{"name" => n} = o ->
           args |> NameCheck.replace(payload["said"], n) |> with_id(w.tool, o["user_id"])
 
@@ -1868,11 +1900,18 @@ defmodule RisiMe.Agent.Turn do
       out = %{"tool" => w.tool, "args" => args}
       {st, status, result, meta} = exec_step(st, ctx, w.tool, args, out)
 
-      case {status, result} do
-        {"ok", %{"status" => "done"}} ->
+      case {status, result, meta} do
+        # §41.2: the send tool's own answer (no 1:1 chat, the Phase 1 draft) or its card line.
+        {_, _, %{answer: text}} when is_binary(text) ->
+          answer_final(st, ctx, text)
+
+        {"ok", _, _} when w.tool == "send_message" ->
+          answer_final(st, ctx, RisiMe.Agent.SendForMe.card_line(ctx, args))
+
+        {"ok", %{"status" => "done"}, _} ->
           finish(st, ctx, "Done.", [], [])
 
-        {"ok", _} ->
+        {"ok", _, _} ->
           finish(st, ctx, "Tap Add on the card to confirm, or Cancel.", [], [])
 
         _ ->

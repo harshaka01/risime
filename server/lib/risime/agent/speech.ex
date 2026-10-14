@@ -97,6 +97,34 @@ defmodule RisiMe.Agent.Speech do
     end
   end
 
+  @max_hotwords 60
+  @max_hotwords_chars 1000
+
+  @doc """
+  Proposal 2026-10-14-send-for-me §41.6: the service's `hotwords` field for `opts`
+  (`opts[:hotwords]`, a list of words or names; `RisiMe.Agent.Hotwords`), comma-separated, at
+  most 60 entries and 1000 characters, or nil. Never logged.
+  """
+  def hotwords_field(opts) do
+    words =
+      opts
+      |> Keyword.get(:hotwords)
+      |> List.wrap()
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&(&1 |> String.replace(",", " ") |> String.trim()))
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+      |> Enum.take(@max_hotwords)
+      |> Enum.reduce([], fn w, acc ->
+        if String.length(Enum.join([w | acc], ",")) <= @max_hotwords_chars,
+          do: [w | acc],
+          else: acc
+      end)
+      |> Enum.reverse()
+
+    if words == [], do: nil, else: Enum.join(words, ",")
+  end
+
   def impl, do: Application.get_env(:risime, :risi_speech, RisiMe.Agent.Speech.Http)
 
   def healthy?, do: impl().healthy?()
@@ -157,7 +185,8 @@ defmodule RisiMe.Agent.Speech do
     t0 = System.monotonic_time(:millisecond)
 
     primary_opts =
-      Keyword.take(opts, [:language_hint, :sender]) ++ [timeout: budget, priority: "live"]
+      Keyword.take(opts, [:language_hint, :sender, :hotwords]) ++
+        [timeout: budget, priority: "live"]
 
     phone_text =
       case phone_transcript(opts[:phone_transcript]) do

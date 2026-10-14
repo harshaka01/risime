@@ -267,13 +267,6 @@ defmodule RisiMe.Agent.Skills do
     end
   end
 
-  defp permission(user_id, device_id, skill_id) do
-    case permissions(user_id, device_id) do
-      nil -> nil
-      ps -> client_permission(skill(skill_id), ps)
-    end
-  end
-
   # The device's last report, or the default before any (an alarm needs no runtime permission).
   defp client_permission(skill, ps) do
     case ps[skill.id] do
@@ -314,7 +307,47 @@ defmodule RisiMe.Agent.Skills do
 
   defp phone_ok?(ctx, skill_id) do
     Devices.risi_skills_device?(ctx.asker, ctx.device_id) and
-      permission(ctx.asker, ctx.device_id, skill_id) not in ~w(denied unsupported)
+      not phone_refused?(ctx, skill_id)
+  end
+
+  # P1 2026-10-14 (proposal send-for-me §41.5): "no permission on this phone" only from a FRESH
+  # report of `denied`/`unsupported` by the request's own `risi_skills` device. Unknown, not
+  # asked, a stale report or no device: the tool is offered and the phone decides at run time.
+  # Scheduled messages never need SCHEDULE_EXACT_ALARM (§26.1 "optional": WorkManager sends it).
+  @fresh_s 6 * 3600
+
+  defp phone_refused?(%{device_id: nil}, _skill_id), do: false
+  defp phone_refused?(_ctx, "scheduled_messages"), do: false
+
+  defp phone_refused?(ctx, skill_id) do
+    with true <- Devices.risi_skills_device?(ctx.asker, ctx.device_id),
+         %{} = ps <- permissions(ctx.asker, ctx.device_id),
+         %DevicePermission{permission: p, reported_at: at} when p in ~w(denied unsupported) <-
+           ps[skill_id] do
+      fresh?(at)
+    else
+      _ -> false
+    end
+  end
+
+  defp fresh?(%DateTime{} = at),
+    do: DateTime.diff(DateTime.utc_now(), at, :second) <= @fresh_s
+
+  defp fresh?(_), do: false
+
+  @doc """
+  P1 2026-10-14 (proposal send-for-me §41.5): the device a request runs for: its own sending
+  device, else (a request that lost it, e.g. a voice-queue retry) the asker's `risi_tools`
+  device seen most recently, else nil.
+  """
+  def request_device(_asker, device, _conv) when is_binary(device), do: device
+
+  def request_device(asker, _device, conv) do
+    # Only in the asker's own Risi chat (every other entry point keeps what it passed).
+    if is_binary(conv) and RisiMe.Groups.Tabs.risi_chat?(conv),
+      do: Devices.latest_risi_tools_device(asker)
+  rescue
+    _ -> nil
   end
 
   @doc """
@@ -337,7 +370,8 @@ defmodule RisiMe.Agent.Skills do
     cond do
       not s.available -> "unavailable"
       state(ctx.asker, s.id) == "off" -> "off"
-      s.where == "phone" and not phone_ok?(ctx, s.id) -> "no_permission"
+      # P1 2026-10-14: never a false "permission is off on this phone" (see `phone_refused?/2`).
+      s.where == "phone" and phone_refused?(ctx, s.id) -> "no_permission"
       true -> nil
     end
   end
@@ -470,13 +504,23 @@ defmodule RisiMe.Agent.Skills do
         # P0 2026-10-09: "Added to your Google Calendar: Interview with Shenika · Mon 12 Oct,
         # 2–3 PM" (the calendar's name from the phone's result).
         body =
-          if w.tool == "calendar_add",
-            do:
+          cond do
+            w.tool == "calendar_add" ->
               RisiMe.Agent.ClientTools.added_text(
                 args,
                 result,
                 RisiMe.Agent.Clock.user_tz(w.user_id)
               )
+
+            # Proposal 2026-10-14-send-for-me §41.4: "✓ Scheduled for Upali, Thu 15 Oct at
+            # 09:00" (never the text).
+            w.tool == "schedule_message" and RisiMe.Agent.SendForMe.on_for?(w.user_id) ->
+              when_text = String.replace_prefix(args["when_text"] || "", "on ", "")
+              "✓ Scheduled for #{args["to_name"] || "the chat"}, #{when_text}"
+
+            true ->
+              nil
+          end
 
         done_card(w, e, body, RisiMe.Agent.ClientTools.added_event(w, result))
         :ok

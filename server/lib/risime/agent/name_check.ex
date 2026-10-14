@@ -145,11 +145,12 @@ defmodule RisiMe.Agent.NameCheck do
         _ -> []
       end
 
-    from_text =
-      for k <- ~w(title text), t = args[k], is_binary(t), n <- after_with(t), do: n
+    # §41.2: a message's own words are never checked as names (only its recipient is).
+    keys = if tool == "send_message", do: ~w(title), else: ~w(title text)
+    from_text = for k <- keys, t = args[k], is_binary(t), n <- after_with(t), do: n
 
     to =
-      if tool == "schedule_message" and is_binary(args["to"]) and
+      if tool in ~w(schedule_message send_message) and is_binary(args["to"]) and
            String.downcase(String.trim(args["to"])) not in ["this chat", "this group", "here"],
          do: [args["to"]],
          else: []
