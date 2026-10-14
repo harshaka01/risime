@@ -1541,14 +1541,14 @@ defmodule RisiMe.Agent.VoiceTest do
 
       # Night: memory is back; the model runs on the sealed audio.
       Application.put_env(:risime, :compare_fake_memory, false)
-      assert :ok = perform_job(RisiMe.Agent.SpeechCompareNight, %{"kind" => "run"})
+      assert :ok = perform_job(RisiMe.Agent.SpeechCompareNight, %{"step" => "run"})
       {:ok, m} = RisiMe.Agent.SpeechGold.get(id)
       assert m["pending_models"] == []
       assert "whisper-small-sinhala" in m["night"]["models"] and m["night_delivered"] == false
       assert is_number(m["scores"]["whisper-small-sinhala"]["cer"])
 
       # Morning: one post after the brief, then delivered.
-      assert :ok = perform_job(RisiMe.Agent.SpeechCompareNight, %{"kind" => "deliver"})
+      assert :ok = perform_job(RisiMe.Agent.SpeechCompareNight, %{"step" => "deliver"})
       {morning, _} = await_post(w.rc, "answer", &(&1["answer"] =~ "Overnight"))
       assert morning =~ "whisper-small-sinhala CER" and morning =~ "vs your correction"
       assert {:ok, %{"night_delivered" => true}} = RisiMe.Agent.SpeechGold.get(id)

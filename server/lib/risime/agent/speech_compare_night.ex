@@ -23,7 +23,7 @@ defmodule RisiMe.Agent.SpeechCompareNight do
   alias RisiMe.Agent.{SpeechCompare, SpeechGold, SpeechGuard}
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"kind" => "run"}}) do
+  def perform(%Oban.Job{args: %{"step" => "run"}}) do
     cond do
       not night?() -> :ok
       not go?() -> {:snooze, 1_200}
@@ -31,7 +31,7 @@ defmodule RisiMe.Agent.SpeechCompareNight do
     end
   end
 
-  def perform(%Oban.Job{args: %{"kind" => "deliver"}}), do: deliver()
+  def perform(%Oban.Job{args: %{"step" => "deliver"}}), do: deliver()
 
   @doc "Between 16:30 and 00:30 UTC (CLAUDE.md rule 10's night window), or always in tests."
   def night?(now \\ DateTime.utc_now()) do
