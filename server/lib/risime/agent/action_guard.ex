@@ -68,12 +68,14 @@ defmodule RisiMe.Agent.ActionGuard do
   # Risi's own message, always from a card (or the asker's "Allowed" for self-only writes).
   # `cancel_scheduled` cancels the asker's own unsent message: nothing delivered is deleted.
   # Their `run` only builds a `{:propose, card}`; `exec` runs after the confirm.
+  # `send_message` (§42, `RisiMe.Agent.SendForMe`, reviewed 2026-10-14): the asker's own chat
+  # message, sent by their phone after their [Send]; never "Allowed".
   @ordinary_writes ~w(set_reminder calendar_add risi_calendar_add set_alarm schedule_message
-                      cancel_scheduled export_pdf)
+                      cancel_scheduled export_pdf send_message)
 
   # Writes whose args are words the asker's phone sends to other people as the asker: the text
   # is checked too (a "you're hired" or "I accept the contract" is an HR or legal act).
-  @args_checked ~w(schedule_message)
+  @args_checked ~w(schedule_message send_message)
 
   # Tool-name words, per category (split on `_`, `.`, `-` and spaces).
   @name_words [
@@ -120,6 +122,9 @@ defmodule RisiMe.Agent.ActionGuard do
 
   @doc "The reviewed write tools that are ordinary by kind (the allow list)."
   def ordinary_writes, do: @ordinary_writes
+
+  @doc "The reviewed writes whose args' text is checked too (they speak for the asker)."
+  def args_checked, do: @args_checked
 
   @doc "True unless `RISI_ACTION_GUARD` is `off` (only blocks: on is the safe default)."
   def on? do

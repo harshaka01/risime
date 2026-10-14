@@ -109,11 +109,59 @@ defmodule RisiMe.Agent.ActionGuardTest do
 
     test "every tool of today's registry is classified explicitly (read or reviewed write)" do
       for t <- Tools.Registry.tools() do
-        assert Map.get(t, :write) == false or t.name in ActionGuard.ordinary_writes(),
-               "#{t.name}: a new write tool must be reviewed by the action guard"
+        assert Map.get(t, :write) == false or t.name in ActionGuard.ordinary_writes() or
+                 Map.get(t, :consequential) in ActionGuard.categories(),
+               unreviewed(t.name)
 
-        assert ActionGuard.classify(t, %{}) == :ordinary, t.name
+        if Map.get(t, :consequential) not in ActionGuard.categories(),
+          do: assert(ActionGuard.classify(t, %{}) == :ordinary, unreviewed(t.name))
       end
+    end
+
+    test "every write tool in lib/ (any map with `exec:`) is reviewed, registered or not" do
+      lib = Path.expand("../../../lib", __DIR__)
+
+      names =
+        for path <- Path.wildcard(Path.join(lib, "**/*.ex")),
+            src = File.read!(path),
+            [_, name] <-
+              Regex.scan(~r/name:\s*"([a-z0-9_]+)"(?:(?!name:\s*")[\s\S])*?exec:\s*&/, src),
+            do: name
+
+      assert "send_message" in names and "schedule_message" in names
+
+      for name <- Enum.uniq(names) do
+        assert name in ActionGuard.ordinary_writes(), unreviewed(name)
+      end
+    end
+
+    test "a write that speaks for the asker (`send_message`) is text-checked" do
+      assert "send_message" in ActionGuard.args_checked()
+      tool = RisiMe.Agent.SendForMe.tool()
+
+      assert ActionGuard.classify(tool, %{"to" => "Upali", "text" => "See you at 6"}) ==
+               :ordinary
+
+      assert {:consequential, :hr, :args} =
+               ActionGuard.classify(tool, %{"to" => "Upali", "text" => "You're fired"})
+    end
+  end
+
+  # The exact instruction a failing scan gives (a new tool must be reviewed, never missed).
+  defp unreviewed(name),
+    do:
+      "write tool #{inspect(name)} is not reviewed by the action guard. Review it, then either " <>
+        "add #{inspect(name)} to @ordinary_writes in lib/risime/agent/action_guard.ex (and to " <>
+        "@args_checked if its args are words sent to other people as the asker), or declare " <>
+        "`consequential: :money | :pay | :hr | :deletion | :legal` on the tool. " <>
+        "`consequential: false` alone is not a review."
+
+  describe "classify/2, today's writes" do
+    test "each reviewed write is ordinary with ordinary args" do
+      for name <- ActionGuard.ordinary_writes(),
+          t = Tools.known(name),
+          t != nil,
+          do: assert(ActionGuard.classify(t, %{}) == :ordinary, name)
     end
   end
 
@@ -359,10 +407,16 @@ defmodule RisiMe.Agent.ActionGuardTest do
       assert File.read!(Path.join(@lib, "risime/agent/agents/tool_registry.ex")) =~
                "ActionGuard.run(tool, args, ctx)"
 
-      # Phone tool calls start only inside a tool's run/exec (client_tools) or a human's Undo
-      # tap (skills, §26.4); nowhere else.
+      # Phone tool calls start only inside a tool's run/exec (client_tools; send_for_me's exec,
+      # §42.3, after the human's [Send]) or a human's Undo tap (skills, §26.4); nowhere else.
       assert hits(~r/ToolCalls\.(call|start)\(/) ==
-               ["risime/agent/client_tools.ex", "risime/agent/skills.ex"]
+               [
+                 "risime/agent/client_tools.ex",
+                 "risime/agent/send_for_me.ex",
+                 "risime/agent/skills.ex"
+               ],
+             "a new ToolCalls.call/start site: it must run only inside a tool's run/exec " <>
+               "(behind ActionGuard) or on a human's tap; review it, then add its file here"
 
       # `risi_action` handlers act only on a human's tap (the attested sender): the confirm card
       # (Writes.act), Ledger items, Risi Calendar, action items. Adding one is reviewed here.
@@ -370,17 +424,24 @@ defmodule RisiMe.Agent.ActionGuardTest do
 
       # (`Voice.transcript_delete`: the note's own sender deletes Risi's transcript, §37.6;
       # `SpeechCompare.label_reply`: a dev user's own reply labels a compare clip, reviewed
-      # 2026-10-14: not consequential.)
+      # 2026-10-14: not consequential; `PermissionFixit.act`: the asker's [Allow] resumes the
+      # same turn, whose tools run through the guard, §43.3; `Voice.transcript_language`: a
+      # member's "Wrong language?" re-transcribes Risi's own post, §37.13.1.)
+      reviewed =
+        ~w(CalendarActions.act Commitments.act LedgerActions.act PermissionFixit.act
+           Reminders.act SpeechCompare.label_reply Voice.transcript_delete
+           Voice.transcript_language Writes.act)
+
       handlers =
         Regex.scan(~r/(\w+)\.(\w+)\(conv, user\b/, worker)
         |> Enum.map(fn [_, mod, fun] -> mod <> "." <> fun end)
         |> Enum.uniq()
         |> Enum.sort()
 
-      assert handlers ==
-               ~w(CalendarActions.act Commitments.act LedgerActions.act Reminders.act
-                  SpeechCompare.label_reply Voice.transcript_delete Writes.act),
-             "a new risi_action handler: check it against the action guard"
+      assert handlers -- reviewed == [],
+             "new risi_action handler(s) #{inspect(handlers -- reviewed)} in " <>
+               "lib/risime/workers/risi.ex: check each acts only on a human's tap and runs no " <>
+               "tool outside ActionGuard, then add it to `reviewed` in this test"
     end
   end
 end
