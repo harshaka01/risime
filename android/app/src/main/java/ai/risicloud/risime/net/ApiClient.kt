@@ -168,7 +168,7 @@ class ApiClient(
      * Decision 092 (proposal 2026-10-14-private-transcribe §3): the Private translate request. Called **only** after
      * the user's explicit yes (or their "Don't ask again"); it carries only the text and the target language.
      */
-    suspend fun translate(req: TranslateRequest): ApiResult<TranslateReply> = call("POST", "translate", req)
+    suspend fun privateTranslate(req: PrivateTranslateRequest): ApiResult<PrivateTranslateReply> = call("POST", "translate", req)
 
     // ---- §24 (v1.24) chats and their tabs (tabs devices only) ----
 

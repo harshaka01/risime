@@ -8,7 +8,7 @@ import kotlinx.serialization.Serializable
  * translate, the target language and (when known) the source language. No conversation, no message id.
  */
 @Serializable
-data class TranslateRequest(
+data class PrivateTranslateRequest(
     val text: String,
     val target: String,
     val source: String? = null,
@@ -16,7 +16,7 @@ data class TranslateRequest(
 
 /** The reply: the translation, shown only to the person who tapped; `engine` is always `risime-server`. */
 @Serializable
-data class TranslateReply(
+data class PrivateTranslateReply(
     val text: String,
     val target: String,
     val source: String? = null,

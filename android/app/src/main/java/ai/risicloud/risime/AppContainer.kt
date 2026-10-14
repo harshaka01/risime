@@ -1225,7 +1225,7 @@ class AppContainer(
             stt = ai.risicloud.risime.voice.AndroidReaderStt(phoneRecogniser, onlineRecogniser),
             translator = object : ai.risicloud.risime.voice.PrivateTranslator {
                 override suspend fun translate(text: String, target: String, source: String?): Result<String> =
-                    when (val r = runCatching { api.translate(ai.risicloud.risime.net.TranslateRequest(text, target, source)) }.getOrNull()) {
+                    when (val r = runCatching { api.privateTranslate(ai.risicloud.risime.net.PrivateTranslateRequest(text, target, source)) }.getOrNull()) {
                         is ApiResult.Ok -> Result.success(r.value.text)
                         else -> Result.failure(IllegalStateException("translate failed")) // never the text
                     }
