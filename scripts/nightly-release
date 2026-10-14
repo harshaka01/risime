@@ -229,6 +229,8 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   STEP_T=2400 step scripts/risi-chat-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "RISI CHAT TEST FAILED: not releasing"; exit 1; }
   echo "==> voice notes (scripts/voice-note-test: record, play, played receipt, Official transcript, forward, ciphertext only)"
   STEP_T=2400 step scripts/voice-note-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "VOICE NOTE TEST FAILED: not releasing"; exit 1; }
+  echo "==> send for me (scripts/send-for-me-test: one card, one tap, delivered, ✓ Sent; en/si, text/voice)"
+  STEP_T=2400 step scripts/send-for-me-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "SEND FOR ME TEST FAILED: not releasing"; exit 1; }
   echo "==> messaging polish (scripts/messaging-polish-test: swipe-to-reply, sender-side link previews, no URL on the server)"
   STEP_T=2400 step scripts/messaging-polish-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "MESSAGING POLISH TEST FAILED: not releasing"; exit 1; }
 fi
