@@ -19,15 +19,16 @@ enum class VoicePlace { PRIVATE, OFFICIAL, RISI_CHAT }
 
 /**
  * §37.2 / §37.7 what goes on a new note besides the audio: `transcribe: false` only in Official while the sender's
- * setting is off (never in Private: there is nothing to opt out of); a fresh `request_id` only in the Risi chat.
+ * setting is off (never in Private: there is nothing to opt out of); a fresh `request_id` in the Risi chat, and in Official
+ * when the @Risi chip is on ([toRisi], proposal 2026-10-14-spoken-risi §37.11: the note is a request to Risi).
  */
 object VoiceStamp {
-    fun meta(note: RecordedNote, place: VoicePlace, transcribeMine: Boolean, newRequestId: () -> String = { UUID.randomUUID().toString() }) = VoiceMeta(
+    fun meta(note: RecordedNote, place: VoicePlace, transcribeMine: Boolean, toRisi: Boolean = false, newRequestId: () -> String = { UUID.randomUUID().toString() }) = VoiceMeta(
         mime = VoiceEnvelope.MIME_OGG_OPUS,
         durationMs = note.durationMs,
         waveform = Base64.getEncoder().encodeToString(note.waveform),
         transcribe = transcribeStamp(place, transcribeMine),
-        requestId = if (place == VoicePlace.RISI_CHAT) newRequestId() else null,
+        requestId = if (place == VoicePlace.RISI_CHAT || (place == VoicePlace.OFFICIAL && toRisi)) newRequestId() else null,
     )
 
     /** §37.2 `transcribe`: `false` only in Official while the sender's setting is off; otherwise absent. */
@@ -121,8 +122,8 @@ class VoiceNotes(
      * Encrypts [note] with a fresh key and queues it (upload, then the `voice` envelope). The audio is wiped either way.
      * [stt] (flag on only) waits briefly for the phone's final text and attaches it as `phone_transcript`.
      */
-    suspend fun send(conversationId: String, note: RecordedNote, replyTo: ReplyRef?, stt: PhoneSttSessionHandle? = null, notice: (String) -> Unit = {}): MessageEntity? = try {
-        val meta = VoiceStamp.meta(note, place(conversationId), _transcribeMine.value)
+    suspend fun send(conversationId: String, note: RecordedNote, replyTo: ReplyRef?, stt: PhoneSttSessionHandle? = null, toRisi: Boolean = false, notice: (String) -> Unit = {}): MessageEntity? = try {
+        val meta = VoiceStamp.meta(note, place(conversationId), _transcribeMine.value, toRisi = toRisi)
         val phone = stt?.let { phoneTranscriptOf(it.await(PhoneSttPolicy.waitMs(note.durationMs)), notice) }
         commit(note.audio, conversationId, if (phone == null) meta else meta.copy(phoneTranscript = phone), replyTo)
     } finally {

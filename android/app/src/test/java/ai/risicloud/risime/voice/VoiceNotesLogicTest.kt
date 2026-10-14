@@ -36,6 +36,10 @@ class VoiceNotesLogicTest {
         val r = VoiceStamp.meta(note(), VoicePlace.RISI_CHAT, transcribeMine = false) { "8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f" }
         assertEquals("8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f", r.requestId)
         assertNull(r.transcribe)
+        // §37.11 (proposal 2026-10-14-spoken-risi): Official with the @Risi chip on: a request id; never in Private.
+        assertEquals("rid", VoiceStamp.meta(note(), VoicePlace.OFFICIAL, transcribeMine = true, toRisi = true) { "rid" }.requestId)
+        assertNull(VoiceStamp.meta(note(), VoicePlace.OFFICIAL, transcribeMine = true, toRisi = false) { "rid" }.requestId)
+        assertNull(VoiceStamp.meta(note(), VoicePlace.PRIVATE, transcribeMine = true, toRisi = true) { "rid" }.requestId)
     }
 
     @Test fun theOfficialNoteIsShownOnceOnlyInOfficialWhileTheSwitchIsOn() {

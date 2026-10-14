@@ -56,6 +56,10 @@ fun rememberVoiceComposer(
     notReadyText: String,
     reply: () -> ai.risicloud.risime.net.ReplyRef?,
     toast: (String) -> Unit,
+    /** Proposal 2026-10-14-spoken-risi §37.11: the @Risi chip is on (Official): the note is a request to Risi. */
+    toRisi: () -> Boolean = { false },
+    /** After a note went out with [toRisi] (the composer clears its chip, as after a typed @Risi). */
+    onSentToRisi: () -> Unit = {},
 ): VoiceComposerSlot? {
     if (!remember { c.voice.canRecord() }) return null
     val context = LocalContext.current
@@ -103,7 +107,9 @@ fun rememberVoiceComposer(
                 toast(VoiceStrings.TOO_SHORT)
                 return@launch
             }
-            if (c.voice.send(conversationId, note, reply(), session, toast) == null) toast(VoiceStrings.CANT_RECORD)
+            val risi = toRisi()
+            if (c.voice.send(conversationId, note, reply(), session, toRisi = risi, notice = toast) == null) toast(VoiceStrings.CANT_RECORD)
+            else if (risi) onSentToRisi()
         }
     }
     fun cancel() {

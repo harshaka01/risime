@@ -500,6 +500,8 @@ fun GroupChatScreen(
                     voice = if (encrypted == true && vm.imgs.available) ai.risicloud.risime.ui.chat.rememberVoiceComposer(
                         vm.container, vm.conversationId, ai.risicloud.risime.ui.chat.voiceNotReadyText(dm = false, name = name),
                         reply = { vm.messaging.takeReply() }, toast = { vm.imgs.toast.value = it },
+                        // §37.11 (proposal 2026-10-14-spoken-risi): the @Risi chip on while recording in Official.
+                        toRisi = { risi != null && risiChip && !risiChat }, onSentToRisi = { risiChip = false },
                     ) else null,
                 )
             }
