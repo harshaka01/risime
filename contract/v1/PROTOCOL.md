@@ -11143,7 +11143,9 @@ gains item kinds and line references, and also runs on §37.6 voice-note transcr
 `GET /auth/config` gains **`"risi_action_items": "on" | "off"`** (`auth_config_v142.json`; absent = `off`;
 server env `RISI_ACTION_ITEMS`, default `off`). While `off`, §36.7 runs unchanged (§27.3/§27.4 kinds) and no
 voice-note extraction happens. While `on`, for the sources in scope `action_items` replaces the §27.4
-`discussion_card`, and `action_confirm` replaces the §27.3 `discussion_summary` **items** for owners with a
+`discussion_card` for voice notes; a **call** posts the §27.4 `discussion_card` (summary and key points) **and then**
+`action_items`, sharing one `summary_id` (P0 2026-10-15: a call always gets its summary; long calls are summarised in
+sections, server-side, no wire change), and `action_confirm` replaces the §27.3 `discussion_summary` **items** for owners with a
 `risi_ledger` device (others keep the §27.3 legacy path unchanged).
 
 ### 38.2 Triggers (server, normative)
