@@ -399,6 +399,17 @@ pass "Private: B's list shows 🔒 before the e2ee message"; CHECKS+=" list_priv
 DEV=A; open_chat "ZZ EC B" || fail "A: DM for Official"
 tap "● Official" || true; sleep 1
 official_tab || fail "A: the DM's Official tab didn't open"
+# Item 6 (honesty, decision 048): the Official header shows the Official lock (lock + Risi badge,
+# "Encrypted · Risi can read"), never the Private lock.
+ok=""
+for _ in $(seq 1 60); do
+  dump
+  # The icon is its own accessibility node (content-desc "Encrypted, Risi can read"), tagged risi_header_official_lock.
+  if grep -qE 'resource-id="risi_header_official_lock"|content-desc="Encrypted, Risi can read"' "$WORK/ui-$DEV.xml" && ! grep -qF 'resource-id="risi_header_lock"' "$WORK/ui-$DEV.xml"; then ok=1; break; fi
+  sleep 1
+done
+[ -n "$ok" ] || fail "A: the Official header has no Official lock, or shows the Private lock"
+pass "Official header: the Official lock, not the Private lock"; CHECKS+=" official_header_lock"
 tap "Message" || true; sleep 0.5
 A shell input text "ec-official-1"; sleep 0.5
 tap "Send" || fail "A: send in Official"
