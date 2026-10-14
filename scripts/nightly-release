@@ -39,8 +39,8 @@ git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"
 # Every gate step has a hard timeout (default 30 min, GATE_STEP_TIMEOUT seconds); a hung step fails the release.
 STEP_T="${GATE_STEP_TIMEOUT:-1800}"
 step() { timeout -k 60 "$STEP_T" "$@" || { rc=$?; [ "$rc" -ge 124 ] && echo "GATE STEP TIMED OUT after ${STEP_T}s: $*"; return "$rc"; }; }
-# RELEASE_CORE=1 (Harsha 2026-10-14 reset): only the standard gates block (server, android, interop, canary, boot,
-# official-start, call-summary, risi reinstall, upgrade/rule 9). The other redroid product gates are not run; run them
+# RELEASE_CORE=1 (Harsha 2026-10-14 reset): only the standard and safety gates block (server, android, interop, canary, boot,
+# official-start, call-summary, e2ee clarity (crypto, rule 11), risi reinstall, upgrade/rule 9). The other redroid product gates are not run; run them
 # after the release and log failures in docs/status/overnight.md.
 core_skip() { if [ "${RELEASE_CORE:-0}" = 1 ]; then echo "==> not run in a core release (RELEASE_CORE=1): $*"; return 0; fi; step "$@"; }
 
@@ -235,7 +235,7 @@ if [ "${UI_ENTRY_SKIP:-0}" != 1 ]; then
   echo "==> after-call summary (scripts/call-summary-test, P0 2026-10-14: zero action items still give the summary card)"
   STEP_T=2700 step scripts/call-summary-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "CALL-SUMMARY TEST FAILED: not releasing"; exit 1; }
   echo "==> encryption clarity (scripts/e2ee-clarity-test: list markers, no silent plaintext, hold after a reinstall)"
-  STEP_T=2400 core_skip scripts/e2ee-clarity-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "E2EE CLARITY TEST FAILED: not releasing"; exit 1; }
+  STEP_T=2400 step scripts/e2ee-clarity-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "E2EE CLARITY TEST FAILED: not releasing"; exit 1; }
   echo "==> talking to Risi (scripts/risi-chat-test: replies, offline notice, @Risi in Official, Private hint)"
   STEP_T=2400 core_skip scripts/risi-chat-test --apk android/app/build/outputs/apk/debug/app-debug.apk || { echo "RISI CHAT TEST FAILED: not releasing"; exit 1; }
   echo "==> voice notes (scripts/voice-note-test: record, play, played receipt, Official transcript, forward, ciphertext only)"
