@@ -77,3 +77,9 @@ action items.
 - 14 Oct 10:41–10:50: three of Harsha's Official calls get no summary.
 - 14 Oct 10:55: reported.
 - 14 Oct 11:00–11:15: diagnosed and fixed; the server tests pass.
+- 14 Oct 12:38: `scripts/call-summary-test` CSTEST OK inside the fast lane (10880611). End → card took 10–13 s on both
+  phones, for one action item, zero items and transcription stopped at 37 s; a Private call transcribed nothing.
+- 14 Oct 12:40: **live as v0.3.0-nightly.7-srv10** (health 12/12). RISI_ACTION_ITEMS is still canary; calendar v2
+  (ac3ad1ea, canary) went out with it.
+- The compare night run and the evals stay paused (`~/risime-logs/speech-guard/speech-eval.pause`) until Harsha's
+  next real Official call shows its card.
