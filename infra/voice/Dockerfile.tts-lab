@@ -1,0 +1,47 @@
+# risime-tts-lab: the TTS candidates Harsha compares on the admin console's Voices page (2026-10-14):
+# Chatterbox (MIT), Indic Parler-TTS (Apache-2.0), Orpheus 3B (Apache-2.0 + Llama 3.2 licence) and,
+# once its code review clears it, IndicF5 (MIT). Console tests only: Call Risi stays on Kokoro in
+# risime-tts (Dockerfile.tts), which this image does not touch.
+# Base: NVIDIA's vLLM container (NGC, arm64, CUDA torch 2.14), shared with risi-l1, risime-whisper and
+# risime-tts, so no base layer is downloaded again.
+# Each engine runs in its own process with its own pinned packages in /opt/eng/<engine> (pip --target,
+# --no-deps), because Chatterbox and Parler pin transformers 4.46 while the base has 5.x; the base's
+# torch, numpy and CUDA stack are never replaced (PIP_CONSTRAINT is cleared only for the --target
+# installs, which never touch the base site-packages).
+ARG BASE=nvcr.io/nvidia/vllm:26.09-py3
+FROM ${BASE}
+
+# Shared: torchaudio's Python code only (its C++ extension is built for upstream torch 2.9 and does not
+# load against NVIDIA's torch; the pure-PyTorch paths cover resampling and spectrograms), as omniasr.
+RUN PIP_CONSTRAINT= pip install --no-cache-dir --no-deps "torchaudio==2.9.1" \
+ && rm -f /usr/local/lib/python3.12/dist-packages/torchaudio/lib/*.so \
+ && python3 -c "import torchaudio.functional, torchaudio.transforms; print('torchaudio ok')"
+
+# Chatterbox 0.1.4 (Resemble AI, MIT) with its PerTh watermarker (resemble-perth, MIT).
+RUN PIP_CONSTRAINT= pip install --no-cache-dir --no-deps --target /opt/eng/chatterbox \
+      "chatterbox-tts==0.1.4" "resemble-perth==1.0.1" "s3tokenizer==0.3.0" "conformer==0.3.2" \
+      "diffusers==0.29.0" "transformers==4.46.3" "tokenizers==0.20.3" "huggingface-hub==0.26.5" "onnx==1.19.1" \
+      "omegaconf==2.3.0" "antlr4-python3-runtime==4.9.3" "librosa==0.11.0" "pyloudnorm==0.1.1" \
+      "future==1.0.0" "pykakasi==2.3.0" "jaconv==0.4.0" "deprecated==1.2.18" "wrapt==1.17.3"
+
+# Indic Parler-TTS: parler-tts at a pinned commit (Apache-2.0) + DAC (MIT) on transformers 4.46.1.
+ARG PARLER_COMMIT=d108732cd57788ec86bc857d99a6cabd66663d68
+RUN PIP_CONSTRAINT= pip install --no-cache-dir --no-deps --target /opt/eng/indic-parler \
+      "parler_tts @ https://github.com/huggingface/parler-tts/archive/${PARLER_COMMIT}.tar.gz" \
+      "transformers==4.46.1" "tokenizers==0.20.3" "huggingface-hub==0.26.5" "descript-audio-codec==1.0.0" \
+      "descript-audiotools==0.7.2" "argbind==0.3.9" "julius==0.2.7" "flatten-dict==0.4.2" \
+      "pyloudnorm==0.1.1" "future==1.0.0" "ffmpy==0.6.1" "randomname==0.2.1" "fire==0.7.1" \
+      "termcolor==3.1.0" "markdown2==2.5.4" "docstring-parser==0.17.0" "rich==14.2.0" \
+      "markdown-it-py==4.0.0" "mdurl==0.1.2" "pygments==2.19.2" "importlib-resources==6.5.2"
+
+# Orpheus: the base transformers (5.x) for the Llama-3.2-3B model + the SNAC decoder (MIT).
+RUN PIP_CONSTRAINT= pip install --no-cache-dir --no-deps --target /opt/eng/orpheus "snac==1.2.1"
+
+COPY tts_lab_server.py tts_lab_worker.py tts_lab_check.py tts_lab_selftest.py tts_lab_bench.py /app/
+RUN python3 -I /app/tts_lab_check.py
+WORKDIR /app
+USER 1000:1000
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 DO_NOT_TRACK=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 HOME=/tmp TTS_LAB_HOST=0.0.0.0
+EXPOSE 8231
+ENTRYPOINT ["python3", "-I", "/app/tts_lab_server.py"]

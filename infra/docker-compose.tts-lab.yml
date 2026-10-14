@@ -1,0 +1,57 @@
+# risime-tts-lab: the TTS candidates for the admin console's Voices page (2026-10-14): Chatterbox,
+# Indic Parler-TTS, Orpheus 3B and (after its code review) IndicF5. Console tests only. Call Risi keeps
+# Kokoro in risime-tts (infra/docker-compose.tts.yml, 127.0.0.1:8230), always resident; this sibling
+# never touches it. Binds 127.0.0.1:8231 only (rule 6); no Caddy route. The app server reaches it as
+# RISI_TTS_LAB_URL (default http://127.0.0.1:8231) through RisiMe.Agent.TTS.Lab.
+# One engine at a time, loaded on demand in its own process, unloaded when idle; a load is refused
+# when it would take host MemAvailable below TTS_LAB_MIN_AVAILABLE_MB; paused while live speech needs
+# the machine (the speech-guard pause file). Offline: every model is mounted read-only from
+# ~/risime-eval-models; no hub, no telemetry; no text or audio is logged or stored.
+#   docker compose --env-file .env -f infra/docker-compose.tts-lab.yml up -d --build
+# Optional in .env: TTS_API_KEY (the same Bearer key as risime-tts).
+name: risime-tts-lab
+services:
+  tts-lab:
+    build:
+      context: voice
+      dockerfile: Dockerfile.tts-lab
+    image: risime/tts-lab:2026-10-14-1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8231:8231"
+    gpus: all
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # Host-side RAM of the server + one engine process (Python, tokenizers, page cache of the mapped
+    # weights). The model's CUDA memory is unified memory outside this cgroup; the service itself
+    # refuses a load that would take host MemAvailable below the floor.
+    mem_limit: 12g
+    environment:
+      TTS_API_KEY: ${TTS_API_KEY:-}
+      TTS_LAB_MIN_AVAILABLE_MB: ${TTS_LAB_MIN_AVAILABLE_MB:-4096}
+      TTS_LAB_IDLE_UNLOAD_S: ${TTS_LAB_IDLE_UNLOAD_S:-300}
+      # Set only to the IndicF5 revision cleared in docs/status/tts-indicf5-code-review.md.
+      TTS_LAB_INDICF5_CLEARED: ${TTS_LAB_INDICF5_CLEARED:-}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      DO_NOT_TRACK: "1"
+      HOME: /tmp
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ${HOME}/risime-eval-models:/models:ro
+      # Live speech first: only the pause file's own directory, read-only.
+      - ${HOME}/risime-logs/speech-guard:/guard:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8231/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
