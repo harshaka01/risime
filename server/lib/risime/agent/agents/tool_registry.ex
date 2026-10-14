@@ -45,7 +45,8 @@ defmodule RisiMe.Agents.ToolRegistry do
 
       tool ->
         case Tools.authorize(tool, ctx) do
-          :ok -> tool.run.(args, ctx)
+          # Principle 4: through the consequential-action guard, as a turn's step.
+          :ok -> RisiMe.Agent.ActionGuard.run(tool, args, ctx)
           {:error, :denied} -> {:error, :denied}
         end
     end

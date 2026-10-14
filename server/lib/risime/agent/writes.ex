@@ -79,7 +79,13 @@ defmodule RisiMe.Agent.Writes do
   end
 
   # §26.3: "Allowed" or ask (`RisiMe.Agent.Skills`).
-  defp mode(ctx, tool, card), do: RisiMe.Agent.Skills.write_mode(ctx, tool, card)
+  # Principle 4: a consequential write is always asked (`RisiMe.Agent.ActionGuard`): its confirm
+  # card is the approval request.
+  defp mode(ctx, tool, card) do
+    if RisiMe.Agent.ActionGuard.must_ask?(tool, card),
+      do: :ask,
+      else: RisiMe.Agent.Skills.write_mode(ctx, tool, card)
+  end
 
   defp ask(ctx, tool, card) do
     # v1.35 §34.5: a card after a name question carries the question's write_id.
@@ -455,12 +461,16 @@ defmodule RisiMe.Agent.Writes do
 
   # Runs the write once: `exec` posts its own result. `:ok` → done (args wiped); anything else
   # → `confirmed` (may run again while the card lives).
+  # Principle 4: the guard's last check (`ActionGuard.exec_allowed?/3`): a consequential write
+  # runs only after its human's confirm; otherwise it is void and never runs.
   defp execute(%Write{} = w, args, device) do
     tool = Tools.get(w.tool) || Tools.known(w.tool)
 
     result =
       try do
-        tool.exec.(w, args, device)
+        if RisiMe.Agent.ActionGuard.exec_allowed?(w, tool, args),
+          do: tool.exec.(w, args, device),
+          else: {:error, "denied"}
       rescue
         e ->
           Logger.warning("Risi write #{w.tool} failed: #{inspect(e.__struct__)}")

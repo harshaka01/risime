@@ -212,7 +212,7 @@ defmodule RisiMe.Agent.CalendarTools do
     tool = ClientTools.calendar_check()
     gctx = Map.put(ctx, :check_sources, ["phone_provider", "google_api"])
 
-    case tool.run.(window, gctx) do
+    case RisiMe.Agent.ActionGuard.run(tool, window, gctx) do
       {:ok, result, meta} ->
         check = meta[:calendar_check] || %{}
         {gsrc, others} = Enum.split_with(check["sources"] || [], &(&1["source"] == "google_api"))
@@ -256,7 +256,7 @@ defmodule RisiMe.Agent.CalendarTools do
     gctx =
       ctx |> Map.put(:check_sources, ["google_api"]) |> Map.put(:check_to, link.device_id)
 
-    case tool.run.(window, gctx) do
+    case RisiMe.Agent.ActionGuard.run(tool, window, gctx) do
       {:ok, _result, meta} ->
         check = meta[:calendar_check] || %{}
         gsrc = Enum.find(check["sources"] || [], %{}, &(&1["source"] == "google_api"))
@@ -342,7 +342,7 @@ defmodule RisiMe.Agent.CalendarTools do
     tool = ClientTools.calendar_check()
 
     if phone_ok?(tool, ctx) do
-      case tool.run.(window, ctx) do
+      case RisiMe.Agent.ActionGuard.run(tool, window, ctx) do
         {:ok, result, meta} ->
           check = meta[:calendar_check] || %{}
 
