@@ -19,3 +19,13 @@ main is clean: compile with warnings-as-errors and format pass; no half-done wor
 | Console pages 4–7 + Ops agent | stopped while adding the Health section | worktree agent-a30471d8… (rebased, uncommitted split) | resume later |
 | Call Risi v1.48 | commits 7ce5b871, acb68a4e on its branch; push blocked | branch worktree-agent-ae8df0ae884bf3514 | Harsha runs the cherry-pick |
 | Tamil translate / Wrong language? (Part B) | waiting on its gate | worktree agent-aacca3ea… | — |
+
+## 14 Oct 21:25 SLT: release reset (Harsha)
+- Feature freeze until nightly.8 is on Harsha's phone. All agents stopped; unfinished worktrees committed as `wip` on
+  their own branches (not on main).
+- nightly.8 runs with `RELEASE_CORE=1`: server, android, interop, Risi canary, boot, official-start, call-summary,
+  e2ee clarity, Risi reinstall and the upgrade gate (rule 9) block. Not run in this release (run after it, failures
+  logged here): server-reach, official-banner, health-heal, call-back, call-transcribe, risi-chat, voice-note,
+  send-for-me, messaging-polish.
+- The earlier run (8c) stopped on risi-chat-test timing out at 2400 s; alone it passed 21/21 in 7 min (harness/load).
+- The DB rename (risime_dev → prod) is moved out of tonight; it is in docs/status/queue.md.
