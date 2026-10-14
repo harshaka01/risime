@@ -1,6 +1,6 @@
 defmodule RisiMe.Agent.Translate do
   @moduledoc """
-  The Private translate request (decision 092; proposal 2026-10-14-private-transcribe §37.12.4):
+  The Private translate request (decision 092; proposal 2026-10-14-private-transcribe §37.14.4):
   the checks and the no-trace wrapper around **the one server translate function**,
   `RisiMe.Agent.VoiceTranslate.translate/5` (the Official translate of proposal
   2026-10-14-voice-translate uses the same function), called with `private: true`:

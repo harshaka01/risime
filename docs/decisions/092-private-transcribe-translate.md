@@ -1,7 +1,7 @@
 # 092 — Transcription and translation in PRIVATE chats, each only after the reader's yes
 
 **Status:** accepted 2026-10-14 (Harsha, 09:42 SLT). Amends §37's and §24.0's "never Private" through contract
-proposal `contract/proposals/2026-10-14-private-transcribe.md` (v1.50 candidate, new §37.12; root applies it to
+proposal `contract/proposals/2026-10-14-private-transcribe.md` (v1.50 candidate, new §37.14; root applies it to
 PROTOCOL.md). Behind **`RISI_PRIVATE_TRANSCRIBE`** (`off` | `canary` | `on`, default `off`; `canary` =
 `RISI_DEV_USERS`, decided on the server and sent as `/me` `private_transcribe`, never hard-coded in the app).
 Rollout: canary (Harsha first) → on.

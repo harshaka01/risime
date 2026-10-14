@@ -1,6 +1,6 @@
 # Proposal: transcription and translation in PRIVATE chats, each only after the reader's yes (2026-10-14)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.50** (new **§37.12**, amendments to **§24.0** and
+**Status:** proposal for root/Harsha, to be applied as **v1.50** next to §37.13 voice-translate (new **§37.14**; §37.12 is transcribe progress since v1.49, amendments to **§24.0** and
 **§37.0**). Decision 092 (Harsha, 14 Oct 09:42 SLT). Implemented server-side and on Android **behind
 `RISI_PRIVATE_TRANSCRIBE`** (`off` | `canary` | `on`, default `off`; `canary` = `RISI_DEV_USERS`, decided on the
 server and sent through `/me`, never hard-coded in the app). With the flag off nothing changes on the wire or in any
@@ -15,15 +15,15 @@ replaces the absolute "never" with that rule.
 ## Amendments
 - **§24.0** "It is never transcribed and never an input to any model…" becomes: "Risi never sees it, and it is
   never an input to the learning log, Risi's tables, buffer or memory (§24.12). A **reader** may transcribe or
-  translate a Private message only by an explicit per-action yes on their own phone (§37.12); the result stays on
+  translate a Private message only by an explicit per-action yes on their own phone (§37.14); the result stays on
   that phone."
 - **§37.0** "Private voice notes have no Risi path at all" stays; "no client, server or speech code path touches a
-  Private note" becomes "…except the reader's own §37.12 actions".
+  Private note" becomes "…except the reader's own §37.14 actions".
 - **§37.6** unchanged (Risi: Official only). **§37.10** unchanged except the reader-side use below.
 
-## §37.12 Private transcription and translation (normative)
+## §37.14 Private transcription and translation (normative)
 
-### 37.12.1 Switch
+### 37.14.1 Switch
 - `GET /api/v1/me` → `User` gains **`"private_transcribe": true`** while `RISI_PRIVATE_TRANSCRIBE` applies to the
   user (`on`, or `canary` and the user is in `RISI_DEV_USERS`); **absent** otherwise (so `off` is byte-identical).
   Example `me_reply_private_transcribe.json`:
@@ -32,9 +32,9 @@ replaces the absolute "never" with that rule.
             "phone_verified": true, "vouched_by": null, "phone_confirmed": true, "risi_dev": true,
             "private_transcribe": true}}
   ```
-- Clients show §37.12 features only while it is `true` (re-read at most every 10 min; cached across restarts).
+- Clients show §37.14 features only while it is `true` (re-read at most every 10 min; cached across restarts).
 
-### 37.12.2 The `voice` envelope field `allow_transcribe` (sender control)
+### 37.14.2 The `voice` envelope field `allow_transcribe` (sender control)
 | field | type | rule |
 |---|---|---|
 | `allow_transcribe` | bool, optional | **`false` only** = the sender doesn't let readers send this note's audio, or text derived from it, off the reader's phone (no Google, no server translate of its transcript). On-device recognition on the reader's phone stays allowed (nothing leaves it). Absent (or `true`) = allowed |
@@ -49,7 +49,7 @@ replaces the absolute "never" with that rule.
   `false` (the privacy-safe reading). The note itself is always kept. Old apps ignore it (§0).
 - Example `voice_payload_private_no_transcribe.json`: `voice_payload.json` plus `"allow_transcribe": false`.
 
-### 37.12.3 Reader rules (Android, normative)
+### 37.14.3 Reader rules (Android, normative)
 Every result below is **shown only on the reader's phone, kept in memory only, and never sent to the chat**. Labels
 always say where the work was done (decision 048), and the chat keeps its lock.
 
@@ -71,7 +71,7 @@ always say where the work was done (decision 048), and the chat keeps its lock.
 3. **Translate: RisiMe's server, after the yes.** "Translate to English / Sinhala / Tamil" under a reader-side
    transcript, a sender-phone transcript (§37.10) and received typed messages. The dialog: **"The text will be sent
    to RisiMe's server to translate, and not stored. Yes / No"** with **"Don't ask again"**. Only Yes sends the text
-   (§37.12.4). Label **"Translation (RisiMe server)"**. Blocked for text derived from a note with
+   (§37.14.4). Label **"Translation (RisiMe server)"**. Blocked for text derived from a note with
    `allow_transcribe: false`.
 4. **The yes event.** Each send off the phone needs a yes for *that* action (that note, that text and target), or
    the reader's "Don't ask again" for that kind. The phone has **exactly one construction site** of the online
@@ -81,12 +81,12 @@ always say where the work was done (decision 048), and the chat keeps its lock.
    Google)"** (default on). Settings → "Private voice & translate": the two "Don't ask again" choices (Google
    transcription, server translation), each resettable ("Ask again").
    - **Sender notice (Harsha 10:31):** no per-use notice. A **one-time** notice the first time the user records a
-     Private voice note while §37.12 applies: **"Others can transcribe your voice notes. Change in Settings"**, with
+     Private voice note while §37.14 applies: **"Others can transcribe your voice notes. Change in Settings"**, with
      [Settings] opening Settings (where the switch is) and [OK]. Never shown again on that phone.
 6. **Official is unchanged:** Risi transcribes on the server (§37.6); the Official translate is its own proposal
    (2026-10-14-voice-translate, flag `RISI_VOICE_TRANSLATE`).
 
-### 37.12.4 `POST /api/v1/translate` (auth)
+### 37.14.4 `POST /api/v1/translate` (auth)
 The phone sends **only** the text it wants translated and the target language. No conversation, no message id; no
 conversation access is needed or checked.
 
@@ -119,11 +119,11 @@ agent_unavailable` (the model failed).
 - The same server translate function serves the Official translate (proposal 2026-10-14-voice-translate,
   `RisiMe.Agent.VoiceTranslate.translate/5`; Private calls it with `private: true`).
 
-### 37.12.5 Events
+### 37.14.5 Events
 None on the wire: no WebSocket event, no Risi kind, no stored event. The only wire changes are the `User` field,
-the envelope field and the REST call above. The "yes event" is a client-side action (§37.12.3 (4)).
+the envelope field and the REST call above. The "yes event" is a client-side action (§37.14.3 (4)).
 
-### 37.12.6 Examples, gate
+### 37.14.6 Examples, gate
 - **Examples (root adds):** `me_reply_private_transcribe.json`, `voice_payload_private_no_transcribe.json`,
   `translate_request.json`, `translate_reply.json`.
 - **Gate:** server: the flag (`off` → 404 and no model call; `canary` → dev users only; `/me` field absent while
