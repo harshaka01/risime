@@ -234,7 +234,7 @@ class PhoneSttTest {
         assertTrue(PhoneSttPolicy.allowed(true, VoicePlace.PRIVATE, null))
         assertTrue(PhoneSttPolicy.allowed(true, VoicePlace.OFFICIAL, null))
         assertFalse(PhoneSttPolicy.allowed(true, VoicePlace.OFFICIAL, false))
-        assertFalse(PhoneSttPolicy.allowed(true, VoicePlace.RISI_CHAT, null))
+        assertTrue("the server compares and falls back to it", PhoneSttPolicy.allowed(true, VoicePlace.RISI_CHAT, null))
         assertEquals(2_000, PhoneSttPolicy.waitMs(0))
         assertEquals(3_240, PhoneSttPolicy.waitMs(12_400))
         assertEquals(8_000, PhoneSttPolicy.waitMs(1_800_000))
@@ -303,11 +303,21 @@ class PhoneSttTest {
         assertNull(committed.last().phoneTranscript)
     }
 
-    @Test fun theRisiChatNeverOpensASession() {
-        var opened = 0
-        val v = notes(onFlag(), VoicePlace.RISI_CHAT, { opened++; FakeSession(null) }, mutableListOf())
-        assertNull(v.phoneSttSession("risi:x"))
-        assertEquals(0, opened)
+    @Test fun officialAndRisiChatNotesCarryThePhoneText() = runBlocking {
+        for (place in listOf(VoicePlace.OFFICIAL, VoicePlace.RISI_CHAT)) {
+            val committed = mutableListOf<VoiceMeta>()
+            val v = notes(onFlag(), place, { FakeSession(PhoneSttResult.Text("හෙට", "si-LK", 500, null)) }, committed)
+            v.send("grp:x", note(), null, v.phoneSttSession("grp:x"))
+            assertEquals(PhoneTranscript("හෙට", "si-LK"), committed.single().phoneTranscript)
+            if (place == VoicePlace.RISI_CHAT) assertNotNull("the request_id stays", committed.single().requestId)
+        }
+    }
+
+    @Test fun sinhalaHeadlineIsClear() {
+        assertEquals("Sinhala (si-LK) offline: YES, installed", PhoneSttReport.sinhalaHeadline(PhoneSttSupport.INSTALLED, "si-LK"))
+        assertTrue(PhoneSttReport.sinhalaHeadline(PhoneSttSupport.DOWNLOADABLE, "si-LK").contains("Download Sinhala"))
+        assertEquals("Sinhala (si-LK): online only on this phone (no offline pack)", PhoneSttReport.sinhalaHeadline(PhoneSttSupport.NOT_ON_DEVICE, null))
+        assertEquals("Tamil (ta-LK): online only on this phone (no offline pack)", PhoneSttReport.headline("Tamil", "ta-LK", PhoneSttSupport.NOT_ON_DEVICE, null))
     }
 
     @Test fun reportLinesShowTextAndTime() {

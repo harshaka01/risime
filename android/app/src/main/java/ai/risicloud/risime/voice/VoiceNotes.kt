@@ -132,7 +132,7 @@ class VoiceNotes(
 
     /**
      * Proposal 2026-10-14: an on-device recognition session for a recording in [conversationId], started, or null when
-     * the `phone_stt` flag is off, in the Risi chat or for a note that opts out of transcription. Null keeps the v1.41
+     * the `phone_stt` flag is off or for a note that opts out of transcription. Null keeps the v1.41
      * path exactly. [notice] gets the honest reason when the phone can't (e.g. the language isn't on-device).
      */
     fun phoneSttSession(conversationId: String, notice: (String) -> Unit = {}): PhoneSttSessionHandle? {

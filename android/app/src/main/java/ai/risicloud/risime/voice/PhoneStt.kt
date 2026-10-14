@@ -207,9 +207,13 @@ fun interface PhoneSttSessions {
 
 /** Where a phone transcript may be attached (proposal 2026-10-14 sender rules). */
 object PhoneSttPolicy {
-    /** Not in the Risi chat (Risi transcribes requests), not when the note opts out of transcription. */
+    /**
+     * Private, Official and the Risi chat (Harsha 2026-10-14: the server compares it with its own Sinhala model and
+     * falls back to it); never when the note opts out of transcription (`transcribe: false`).
+     */
+    @Suppress("UNUSED_PARAMETER")
     fun allowed(flagOn: Boolean, place: VoicePlace, transcribeStamp: Boolean?): Boolean =
-        flagOn && place != VoicePlace.RISI_CHAT && transcribeStamp != false
+        flagOn && transcribeStamp != false
 
     /** How long the send waits for the final text after the recording stops (then it goes without one). */
     fun waitMs(durationMs: Long): Long = (2_000 + durationMs / 10).coerceIn(2_000, 8_000)

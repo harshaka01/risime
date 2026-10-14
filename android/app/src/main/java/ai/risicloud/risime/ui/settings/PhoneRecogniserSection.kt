@@ -56,6 +56,17 @@ object PhoneSttReport {
         is PhoneSttResult.Failed -> "failed after ${secs(r.elapsedMs)}: ${r.reason}"
     }
 
+    /** The headlines (Sinhala, then Tamil: the priority, Harsha 2026-10-14). */
+    fun headline(name: String, tag: String, s: PhoneSttSupport, matched: String?): String = when (s) {
+        PhoneSttSupport.INSTALLED -> "$name ($tag) offline: YES, installed${if (matched != null && !matched.equals(tag, true)) " as $matched" else ""}"
+        PhoneSttSupport.PENDING -> "$name ($tag) offline: downloading…"
+        PhoneSttSupport.DOWNLOADABLE -> "$name ($tag) offline: NOT YET, a pack exists: tap Download $name"
+        PhoneSttSupport.NOT_ON_DEVICE -> "$name ($tag): online only on this phone (no offline pack)"
+        else -> "$name ($tag) offline: unknown (${s.label})"
+    }
+
+    fun sinhalaHeadline(s: PhoneSttSupport, matched: String?): String = headline("Sinhala", "si-LK", s, matched)
+
     fun support(tag: String, s: PhoneSttSupport, matched: String?): String =
         "$tag: ${s.label}${if (matched != null && !matched.equals(tag, true)) " (as $matched)" else ""}"
 
@@ -107,6 +118,20 @@ fun PhoneRecogniserSection(c: AppContainer) {
             }
         }, modifier = Modifier.testTag("dev_phone_stt_check")) { Text(if (checking) "Checking…" else "Check on-device languages") }
         report?.let { r ->
+            listOf("Sinhala" to "si-LK", "Tamil" to "ta-LK").forEach { (name, tag) ->
+                val (st, matched) = r.of(tag)
+                Text(
+                    PhoneSttReport.headline(name, tag, st, matched) + (r.error?.let { " ($it)" }.orEmpty()),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (st == PhoneSttSupport.INSTALLED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("dev_phone_stt_headline_$tag"),
+                )
+                if (st == PhoneSttSupport.DOWNLOADABLE) androidx.compose.material3.Button(onClick = {
+                    scope.launch {
+                        results.add(0, c.phoneRecogniser.download(matched ?: tag)?.let { "download $tag: $it" } ?: "download $tag requested (check again in a minute)")
+                    }
+                }, modifier = Modifier.testTag("dev_phone_stt_download_$tag")) { Text("Download $name") }
+            }
             PhoneSttLocales.PROBES.forEach { tag ->
                 val (s, matched) = r.of(tag)
                 Row(verticalAlignment = Alignment.CenterVertically) {
