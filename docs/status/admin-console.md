@@ -16,20 +16,32 @@ nightly release, the Caddy change, the Keycloak redirect URI and the `.env` line
 - **Audit log:** sign-in, sign-out, every setting change (before → after), every speech test (clip name), and
   admin seed, add and remove. The last 15 entries are shown on the Speech models page.
 
-## How to sign in (first time)
-1. Harsha: add this line to `~/development/risime/.env`, using the email of your RisiMe (Keycloak) account:
-   `RISIME_ADMIN_SEED_EMAIL=<your RisiMe account email>`
-   Optional, for the Test button: `RISI_ADMIN_TEST_CLIPS_DIR=/home/harsha/development/risime/infra/whisper/testdata`
-2. Root (needs sudo): in `/etc/caddy/Caddyfile` (and `infra/caddy/Caddyfile`), change
-   `@app path /api/* /socket/* /health` to `@app path /api/* /socket/* /health /admin /admin/*`, then
-   `sudo systemctl reload caddy`.
-3. Keycloak admin, client `risime`:
-   - add the valid redirect URI `https://risime.risicloud.ai/admin/auth/callback`;
-   - add the web origin `https://risime.risicloud.ai`;
-   - make sure the standard flow is on.
-4. After the nightly release restarts the pilot, open `/admin` and sign in. On boot, or at this first sign-in,
-   your account becomes the first admin (audit-logged). From then on the seed line does nothing; it can stay
-   or be removed.
+## How to sign in (first time): Harsha's steps (one block)
+Status 2026-10-14: the seed line is in `.env` and the first admin was seeded at the nightly.7 boot (01:43 UTC).
+The repo Caddyfile (`infra/caddy/Caddyfile`) already routes `/admin`; the live `/etc/caddy/Caddyfile` doesn't yet
+(it is also missing the repo's `/livekit` route, which this copy adds too).
+
+**A. Caddy (sudo, on spark2):**
+```
+sudo caddy validate --config /home/harsha/development/risime/infra/caddy/Caddyfile --adapter caddyfile \
+  && sudo cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-2026-10-14 \
+  && sudo cp /home/harsha/development/risime/infra/caddy/Caddyfile /etc/caddy/Caddyfile \
+  && sudo systemctl reload caddy && curl -sI https://risime.risicloud.ai/admin | head -1
+```
+Expect `HTTP/2 302` (a redirect to sign in), not 404. Rollback:
+`sudo cp /etc/caddy/Caddyfile.bak-2026-10-14 /etc/caddy/Caddyfile && sudo systemctl reload caddy`.
+
+**B. Keycloak (admin console at https://risicloud.ai/admin, realm `aoa`):**
+1. Clients → `risime` → Settings.
+2. **Valid redirect URIs:** add `https://risime.risicloud.ai/admin/auth/callback` (keep the existing app entries).
+3. **Web origins:** add `https://risime.risicloud.ai`.
+4. **Capability config:** Standard flow **On**. Client authentication: leave as it is. If it is **On**
+   (confidential client), copy the client secret (Credentials tab) into `.env` as `ADMIN_OIDC_CLIENT_SECRET=…`
+   and tell root (a restart picks it up).
+5. Save.
+
+**C. Try it:** open https://risime.risicloud.ai/admin and sign in with your RisiMe account. You land on Speech
+models. Anyone who isn't an admin gets a plain 403.
 
 ## Page 1: Speech models
 - For each language (Sinhala, Tamil, English, Mixed / Singlish), choose **Auto** or an installed model (the
