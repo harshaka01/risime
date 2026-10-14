@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Harsha 2026-10-14 (TTS list + token 08:30 SLT): Chatterbox retries (5 files failed last night), then Orpheus
+# (safetensors + config/tokenizer only, ~15.1 GB), Indic Parler-TTS (3.76 GB), IndicF5 (1.41 GB, custom_code: reviewed
+# before running). Files > 2 GB only in the night window (16:30–00:30 UTC); smaller ones any time. 10 MB/s, pauses for
+# release gates, resumable. The Hugging Face token comes from .env HF_TOKEN and is never printed or logged.
+# Log: ~/risime-eval-data/dl/downloads-2026-10-14-tts2.log
+set -u
+cd "$(dirname "$0")/.."
+RATE="${DL_RATE:-10M}"; PAUSE_FILE="${DL_PAUSE_FILE:-$HOME/risime-eval-data/dl/PAUSE}"
+L="$HOME/risime-eval-data/dl/downloads-2026-10-14-tts2.log"; B="$HOME/risime-eval-models"
+log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$L"; }
+tok() { grep '^HF_TOKEN=' .env | grep -v '^HF_TOKEN=$' | tail -1 | cut -d= -f2- | tr -d "\"' \r"; }
+night() { local h; h=$((10#$(date -u +%H%M))); [ "$h" -ge 1630 ] || [ "$h" -lt 30 ]; }
+busy() { pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null || [ -e "$PAUSE_FILE" ]; }
+size() { curl -sIL -H "Authorization: Bearer $(tok)" "https://huggingface.co/$1/resolve/main/$2" | awk 'tolower($1)=="content-length:"{v=$2} END{print v+0}'; }
+get() { # repo file dest
+  local big=0; [ "$(size "$1" "$2")" -gt 2000000000 ] && big=1
+  mkdir -p "$(dirname "$3")"; log "start $1/$2 (big=$big)"
+  while :; do
+    while busy || { [ "$big" = 1 ] && ! night; }; do sleep 60; done
+    curl -fL --retry 5 --retry-delay 10 -C - --limit-rate "$RATE" -s -H @<(printf 'Authorization: Bearer %s\n' "$(tok)") -o "$3" "https://huggingface.co/$1/resolve/main/$2" &
+    local pid=$! stop=0
+    while kill -0 "$pid" 2>/dev/null; do sleep 10
+      if busy || { [ "$big" = 1 ] && ! night; }; then kill "$pid"; wait "$pid" 2>/dev/null; stop=1; log "paused $1/$2"; break; fi
+    done
+    [ "$stop" = 1 ] && continue
+    if wait "$pid"; then log "done $1/$2 $(stat -c %s "$3") bytes"; return 0; fi
+    log "FAIL $1/$2"; return 1
+  done
+}
+files() { curl -s -H "Authorization: Bearer $(tok)" "https://huggingface.co/api/models/$1" | python3 -c 'import json,sys;[print(s["rfilename"]) for s in json.load(sys.stdin).get("siblings",[])]'; }
+get hexgrad/Kokoro-82M voices/hf_alpha.pt "$B/kokoro-82m/voices/hf_alpha.pt"
+for f in tokenizer.json ve.safetensors t3_cfg.safetensors t3_mtl23ls_v2.safetensors t3_mtl23ls_v3.safetensors; do get ResembleAI/chatterbox "$f" "$B/chatterbox/$f"; done
+until [ -n "$(tok)" ]; do log "waiting for HF_TOKEN in .env"; sleep 600; done
+for f in $(files ai4bharat/IndicF5); do get ai4bharat/IndicF5 "$f" "$B/indicf5/$f"; done
+for f in $(files ai4bharat/indic-parler-tts); do get ai4bharat/indic-parler-tts "$f" "$B/indic-parler-tts/$f"; done
+for f in $(files canopylabs/orpheus-3b-0.1-ft | grep -vE '^(optimizer\.bin|pytorch_model_fsdp\.bin)$'); do get canopylabs/orpheus-3b-0.1-ft "$f" "$B/orpheus-3b-0.1-ft/$f"; done
+log "ALL FINISHED"
