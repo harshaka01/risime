@@ -36,22 +36,22 @@ curl -sf --max-time 3 http://127.0.0.1:8230/health >/dev/null || fail "risime-tt
 ss -ltnH "sport = :$LK_PORT" | grep -q . && fail "port $LK_PORT busy"
 
 if [ "$pilot_like" = 1 ]; then
-  # The pilot's node_ip (the public address, NAT 1:1) with loopback media and the loopback candidate:
-  # does the 1:1 rewrite leave a candidate a process on spark2 (the worker) can reach? Media still
-  # binds 127.0.0.1 only (rule 6).
+  # The pilot's config as it is (node_ip = the public address, NAT 1:1, loopback candidate on) with only
+  # the LAN address dropped: does the 1:1 rewrite leave a candidate a process on spark2 (the worker) can
+  # reach? Media binds 127.0.0.1 only (rule 6).
   sed -e "s/^port: 7880/port: $LK_PORT/" \
       -e 's/^  port_range_start: .*/  port_range_start: 41900/' \
       -e 's/^  port_range_end: .*/  port_range_end: 41999/' \
-      -e 's#^      - 10\.20\.20\.15/32#      - 127.0.0.1/32#' \
-      -e 's/^  enable_loopback_candidate: .*/  enable_loopback_candidate: true/' \
+      -e '/^      - 10\.20\.20\.15\/32/d' \
       infra/livekit/livekit.yaml > "$tmp/livekit.yaml"
+  grep -q '^  enable_loopback_candidate: true' "$tmp/livekit.yaml" || fail "the pilot config has no loopback candidate"
+  grep -q '^      - 127\.0\.0\.1/32' "$tmp/livekit.yaml" || fail "the pilot config doesn't include 127.0.0.1"
 else
   sed -e "s/^port: 7880/port: $LK_PORT/" \
       -e 's/^  port_range_start: .*/  port_range_start: 41900/' \
       -e 's/^  port_range_end: .*/  port_range_end: 41999/' \
       -e 's/^  node_ip: .*/  node_ip: 127.0.0.1/' \
-      -e 's#^      - 10\.20\.20\.15/32#      - 127.0.0.1/32#' \
-      -e 's/^  enable_loopback_candidate: .*/  enable_loopback_candidate: true/' \
+      -e '/^      - 10\.20\.20\.15\/32/d' \
       -e 's/^    - host: 203\.189\.69\.76/    - host: 127.0.0.1/' \
       infra/livekit/livekit.yaml > "$tmp/livekit.yaml"
   ! grep -q '10\.20\.20\.15\|203\.189\.69\.76\|203\.115\.26\.139' <(grep -v '^ *#' "$tmp/livekit.yaml") || fail "public address left in the throwaway config"

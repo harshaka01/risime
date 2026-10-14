@@ -24,11 +24,15 @@ rtc:
   # discovery. Host candidates on 10.20.20.15 are rewritten to it (NAT1To1).
   use_external_ip: false
   node_ip: 203.189.69.76
-  # Gather and bind on spark2's LAN address only (not loopback, Docker bridges, Tailscale, IPv6).
+  # Gather and bind on spark2's LAN address (not Docker bridges, Tailscale, IPv6), plus loopback for
+  # Call Risi (decision 090, contract v1.48 §41): Risi's media worker runs on spark2 itself and the edge
+  # doesn't hairpin 203.189.69.76, so it needs the 127.0.0.1 candidate. Loopback is reachable only from
+  # this host (rule 6). Root applies this at a deploy (restart of risime-livekit).
   ips:
     includes:
       - 10.20.20.15/32
-  enable_loopback_candidate: false
+      - 127.0.0.1/32
+  enable_loopback_candidate: true
   # Our coturn, handed to clients in the join response. Credentials are TURN REST
   # (HMAC-SHA1 over "<expiry>:<id>") from the same TURN_SECRET coturn uses (decision 046);
   # ttl 5 h like the 1:1 credentials, longer than the 4-h maximum call.
