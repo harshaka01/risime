@@ -12,9 +12,11 @@ route.
   tonight, minus the 4 GB floor); it runs with the encoder streamed layer by layer (below).
 - **omniASR-CTC-7B: downloading** (started 22:39 UTC, ~2 h at the line's ~3.4 MB/s; the night window
   closes 00:30 UTC, so it finishes on a later night). **LLM-3B / CTC-3B: not downloaded tonight.**
-- Compare mode: omniASR-LLM-1B is a candidate (off by default, see "Compare mode"). **LLM-7B is
-  not a compare candidate:** it only runs streamed (an offline eval path); resident it needs 15.6 GB,
-  which the service's memory floor refuses.
+- Compare mode: omniASR-LLM-1B is the default compare candidate (off by default, see "Compare
+  mode"). **omniASR-LLM-7B is a compare-only candidate** (Harsha 2026-10-14): the service runs it
+  with the encoder streamed per request (it can't be resident: 15.6 GB); it is a tick on the
+  console's Speech page Test card, "omniASR 7B (compare only, slow)", not pre-ticked and not in the
+  default list. Never a production route.
 
 ## Licence
 **Apache-2.0** for code and weights: `LICENSE` of facebookresearch/omnilingual-asr ("Licensed under
@@ -127,6 +129,16 @@ speech and on real Singlish (49.0% vs 27.5% CER), and it also writes English in 
   to `.env`, restart `risime.service`. Cost: a compare session loads LLM-1B (~4.4 GB of unified memory
   for up to 180 s after the last chunk), which can push risime-whisper's own pool into its memory
   fallback while it is loaded. So enable it for a test session, not permanently, until memory allows.
+- **omniASR-LLM-7B, compare only (slow):** served with the encoder streamed per request (the
+  stream_eval method, validated identical to the resident model on the 1B): ~2.8 GB resident, the
+  128 encoder layers read from the checkpoint for every request (pages dropped after use), floor
+  checked at load and per layer. Asked only when ticked on the console ("omniASR 7B (compare only,
+  slow)") or named in `opts[:extra_models]`; 180 s timeout (`RISI_SPEECH_COMPARE_EXTRA_TIMEOUT_MS`).
+  Time per clip: to be measured after the nightly.7 gates (estimate from the eval run: ~15-20 s for
+  a 5-10 s clip).
+- **Console:** the Speech page's Test card lists the omniASR models as compare-only ticks; the
+  Models table marks them "compare only"; they are never offered as a language's route
+  (`SpeechRoutes.put` refuses them).
 
 ## Memory and load (GB10 unified memory; risi-l1 = 47.5 GB GPU, untouched)
 | Model | bf16 weights | Resident: CUDA / host MemAvailable drop | Load | Next to risi-l1? |

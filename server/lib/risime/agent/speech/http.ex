@@ -17,9 +17,14 @@ defmodule RisiMe.Agent.Speech.Http do
     with the same `/v1/audio/compare` (the omniASR eval service, `infra/omniasr`), it is asked
     after the speech service, with the detected language and `models` =
     `compare_extra_models` (else `RISI_SPEECH_COMPARE_EXTRA_MODELS`, default
-    `omniasr-llm-1b`), and its results are appended (same §36.11 result shape; `chosen` and
-    `language_detected` stay the speech service's). Its failure or timeout only marks those
-    models `failed` / `timeout`. Off by default; `transcribe/1,2` never uses it.
+    `omniasr-llm-1b`; `opts[:extra_models]` overrides it per call, `[]` = none; the console
+    can tick the streamed omniasr-llm-7b),
+    and its results are appended (same §36.11 result shape; `chosen` and `language_detected`
+    stay the speech service's). Each extra model gets `compare_extra_timeout_ms` (else
+    `RISI_SPEECH_COMPARE_EXTRA_TIMEOUT_MS`, default 180 s: omniasr-llm-7b streams its encoder
+    per request and is slow). Its failure or timeout only marks those models `failed` /
+    `timeout`. Off by default; `transcribe/1,2` never uses it. `extra_models/0` lists what the
+    extra service serves (the console's compare-only candidates).
   * **Health:** `GET /health`, cached 15 s.
   * **Language hint** (decision 071 amendment d): `opts[:language_hint]` (`["si", "en"]`) is
     sent as the multipart field `language_hint=si,en` on transcribe and compare (and the
@@ -288,6 +293,7 @@ defmodule RisiMe.Agent.Speech.Http do
   defp with_extra(c, audio, opts) do
     case extra() do
       {:ok, base, models} ->
+        models = Keyword.get(opts, :extra_models, models)
         models = Enum.reject(models, fn m -> Enum.any?(c.results, &(&1.model == m)) end)
         %{c | results: c.results ++ extra_results(base, models, c, audio, opts)}
 
@@ -298,8 +304,8 @@ defmodule RisiMe.Agent.Speech.Http do
 
   defp extra_results(_base, [], _c, _audio, _opts), do: []
 
-  defp extra_results(base, models, c, audio, opts) do
-    timeout = Keyword.get(opts, :timeout, @timeout_ms)
+  defp extra_results(base, models, c, audio, _opts) do
+    timeout = extra_timeout()
 
     fields = [
       file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"},
@@ -318,6 +324,47 @@ defmodule RisiMe.Agent.Speech.Http do
 
   defp missing(model, error, ms),
     do: %{model: model, text: nil, language: nil, elapsed_ms: ms, error: error}
+
+  @doc """
+  The models the extra compare service serves: `{:ok, [%{id, streamed}]}`, or
+  `{:error, :off | :unavailable}`. Compare-only: never a production route.
+  """
+  def extra_models do
+    with {:ok, base, _} <- extra(),
+         {:ok, %{status: 200, body: %{"data" => data}}} when is_list(data) <-
+           Req.get(req(base <> "/v1/models", 5_000)) do
+      {:ok,
+       for(%{"id" => id} = m <- data, do: %{id: to_string(id), streamed: m["streamed"] == true})}
+    else
+      :off -> {:error, :off}
+      _ -> {:error, :unavailable}
+    end
+  end
+
+  @doc "The default extra compare models (configured list)."
+  def extra_default_models do
+    case extra() do
+      {:ok, _, models} -> models
+      :off -> []
+    end
+  end
+
+  defp extra_timeout do
+    case config()[:compare_extra_timeout_ms] ||
+           System.get_env("RISI_SPEECH_COMPARE_EXTRA_TIMEOUT_MS") do
+      ms when is_integer(ms) and ms > 0 ->
+        ms
+
+      ms when is_binary(ms) ->
+        case Integer.parse(ms) do
+          {n, ""} when n > 0 -> n
+          _ -> 180_000
+        end
+
+      _ ->
+        180_000
+    end
+  end
 
   defp extra do
     cfg = config()

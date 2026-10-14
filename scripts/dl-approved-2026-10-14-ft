@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Harsha 2026-10-14 06:09 SLT (decision 7): fine-tune Sinhala ASR "starting from public data now" (CLAUDE.md rule 10).
+#   Qwen/Qwen3-ASR-1.7B (4.70 GB, Apache-2.0) → ~/risime-eval-models/qwen3-asr-1.7b
+#   OpenSLR 52 Large Sinhala ASR (16 zips + utt_spk_text.tsv, 14.7 GB, CC BY-SA 4.0) → ~/risime-eval-data/openslr52
+# Night window only (16:30–00:30 UTC): waits for it to open, 10 MB/s, pauses for release gates or the PAUSE file,
+# resumable. Log: ~/risime-eval-data/dl/downloads-2026-10-14-ft.log.
+set -u
+RATE="${DL_RATE:-10M}"; PAUSE_FILE="${DL_PAUSE_FILE:-$HOME/risime-eval-data/dl/PAUSE}"
+L="$HOME/risime-eval-data/dl/downloads-2026-10-14-ft.log"; B="$HOME/risime-eval-models"; D="$HOME/risime-eval-data/openslr52"
+mkdir -p "$(dirname "$L")" "$D"
+log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$L"; }
+in_window() { local h; h=$((10#$(date -u +%H%M))); [ "$h" -ge 1630 ] || [ "$h" -lt 30 ]; }
+busy() { pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null || [ -e "$PAUSE_FILE" ]; }
+fetch() { # url dest
+  mkdir -p "$(dirname "$2")"
+  log "start $1 (rate $RATE)"
+  while :; do
+    while ! in_window || busy; do sleep 60; done
+    curl -fL --retry 5 --retry-delay 10 -C - --limit-rate "$RATE" -s -o "$2" "$1" &
+    local pid=$! stop=0
+    while kill -0 "$pid" 2>/dev/null; do
+      sleep 10
+      if busy || ! in_window; then kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; stop=1; log "paused $1"; break; fi
+    done
+    [ "$stop" = 1 ] && continue
+    if wait "$pid"; then log "done $1 $(stat -c %s "$2") bytes"; return 0; fi
+    log "FAIL $1"; return 1
+  done
+}
+for f in $(curl -s https://huggingface.co/api/models/Qwen/Qwen3-ASR-1.7B | python3 -c 'import json,sys;[print(s["rfilename"]) for s in json.load(sys.stdin)["siblings"]]'); do
+  fetch "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/main/$f" "$B/qwen3-asr-1.7b/$f"
+done
+fetch https://www.openslr.org/resources/52/utt_spk_text.tsv "$D/utt_spk_text.tsv"
+for x in 0 1 2 3 4 5 6 7 8 9 a b c d e f; do fetch "https://openslr.org/resources/52/asr_sinhala_$x.zip" "$D/asr_sinhala_$x.zip"; done
+log "ALL FINISHED"

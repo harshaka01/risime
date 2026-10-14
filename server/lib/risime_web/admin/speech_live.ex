@@ -6,7 +6,9 @@ defmodule RisiMeWeb.Admin.SpeechLive do
     (`RisiMe.Agent.SpeechRoutes`). Saving applies within 5 s, no deploy; audit-logged.
   * Test: a clip from the dev test-clip directory (`RisiMe.Admin.TestClips`, never customer
     voice notes) through `RisiMe.Agent.Speech.compare/2`: every candidate side by side with its
-    text and seconds. Audit-logged (the clip's name only).
+    text and seconds. Audit-logged (the clip's name only). Compare-only candidates from the
+    extra compare service (omniASR, `RISI_SPEECH_COMPARE_EXTRA_URL`) can be ticked per test, e.g.
+    "omniASR 7B (compare only, slow)"; they are never offered as a language's route.
   * The last admin actions (from the audit log).
   """
   use RisiMeWeb, :live_view
@@ -28,6 +30,8 @@ defmodule RisiMeWeb.Admin.SpeechLive do
       socket
       |> assign(:page_title, "Speech models · RisiMe admin")
       |> assign(:installed, :loading)
+      |> assign(:extra, [])
+      |> assign(:extra_picked, [])
       |> assign(:clips, TestClips.list())
       |> assign(:clips_dir?, TestClips.dir() != nil)
       |> assign(:clip, nil)
@@ -43,7 +47,20 @@ defmodule RisiMeWeb.Admin.SpeechLive do
 
   @impl true
   def handle_info(:load_installed, socket) do
-    {:noreply, assign(socket, :installed, SpeechRoutes.installed())}
+    extra =
+      case RisiMe.Agent.Speech.extra_models() do
+        {:ok, ms} -> ms
+        _ -> []
+      end
+
+    ids = Enum.map(extra, & &1.id)
+    picked = Enum.filter(RisiMe.Agent.Speech.extra_default_models(), &(&1 in ids))
+
+    {:noreply,
+     socket
+     |> assign(:installed, SpeechRoutes.installed())
+     |> assign(:extra, extra)
+     |> assign(:extra_picked, picked)}
   end
 
   @impl true
@@ -71,11 +88,14 @@ defmodule RisiMeWeb.Admin.SpeechLive do
     {:noreply, socket |> assign(:notice, notice) |> load_choices() |> load_audit()}
   end
 
-  def handle_event("pick_clip", %{"clip" => clip}, socket) do
-    {:noreply, assign(socket, :clip, if(clip in socket.assigns.clips, do: clip))}
+  def handle_event("pick_clip", %{"clip" => clip} = params, socket) do
+    {:noreply,
+     socket
+     |> assign(:clip, if(clip in socket.assigns.clips, do: clip))
+     |> assign(:extra_picked, picked_extra(params, socket))}
   end
 
-  def handle_event("test", %{"clip" => clip}, socket) do
+  def handle_event("test", %{"clip" => clip} = params, socket) do
     cond do
       socket.assigns.test == :running ->
         {:noreply, socket}
@@ -85,14 +105,16 @@ defmodule RisiMeWeb.Admin.SpeechLive do
 
       true ->
         Admin.audit(socket.assigns.admin_id, "speech_test", "clip:" <> clip)
+        extra = picked_extra(params, socket)
 
         socket =
           socket
           |> assign(:clip, clip)
+          |> assign(:extra_picked, extra)
           |> assign(:test, :running)
           |> start_async(:compare, fn ->
             with {:ok, audio} <- TestClips.read(clip) do
-              RisiMe.Agent.Speech.compare(audio, [])
+              RisiMe.Agent.Speech.compare(audio, extra_models: extra)
             end
           end)
           |> load_audit()
@@ -113,6 +135,26 @@ defmodule RisiMeWeb.Admin.SpeechLive do
 
   def handle_async(:compare, {:exit, _reason}, socket) do
     {:noreply, assign(socket, :test, {:error, :failed})}
+  end
+
+  # Ticked compare-only candidates, limited to what the extra service serves.
+  defp picked_extra(params, socket) do
+    ids = Enum.map(socket.assigns.extra, & &1.id)
+    params |> Map.get("extra", []) |> List.wrap() |> Enum.filter(&(&1 in ids))
+  end
+
+  @doc false
+  def extra_label(%{id: id} = m) do
+    size =
+      cond do
+        SpeechRoutes.omni_7b?(id) -> "omniASR 7B"
+        SpeechRoutes.omni_3b?(id) -> "omniASR 3B"
+        SpeechRoutes.omni_1b?(id) -> "omniASR 1B"
+        true -> id
+      end
+
+    kind = if id =~ ~r/ctc/i, do: " CTC", else: ""
+    size <> kind <> if(m[:streamed], do: " (compare only, slow)", else: " (compare only)")
   end
 
   defp load_choices(socket) do
@@ -200,14 +242,16 @@ defmodule RisiMeWeb.Admin.SpeechLive do
             <th>Family</th>
             <th>On this server</th>
           </tr>
-          <tr :for={f <- catalogue(@installed)}>
+          <tr :for={f <- catalogue(@installed, @extra)}>
             <td>{f.family}</td>
             <td>
               <span :if={f[:phone]} class="muted">
                 On the phone only (developer flag phone_stt), not a server model
               </span>
               <span :if={!f[:phone] and f.installed == []} class="muted">not installed</span>
-              <span :if={f.installed != []} class="ok">{Enum.join(f.installed, ", ")}</span>
+              <span :if={f.installed != []} class="ok">
+                {Enum.map_join(f.installed, ", ", &compare_only_tag(&1, @extra))}
+              </span>
             </td>
           </tr>
         </table>
@@ -227,6 +271,10 @@ defmodule RisiMeWeb.Admin.SpeechLive do
           <select name="clip" aria-label="Test clip">
             <option :for={c <- @clips} value={c} selected={c == @clip}>{c}</option>
           </select>
+          <label :for={m <- @extra}>
+            <input type="checkbox" name="extra[]" value={m.id} checked={m.id in @extra_picked} />
+            {extra_label(m)}
+          </label>
           <button class="btn primary" type="submit" disabled={@test == :running}>
             {if @test == :running, do: "Running…", else: "Test"}
           </button>
@@ -310,8 +358,21 @@ defmodule RisiMeWeb.Admin.SpeechLive do
       else: ms ++ [%{id: choice, language: "not installed"}]
   end
 
-  defp catalogue({:ok, %{models: models}}), do: SpeechRoutes.catalogue(models)
-  defp catalogue(_), do: SpeechRoutes.catalogue([])
+  # The families, including the extra compare service's models (shown "compare only"; they are
+  # never offered as a route: `candidates/3` only sees the speech service's models).
+  defp catalogue(installed, extra) do
+    models =
+      case installed do
+        {:ok, %{models: models}} -> models
+        _ -> []
+      end
+
+    SpeechRoutes.catalogue(models ++ Enum.map(extra, &%{id: &1.id}))
+  end
+
+  defp compare_only_tag(id, extra) do
+    if Enum.any?(extra, &(&1.id == id)), do: id <> " (compare only)", else: id
+  end
 
   defp auto_route({:ok, %{routes: routes}}, lang), do: Map.get(routes, lang, "-")
   defp auto_route(_, _), do: "-"
