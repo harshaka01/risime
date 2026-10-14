@@ -33,6 +33,18 @@ Replace the v1.47 "Server / Risi" paragraph "In v1.47 Risi **ignores it**…" wi
 - **Never a primary path:** Risi never skips its own model because a phone transcript exists (the compare view and
   the Voice agent's transcription Index keep scoring both).
 
+## Addendum (2026-10-14, later): Harsha's Google transcript
+- Harsha opted in (his own notes, Official and the Risi chat) to a phone transcript from Google's **online**
+  recogniser: `phone_transcript.engine = "android-online-google"`. Note: this relaxes the §37.10 sender rule
+  "on-device only" **for his opt-in only**; that sender-side change needs its own line in §37.10 (root).
+- A Risi post taken from it carries `"source": "phone"` **and `"engine": "android-online-google"`**, and
+  `model: "phone-google"`. Phones render it as **"Transcript (Google)"** (any other engine: "Transcript (sender's
+  phone)").
+- For a dev user's own notes the server uses it as the fallback even while `RISI_VOICE_PHONE_FALLBACK` is off
+  (his choice): when our model fails the hallucination guard, or when the Voice agent's route decision for him is
+  `phone` (Google leads on his labelled notes; our model takes over once it beats Google through the promotion
+  rule, docs/status/asr-harsha-gold.md).
+
 ## Example
 `envelope_risi_voice_transcript_phone.json`: `envelope_risi_voice_transcript.json` with `"model":
 "phone-on-device"`, `"source": "phone"`, `"made_by": {"model": "phone-on-device", "provider": "phone", "at": …,
