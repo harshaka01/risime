@@ -1009,8 +1009,9 @@ defmodule RisiMe.Agent.Turn do
 
   defp draft_step(st, _ctx, _name, _args, _ok?, _result), do: st
 
+  # Principle 4: every tool runs through the consequential-action guard (`ActionGuard.run/3`).
   defp run_tool(tool, args, ctx) do
-    case tool.run.(args, ctx) do
+    case RisiMe.Agent.ActionGuard.run(tool, args, ctx) do
       {:ok, result, meta} ->
         {"ok", result, meta}
 

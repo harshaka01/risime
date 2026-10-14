@@ -79,6 +79,8 @@ defmodule RisiMe.Agent.TurnS11Test do
           where: :server,
           personal: false,
           write: true,
+          # Principle 4: a write the guard's allow list doesn't know must declare itself.
+          consequential: false,
           finds: false,
           args: %{"type" => "object", "properties" => %{}, "additionalProperties" => false},
           run: fn _args, _ctx -> {:ok, %{"proposed" => true}, %{}} end
