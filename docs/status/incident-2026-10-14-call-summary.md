@@ -83,3 +83,54 @@ action items.
   (ac3ad1ea, canary) went out with it.
 - The compare night run and the evals stay paused (`~/risime-logs/speech-guard/speech-eval.pause`) until Harsha's
   next real Official call shows its card.
+
+## 15 Oct: long call, items but no summary (P0)
+**Reported:** 04:43 SLT 15 Oct by Harsha. A ~57-min Official call with a colleague on v0.3.0-nightly.8 posted action
+items but no summary. The call had two transcription sessions: 21:37–21:58 UTC (`stopped`) and 22:00–22:36 (`ended`).
+
+**Evidence (read-only rpc, logs):**
+- Summary jobs 4935 and 4989 both completed on attempt 1, in 8 s and 24 s. There were no warnings in `server.log`.
+- Each session has one `risi_discussions` row with `source: call` and **0 key points**: 2 and 9 items, and a
+  one-line summary of 104 and 181 characters.
+- The learning log has one `extract_actions` row per session (risi-l1, `status: ok`):
+  - prompt 9,448 and 15,723 tokens, from 195 and 322 lines;
+  - completion 252 and 911 tokens, well under `max_tokens` 2,000, so nothing was truncated;
+  - there was no `discussion_summarise` call.
+
+**Cause:**
+1. With RISI_ACTION_ITEMS on (canary: Harsha is a dev user), a call **with** items took only the §38 path. It
+   posted the `action_items` card, and the only "summary" was that card's optional one-line `summary` field. The
+   §27 discussion summary (key points) was never made or posted. The 14 Oct fix covered only calls with **zero** items.
+2. The whole transcript went to the model in **one** prompt. This call fitted: 36 min was 15.7k tokens, against
+   risi-l1's 32k context and 60-s timeout. But `Prompts.render` keeps only the newest 60,000 characters, about
+   38 min of talk, so a longer call would silently lose its start.
+
+**Fix (server, fast lane):**
+- Every transcribed call is now summarised **in sections**: at most 16,000 characters and 10 min each
+  (`CallTranscribe.Sections`).
+  - Each section gets its own extraction. Then one small `call_summary_reduce` call merges the key points and
+    one-line summaries. If that call fails, the server merges them without the model.
+  - Items are merged and de-duplicated.
+  - A failed section is skipped, with one line: "I couldn't summarise minutes 10–20 of this call; the summary covers
+    the rest."
+  - If every section fails, Risi says "I couldn't summarise this call just now…" once, as on 14 Oct, and the job
+    retries.
+- With items found, the call posts its **summary card** (`discussion_card`: the line and key points) **and** the
+  `action_items` card, with the same `summary_id`. The extraction now also returns `key_points`. Both kinds already
+  exist in the contract, so there is no wire change. Strictly, §38.1 says `action_items` *replaces*
+  `discussion_card`; the contract text should be updated to say "with" (root).
+- The action-items-off path (`Ledger.call_ended`) is sectioned the same way.
+- **Tests:** `server/test/risime/agent/call_summary_long_call_test.exs` has 7 tests:
+  - a call with items gets its summary;
+  - a 30-min call is split into 3 sections plus a reduce, and posts one card;
+  - a failed section;
+  - a failed reduce;
+  - all sections failed;
+  - the action-items-off path;
+  - the split limits.
+
+  The agent suite passes (777 tests).
+- **Gate:** `scripts/call-summary-test` now runs with `RISI_CALL_SECTION_S=20` (`CS_SECTION_S`), so its one-minute
+  calls take the long-call path. In run 1 (one item), the summary card's key points must show next to the items on
+  both phones. A real 30-min call isn't run on redroid because it would hold the gate for 30 min; the 30-min
+  transcript is covered by the server test above.
