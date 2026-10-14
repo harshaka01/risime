@@ -1,0 +1,1 @@
+# ids of consented pilot ledger cases (the cases are sealed on spark2, see ../README.md); one id per line

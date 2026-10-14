@@ -322,8 +322,12 @@ def build(data):
                               "in_training_of": PROVENANCE["fleurs-en"]})
     real = os.path.join(data, "real")
     have_real_cs = set()
-    for lang in ("si", "ta", "en", "si+en", "ta+en"):
-        d = os.path.join(real, lang)
+    # real/<lang>/ = one sentence per clip; real/notes-<lang>/ = 20-40 s work voice notes read from a
+    # script (docs/status/asr-recordings-plan.md), set "real-notes", same NN-<speaker> naming.
+    folders = [(lang, lang, "real") for lang in ("si", "ta", "en", "si+en", "ta+en")]
+    folders += [("notes-" + lang, lang, "real-notes") for lang in ("si", "ta", "en", "si+en")]
+    for folder, lang, set_name in folders:
+        d = os.path.join(real, folder)
         sent = os.path.join(d, "sentences.txt")
         if not os.path.exists(sent):
             continue
@@ -339,11 +343,11 @@ def build(data):
                 print(f"skip {lang}/{name}: no sentence line {num}", file=sys.stderr)
                 continue
             p = os.path.join(d, name)
-            clips.append({"id": f"real-{lang}-{stem}", "set": "real", "lang": lang, "audio": p,
+            clips.append({"id": f"real-{folder}-{stem}", "set": set_name, "lang": lang, "audio": p,
                           "text": lines[int(num) - 1], "duration_s": duration(p), "kind": "real",
                           "speaker": speaker or "?", "source": "in-house recording",
                           "licence": LICENCE["real"], "in_training_of": PROVENANCE["real"]})
-            if "+" in lang:
+            if "+" in lang and set_name == "real":
                 have_real_cs.add(lang)
     clips += synth_cs(data, clips, skip=have_real_cs)
     return clips
