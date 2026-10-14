@@ -23,13 +23,28 @@ enum class VoicePlace { PRIVATE, OFFICIAL, RISI_CHAT }
  * when the @Risi chip is on ([toRisi], proposal 2026-10-14-spoken-risi §37.11: the note is a request to Risi).
  */
 object VoiceStamp {
-    fun meta(note: RecordedNote, place: VoicePlace, transcribeMine: Boolean, toRisi: Boolean = false, newRequestId: () -> String = { UUID.randomUUID().toString() }) = VoiceMeta(
+    fun meta(
+        note: RecordedNote,
+        place: VoicePlace,
+        transcribeMine: Boolean,
+        toRisi: Boolean = false,
+        othersMayTranscribe: Boolean = true,
+        newRequestId: () -> String = { UUID.randomUUID().toString() },
+    ) = VoiceMeta(
         mime = VoiceEnvelope.MIME_OGG_OPUS,
         durationMs = note.durationMs,
         waveform = Base64.getEncoder().encodeToString(note.waveform),
         transcribe = transcribeStamp(place, transcribeMine),
         requestId = if (place == VoicePlace.RISI_CHAT || (place == VoicePlace.OFFICIAL && toRisi)) newRequestId() else null,
+        allowTranscribe = allowTranscribeStamp(place, othersMayTranscribe),
     )
+
+    /**
+     * Decision 092 `allow_transcribe`: `false` only in Private while the sender's "Let others transcribe my voice notes"
+     * is off; otherwise absent (the v1.47 bytes).
+     */
+    fun allowTranscribeStamp(place: VoicePlace, othersMayTranscribe: Boolean): Boolean? =
+        if (place == VoicePlace.PRIVATE && !othersMayTranscribe) false else null
 
     /** §37.2 `transcribe`: `false` only in Official while the sender's setting is off; otherwise absent. */
     fun transcribeStamp(place: VoicePlace, transcribeMine: Boolean): Boolean? = if (place == VoicePlace.OFFICIAL && !transcribeMine) false else null
@@ -53,6 +68,8 @@ class VoiceNotes(
     /** The developer `phone_stt` flag (null or off: the v1.41 path, unchanged). */
     val phoneStt: PhoneSttFlag? = null,
     private val phoneSessions: PhoneSttSessions? = null,
+    /** Decision 092: Settings → "Let others transcribe my voice notes" (default on; off stamps `allow_transcribe: false`). */
+    private val othersMayTranscribe: () -> Boolean = { true },
 ) {
     private val _serverTranscribeOn = MutableStateFlow(prefs?.getBoolean(KEY_SERVER, false) ?: false)
 
@@ -151,7 +168,7 @@ class VoiceNotes(
      * [stt] (flag on only) waits briefly for the phone's final text and attaches it as `phone_transcript`.
      */
     suspend fun send(conversationId: String, note: RecordedNote, replyTo: ReplyRef?, stt: PhoneSttSessionHandle? = null, toRisi: Boolean = false, notice: (String) -> Unit = {}): MessageEntity? = try {
-        val meta = VoiceStamp.meta(note, place(conversationId), _transcribeMine.value, toRisi = toRisi)
+        val meta = VoiceStamp.meta(note, place(conversationId), _transcribeMine.value, toRisi = toRisi, othersMayTranscribe = othersMayTranscribe())
         val phone = stt?.let { phoneTranscriptOf(it.await(PhoneSttPolicy.waitMs(note.durationMs)), notice) }
         commit(note.audio, conversationId, if (phone == null) meta else meta.copy(phoneTranscript = phone), replyTo)
     } finally {

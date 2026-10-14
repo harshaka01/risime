@@ -36,8 +36,9 @@ object PhoneSttGate {
 
 /**
  * The on-device recogniser. **The only construction point** is [newOnDevice] →
- * `SpeechRecognizer.createOnDeviceSpeechRecognizer`; the online recogniser is never built (a unit test scans the
- * sources for it). Audio comes from the app (`EXTRA_AUDIO_SOURCE`: 16 kHz mono PCM16 through a pipe), never the
+ * `SpeechRecognizer.createOnDeviceSpeechRecognizer`. The online recogniser is never built here: its one guarded
+ * construction site is [OnlineRecogniser] (decision 092), which reuses this class's [Session] with its own factory
+ * (a unit test scans the sources for both). Audio comes from the app (`EXTRA_AUDIO_SOURCE`: 16 kHz mono PCM16 through a pipe), never the
  * microphone and never the network. Every platform call runs on the main thread, as SpeechRecognizer requires.
  */
 class AndroidPhoneRecogniser(private val context: Context, private val log: (String) -> Unit = {}) {
@@ -48,10 +49,10 @@ class AndroidPhoneRecogniser(private val context: Context, private val log: (Str
     @RequiresApi(PhoneSttGate.MIN_SDK)
     private fun newOnDevice(): SpeechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
 
-    private fun intent(tag: String) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+    private fun intent(tag: String, online: Boolean = false) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, !online)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
     }
@@ -112,11 +113,22 @@ class AndroidPhoneRecogniser(private val context: Context, private val log: (Str
     fun session(tag: String, pacedRealTime: Boolean = false): Session = Session(tag, pacedRealTime)
 
     /**
+     * Decision 092: a session on a recogniser [create]d by the caller. Only [OnlineRecogniser] calls this, after its
+     * guard; the on-device precheck is skipped (the online service isn't on-device).
+     */
+    internal fun sessionWith(tag: String, create: () -> SpeechRecognizer): Session = Session(tag, false, online = true, create = create)
+
+    /**
      * One recognition over app-supplied audio. [feed] takes 48 kHz mono PCM16 (the recorder's frames or a decoded note),
      * converts to 16 kHz and queues it; a writer thread pushes it into the pipe the recogniser reads, so [feed] never
      * blocks the recorder. [end] closes the stream; the segmented session then ends with the final text.
      */
-    inner class Session internal constructor(private val tag: String, private val paced: Boolean) : PhoneSttSessionHandle {
+    inner class Session internal constructor(
+        private val tag: String,
+        private val paced: Boolean,
+        private val online: Boolean = false,
+        private val create: (() -> SpeechRecognizer)? = null,
+    ) : PhoneSttSessionHandle {
         private val result = CompletableDeferred<PhoneSttResult>()
         private val queue = LinkedBlockingQueue<ByteArray>()
         private val conv = Pcm48To16()
@@ -130,8 +142,11 @@ class AndroidPhoneRecogniser(private val context: Context, private val log: (Str
 
         /** Starts listening; false (and [await] answers why) when on-device recognition can't run. */
         override fun start(): Boolean {
-            precheck()?.let { result.complete(PhoneSttResult.NotAvailable(it)); return false }
-            if (Build.VERSION.SDK_INT < PhoneSttGate.MIN_SDK) return false
+            if (!online) precheck()?.let { result.complete(PhoneSttResult.NotAvailable(it)); return false }
+            if (Build.VERSION.SDK_INT < PhoneSttGate.MIN_SDK) {
+                result.complete(PhoneSttResult.NotAvailable(PhoneSttSupport.NEEDS_ANDROID_13.label))
+                return false
+            }
             val pipe = runCatching { ParcelFileDescriptor.createPipe() }.getOrElse { result.complete(PhoneSttResult.Failed("no pipe", 0)); return false }
             read = pipe[0]
             write = pipe[1]
@@ -143,13 +158,13 @@ class AndroidPhoneRecogniser(private val context: Context, private val log: (Str
         @RequiresApi(PhoneSttGate.MIN_SDK)
         private fun startOnMain() {
             if (closed) return
-            val r = runCatching { newOnDevice() }.getOrElse {
+            val r = runCatching { create?.invoke() ?: newOnDevice() }.getOrElse {
                 finish(PhoneSttResult.NotAvailable(PhoneSttSupport.NO_RECOGNISER.label))
                 return
             }
             recogniser = r
             r.setRecognitionListener(listener)
-            val i = intent(tag).apply {
+            val i = intent(tag, online).apply {
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, read)
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)

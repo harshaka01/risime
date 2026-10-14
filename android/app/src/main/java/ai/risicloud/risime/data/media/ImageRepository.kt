@@ -335,7 +335,7 @@ class ImageRepository(
             return VoiceEnvelope(
                 BlobRef(blobId, row.blobSize, row.blobSha256), sealer.openEnc(clientMsgId, row.sealedEnc), meta.mime, meta.durationMs, meta.levels,
                 transcribe = meta.transcribe?.takeIf { !it }, requestId = meta.requestId, extras = extras,
-                phoneTranscript = meta.phoneTranscript,
+                phoneTranscript = meta.phoneTranscript, allowTranscribe = meta.allowTranscribe?.takeIf { !it },
             ).encode()
         }
         if (msg.file) {

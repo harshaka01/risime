@@ -164,6 +164,12 @@ class ApiClient(
     /** Try again: 202 working, 409 running, 410 expired, 404 not_found. */
     suspend fun retryVoiceTranscribe(target: VoiceTranscribeTarget): ApiResult<VoiceTranscribeReply> = call("POST", "me/risi/voice/retry", target)
 
+    /**
+     * Decision 092 (proposal 2026-10-14-private-transcribe §3): the Private translate request. Called **only** after
+     * the user's explicit yes (or their "Don't ask again"); it carries only the text and the target language.
+     */
+    suspend fun translate(req: TranslateRequest): ApiResult<TranslateReply> = call("POST", "translate", req)
+
     // ---- §24 (v1.24) chats and their tabs (tabs devices only) ----
 
     suspend fun chats(deviceId: String): ApiResult<ChatsReply> = call<Unit, ChatsReply>("GET", "chats", null, headers = mapOf(DEVICE_HEADER to deviceId))

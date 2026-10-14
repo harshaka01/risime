@@ -30,7 +30,16 @@ data class VoiceEnvelope(
     val extras: EnvelopeExtras = EnvelopeExtras.NONE,
     /** Proposal 2026-10-14 (v1.47 candidate): the sender phone's own on-device transcript; null = absent (v1.46 bytes). */
     val phoneTranscript: PhoneTranscript? = null,
+    /**
+     * Decision 092 (proposal 2026-10-14-private-transcribe §4) `allow_transcribe`: `false` = the sender doesn't let
+     * readers send this note's audio (or text derived from it) off their phone; on-device recognition stays allowed.
+     * Only `false` is ever written (absent = allowed: v1.47 bytes).
+     */
+    val allowTranscribe: Boolean? = null,
 ) {
+    /** False when the sender opted out of off-phone transcription for this note. */
+    val othersMayTranscribe: Boolean get() = allowTranscribe != false
+
     fun encode(): ByteArray {
         val b64 = Base64.getEncoder()
         return ProtocolJson.encodeToString(
@@ -47,18 +56,21 @@ data class VoiceEnvelope(
                 requestId?.let { put("request_id", it) }
                 extras.putInto(this)
                 phoneTranscript?.let { put(PhoneTranscript.FIELD, it.toJson()) }
+                if (allowTranscribe == false) put(FIELD_ALLOW_TRANSCRIBE, false)
             },
         ).toByteArray(Charsets.UTF_8)
     }
 
     override fun equals(other: Any?) = other is VoiceEnvelope && blob == other.blob && enc == other.enc && mime == other.mime &&
         durationMs == other.durationMs && waveform.contentEquals(other.waveform) && transcribe == other.transcribe &&
-        requestId == other.requestId && extras == other.extras && phoneTranscript == other.phoneTranscript
+        requestId == other.requestId && extras == other.extras && phoneTranscript == other.phoneTranscript &&
+        allowTranscribe == other.allowTranscribe
 
     override fun hashCode() = blob.hashCode() * 31 + waveform.contentHashCode()
 
     companion object {
         const val TYPE = "voice"
+        const val FIELD_ALLOW_TRANSCRIBE = "allow_transcribe"
         const val MIME_OGG_OPUS = "audio/ogg; codecs=opus"
         const val MIME_MP4 = "audio/mp4"
         val MIMES = setOf(MIME_OGG_OPUS, MIME_MP4)
@@ -68,6 +80,16 @@ data class VoiceEnvelope(
 
         /** §37.6: Risi transcribes notes up to 5 min. */
         const val MAX_TRANSCRIBE_MS = 300_000L
+
+        /**
+         * Decision 092: absent / null / `true` = allowed (null); anything else (`false`, or a malformed value) is read
+         * as the opt-out `false`: the privacy-safe reading. The note itself is always kept.
+         */
+        fun allowTranscribeOf(el: kotlinx.serialization.json.JsonElement?): Boolean? = when {
+            el == null || el == JsonNull -> null
+            el is JsonPrimitive && !el.isString && el.content == "true" -> null
+            else -> false
+        }
 
         fun validate(obj: JsonObject): VoiceEnvelope? = runCatching { validateOrThrow(obj) }.getOrNull()
 
@@ -105,6 +127,7 @@ data class VoiceEnvelope(
                 transcribe = transcribe, requestId = requestId, extras = EnvelopeExtras.of(o),
                 // Lenient (proposal 2026-10-14): a malformed `phone_transcript` is ignored, the note is kept.
                 phoneTranscript = PhoneTranscript.parse(o[PhoneTranscript.FIELD]),
+                allowTranscribe = allowTranscribeOf(o[FIELD_ALLOW_TRANSCRIBE]),
             )
         }
     }
@@ -125,7 +148,13 @@ data class VoiceMeta(
     /** Never written when absent, so a note without it stores exactly the v1.46 JSON. */
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("phone_transcript") val phoneTranscript: PhoneTranscript? = null,
+    /** Decision 092: the sender's `allow_transcribe: false` (never written when absent: the v1.47 JSON). */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("allow_transcribe") val allowTranscribe: Boolean? = null,
 ) {
+    /** False when the sender opted out of off-phone transcription for this note (decision 092). */
+    val othersMayTranscribe: Boolean get() = allowTranscribe != false
+
     fun encode(): String = ProtocolJson.encodeToString(serializer(), this)
 
     /** The 64 levels (all zero when the stored value is damaged). */
@@ -133,7 +162,7 @@ data class VoiceMeta(
         ?: ByteArray(VoiceEnvelope.WAVEFORM_LEVELS)
 
     companion object {
-        fun of(e: VoiceEnvelope) = VoiceMeta(e.mime, e.durationMs, Base64.getEncoder().encodeToString(e.waveform), e.transcribe?.takeIf { !it }, e.requestId, e.phoneTranscript)
+        fun of(e: VoiceEnvelope) = VoiceMeta(e.mime, e.durationMs, Base64.getEncoder().encodeToString(e.waveform), e.transcribe?.takeIf { !it }, e.requestId, e.phoneTranscript, e.allowTranscribe?.takeIf { !it })
 
         fun decode(json: String?): VoiceMeta? = json?.let { runCatching { ProtocolJson.decodeFromString(serializer(), it) }.getOrNull() }
     }

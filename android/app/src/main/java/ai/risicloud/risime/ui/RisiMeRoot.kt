@@ -175,6 +175,7 @@ private fun MainNav(c: AppContainer, meId: String) {
                     is ai.risicloud.risime.data.tabs.RisiUiBus.Nav.Note -> nav.navigate("risi_note/${android.net.Uri.encode(req.noteId)}") { launchSingleTop = true }
                     is ai.risicloud.risime.data.tabs.RisiUiBus.Nav.Notes -> nav.navigate("risi_notes") { launchSingleTop = true }
                     is ai.risicloud.risime.data.tabs.RisiUiBus.Nav.Promises -> nav.navigate("risi_promises") { launchSingleTop = true }
+                    ai.risicloud.risime.data.tabs.RisiUiBus.Nav.Settings -> nav.navigate("settings") { launchSingleTop = true }
                 }
             }
         }

@@ -49,7 +49,9 @@ fun RisiVoiceSection(c: AppContainer) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(VoiceStrings.TRANSCRIBE_SETTING, style = MaterialTheme.typography.bodyMedium)
-                Text(VoiceStrings.TRANSCRIBE_SETTING_SUB, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Decision 092: with Private transcription on, "Private chats are never transcribed" would be untrue.
+                val privateOn = c.privateTranscribeFlag.on.collectAsStateWithLifecycle().value
+                Text(if (privateOn) VoiceStrings.TRANSCRIBE_SETTING_SUB_PRIVATE else VoiceStrings.TRANSCRIBE_SETTING_SUB, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Switch(checked = transcribe, enabled = !saving, onCheckedChange = { save(it, actionItems) }, modifier = Modifier.testTag("settings_voice_transcribe"))
         }

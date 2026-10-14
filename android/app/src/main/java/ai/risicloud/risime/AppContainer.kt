@@ -1197,6 +1197,51 @@ class AppContainer(
             recorder = ai.risicloud.risime.voice.VoiceRecorder(log = { Log.i("RisiMe", it) }),
             phoneStt = phoneSttFlag,
             phoneSessions = { tag -> phoneRecogniser.session(tag) },
+            othersMayTranscribe = { privateConsent.letOthersTranscribe.value },
+        )
+    }
+
+    // ---- Decision 092: transcription and translation in Private (RISI_PRIVATE_TRANSCRIBE via /me) ----
+
+    /** `/me` `private_transcribe` (the server decides canary; never hard-coded here). */
+    val privateTranscribeFlag by lazy { ai.risicloud.risime.voice.PrivateTranscribeFlag(voicePrefs) }
+
+    /** The reader's "Don't ask again" choices and the sender's "Let others transcribe my voice notes". */
+    val privateConsent by lazy { ai.risicloud.risime.voice.PrivateConsent(voicePrefs) }
+
+    /** The one guarded construction site of the online recogniser. */
+    private val onlineRecogniser by lazy { ai.risicloud.risime.voice.OnlineRecogniser(appContext, phoneRecogniser) }
+
+    /** A fresh `GET /me` for `private_transcribe`, at most every 10 minutes. */
+    suspend fun refreshPrivateTranscribe() {
+        privateTranscribeFlag.refreshIfStale { (runCatching { api.me() }.getOrNull() as? ApiResult.Ok)?.value?.user?.privateTranscribe }
+    }
+
+    /** The reader's Private voice & translate (results in memory on this phone only). */
+    val privateVoice by lazy {
+        ai.risicloud.risime.voice.PrivateVoiceController(
+            flagOn = { privateTranscribeFlag.on.value },
+            consent = privateConsent,
+            stt = ai.risicloud.risime.voice.AndroidReaderStt(phoneRecogniser, onlineRecogniser),
+            translator = object : ai.risicloud.risime.voice.PrivateTranslator {
+                override suspend fun translate(text: String, target: String, source: String?): Result<String> =
+                    when (val r = runCatching { api.translate(ai.risicloud.risime.net.TranslateRequest(text, target, source)) }.getOrNull()) {
+                        is ApiResult.Ok -> Result.success(r.value.text)
+                        else -> Result.failure(IllegalStateException("translate failed")) // never the text
+                    }
+            },
+            decode = { id ->
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    var d = images.decrypt(id)
+                    if (d is ai.risicloud.risime.data.media.Decrypted.Missing) {
+                        downloadImage(id)
+                        d = images.decrypt(id)
+                    }
+                    val ok = d as? ai.risicloud.risime.data.media.Decrypted.Ok ?: return@withContext null
+                    try { ai.risicloud.risime.voice.NoteDecoder.decode(ok.bytes) } finally { ok.bytes.fill(0) }
+                }
+            },
+            prefs = voicePrefs,
         )
     }
 

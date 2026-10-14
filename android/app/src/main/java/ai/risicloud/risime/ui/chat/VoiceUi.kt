@@ -89,6 +89,8 @@ object VoiceStrings {
     const val DELETE_TRANSCRIPT = "Delete transcript"
     const val TRANSCRIBE_SETTING = "Transcribe my voice notes in Official chats"
     const val TRANSCRIBE_SETTING_SUB = "Risi turns your Official voice notes into text for everyone in the chat. Private chats are never transcribed."
+    /** Decision 092: the same line while Private transcription is on for this account (never claims "never"). */
+    const val TRANSCRIBE_SETTING_SUB_PRIVATE = "Risi turns your Official voice notes into text for everyone in the chat. Risi never transcribes Private chats; people you message can transcribe your Private notes on their own phone (see Private voice & translate)."
     const val ACTION_ITEMS_SETTING = "Find action items in my calls and voice notes"
     fun dmNotReady(name: String) = "$name needs to update RisiMe to get voice notes"
     const val GROUP_NOT_READY = "Some members need to update RisiMe to get voice notes"
@@ -335,8 +337,10 @@ fun voiceTap(c: AppContainer, m: MessageEntity) {
 @Composable
 fun VoiceFooter(m: MessageEntity, x: ChatMessaging?) {
     if (x == null) return
-    // Proposal 2026-10-14-voice-translate (v1.50 §37.13.2): a typed Sinhala/Tamil message in Official gets Translate.
-    if (!m.voice) { TypedTranslateFooter(m, x); return }
+    val private = x.c.voice.place(m.conversationId) == ai.risicloud.risime.voice.VoicePlace.PRIVATE
+    // Proposal 2026-10-14-voice-translate (v1.50 §37.13.2): a typed Sinhala/Tamil message in Official gets Translate;
+    // decision 092: a received typed Private message gets Translate (only while RISI_PRIVATE_TRANSCRIBE applies).
+    if (!m.voice) { if (private) PrivateFooter(m, x, null) else TypedTranslateFooter(m, x); return }
     // Proposal 2026-10-14: the sender phone's own on-device transcript (inside the E2EE note; any tab). Absent on every
     // note sent without the developer `phone_stt` flag, so nothing changes for those.
     val meta = remember(m.systemJson) { VoiceMeta.decode(m.systemJson) }
@@ -353,6 +357,8 @@ fun VoiceFooter(m: MessageEntity, x: ChatMessaging?) {
             if (phone != null) PhoneTranscriptBlock(m.clientMsgId, phone.text, mine = m.outgoing)
         }
     }
+    // Decision 092: the reader's own transcript / Translate in Private (draws nothing while the flag is off).
+    if (private) PrivateFooter(m, x, phone)
 }
 
 /**

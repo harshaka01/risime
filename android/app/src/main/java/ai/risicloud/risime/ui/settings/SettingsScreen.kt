@@ -93,8 +93,11 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
             val lockAvailable = ai.risicloud.risime.ui.lock.rememberLockAvailable() || container?.appLock?.settings?.value?.enabled == true
             // §24.11 "What Risi knows about me" and "My promises": only while the two tabs are on.
             val tabsOn = container?.chatTabs?.uiOn?.collectAsStateWithLifecycle()?.value == true
-            if ((lockAvailable && container != null) || BuildConfig.HISTORY_SHARE_ENABLED || tabsOn) {
+            // Decision 092 (Harsha 10:31): the sender's "Let others transcribe my voice notes" lives in Privacy.
+            val privateVoiceOn = container?.privateTranscribeFlag?.on?.collectAsStateWithLifecycle()?.value == true
+            if ((lockAvailable && container != null) || BuildConfig.HISTORY_SHARE_ENABLED || tabsOn || privateVoiceOn) {
                 SectionHeader("Privacy")
+                if (container != null && privateVoiceOn) PrivateSenderSetting(container)
                 if (container != null) ai.risicloud.risime.ui.lock.FingerprintLockSection(container, lockAvailable, showHeader = false)
                 if (BuildConfig.HISTORY_SHARE_ENABLED) ai.risicloud.risime.ui.history.HistoryPrivacySection(showHeader = false)
                 if (tabsOn) {
@@ -112,6 +115,8 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                 }
                 HorizontalDivider()
             }
+            // Decision 092: Settings → Private voice & translate (only while RISI_PRIVATE_TRANSCRIBE applies).
+            if (container != null) PrivateVoiceSection(container)
             if (container != null) {
                 ai.risicloud.risime.ui.chats.LockedChatsResetSection(container)
                 HorizontalDivider()

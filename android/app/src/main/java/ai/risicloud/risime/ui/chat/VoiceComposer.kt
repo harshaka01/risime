@@ -71,6 +71,7 @@ fun rememberVoiceComposer(
     var ready by remember(conversationId) { mutableStateOf<Boolean?>(null) }
     var rationale by remember { mutableStateOf(false) }
     var officialNote by remember { mutableStateOf(false) }
+    var privateNotice by remember { mutableStateOf(false) }
     var mine by remember { mutableStateOf(false) } // this composer owns the running recording
     // Developer flag `phone_stt` only (proposal 2026-10-14): the on-device recogniser hearing this recording. Null otherwise.
     var stt by remember { mutableStateOf<ai.risicloud.risime.voice.PhoneSttSessionHandle?>(null) }
@@ -137,6 +138,20 @@ fun rememberVoiceComposer(
             modifier = Modifier.testTag("voice_official_note"),
         )
     }
+    if (privateNotice) {
+        // Decision 092 (Harsha 10:31): one time only; [Settings] opens Settings → Privacy, where the switch is.
+        AlertDialog(
+            onDismissRequest = { privateNotice = false },
+            text = { Text(ai.risicloud.risime.voice.PrivateVoiceStrings.SENDER_NOTICE) },
+            confirmButton = { TextButton(onClick = { privateNotice = false }, modifier = Modifier.testTag("voice_private_notice_ok")) { Text(ai.risicloud.risime.voice.PrivateVoiceStrings.SENDER_NOTICE_OK) } },
+            dismissButton = {
+                TextButton(onClick = { privateNotice = false; c.risiUi.openSettings() }, modifier = Modifier.testTag("voice_private_notice_settings")) {
+                    Text(ai.risicloud.risime.voice.PrivateVoiceStrings.SENDER_NOTICE_SETTINGS)
+                }
+            },
+            modifier = Modifier.testTag("voice_private_notice"),
+        )
+    }
     val recording = mine && recState is VoiceRecorder.State.Recording
     return VoiceComposerSlot(
         recording = recording,
@@ -166,6 +181,11 @@ fun rememberVoiceComposer(
                         if (c.voice.officialNoteDue(conversationId)) {
                             c.voice.officialNoteShown()
                             officialNote = true
+                            return@press false
+                        }
+                        if (c.privateConsent.senderNoticeDue(c.privateTranscribeFlag.on.value, c.voice.place(conversationId))) {
+                            c.privateConsent.senderNoticeShown()
+                            privateNotice = true
                             return@press false
                         }
                         c.voicePlayer.pause()

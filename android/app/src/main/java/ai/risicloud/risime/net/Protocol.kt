@@ -48,6 +48,8 @@ data class User(
     @SerialName("risi_dev") val risiDev: Boolean = false,
     /** Proposal 2026-10-14-call-risi §41.1 (decision 090): true while the server's RISI_CALL_RISI applies to this user; absent = false. */
     @SerialName("call_risi") val callRisi: Boolean = false,
+    /** Decision 092 (proposal 2026-10-14-private-transcribe): true while the server's RISI_PRIVATE_TRANSCRIBE applies to this user; absent = false. */
+    @SerialName("private_transcribe") val privateTranscribe: Boolean = false,
 )
 
 /** §21.3 (v1.20) `POST /auth/signup`. */

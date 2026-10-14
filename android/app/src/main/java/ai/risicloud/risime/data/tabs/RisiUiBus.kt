@@ -30,6 +30,13 @@ class RisiUiBus {
 
         /** v1.35 §34.4 Open on a promise / follow-up in Risi's items: My promises. */
         data class Promises(val itemId: String?) : Nav
+
+        /** Decision 092: the one-time "Others can transcribe your voice notes" notice taps through to Settings. */
+        data object Settings : Nav
+    }
+
+    fun openSettings() {
+        _nav.tryEmit(Nav.Settings)
     }
 
     fun openPromises(itemId: String?) {

@@ -85,7 +85,10 @@ class PhoneSttTest {
 
     // ---- on-device only ----
 
-    /** The online recogniser is never constructed anywhere in the app, and the on-device one has one construction point. */
+    /**
+     * The on-device recogniser has one construction point; the online recogniser (decision 092) has exactly **one**
+     * construction site, in OnlineRecogniser.kt, behind OnlineSttGuard in the same function, and nowhere else.
+     */
     @Test fun theOnlineRecogniserIsNeverConstructed() {
         val main = listOf(File("src/main"), File("app/src/main"), File("android/app/src/main")).first { it.isDirectory }
         val sources = main.walkTopDown().filter { it.isFile && (it.extension == "kt" || it.extension == "java") }.toList()
@@ -94,9 +97,18 @@ class PhoneSttTest {
         val onlineCheck = Regex("""\bisRecognitionAvailable\s*\(""")
         val activity = Regex("""startActivity[A-Za-z]*\s*\([^)]*RecognizerIntent""")
         val actionWebSearch = Regex("""ACTION_WEB_SEARCH|ACTION_VOICE_SEARCH_HANDS_FREE|getVoiceDetailsIntent""")
+        val onlineSites = sources.filter { online.containsMatchIn(it.readText()) }
+        assertEquals("the online recogniser has one construction site", listOf("OnlineRecogniser.kt"), onlineSites.map { it.name })
+        val site = onlineSites.single().readText()
+        assertEquals(1, online.findAll(site).count())
+        val at = online.find(site)!!.range.first
+        val fn = site.lastIndexOf("fun ", at)
+        assertTrue("the construction sits inside OnlineRecogniser.session", site.substring(fn, at).startsWith("fun session("))
+        val guard = site.indexOf("if (!OnlineSttGuard.allows(request)) return null", fn)
+        assertTrue("the guard runs before the construction, in the same function", guard in fn until at)
         for (f in sources) {
             val t = f.readText()
-            assertFalse("${f.path} constructs the online SpeechRecognizer", online.containsMatchIn(t))
+            if (f.name != "OnlineRecogniser.kt") assertFalse("${f.path} constructs the online SpeechRecognizer", online.containsMatchIn(t))
             assertFalse("${f.path} consults the online recogniser", onlineCheck.containsMatchIn(t))
             assertFalse("${f.path} starts a recogniser activity", activity.containsMatchIn(t))
             assertFalse("${f.path} uses an online voice search", actionWebSearch.containsMatchIn(t))

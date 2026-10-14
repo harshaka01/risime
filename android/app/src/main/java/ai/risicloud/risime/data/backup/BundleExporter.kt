@@ -227,7 +227,7 @@ class BundleExporter(
         val env = ai.risicloud.risime.data.media.VoiceEnvelope(
             BlobRef(blobId, row.blobSize, row.blobSha256), enc, meta.mime, meta.durationMs, meta.levels,
             transcribe = meta.transcribe?.takeIf { !it }, requestId = meta.requestId, extras = ai.risicloud.risime.data.mls.sendExtras(m),
-            phoneTranscript = meta.phoneTranscript,
+            phoneTranscript = meta.phoneTranscript, allowTranscribe = meta.allowTranscribe?.takeIf { !it },
         )
         val obj = json(env.encode())
         ai.risicloud.risime.data.media.VoiceEnvelope.validate(obj) ?: return null
