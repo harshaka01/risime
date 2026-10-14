@@ -101,7 +101,7 @@ conversation access is needed or checked.
 ```json
 {"text": "හෙට උදේ 10ට කාර්යාලයේදී හමුවෙමු", "target": "si", "source": "en", "engine": "risime-server"}
 ```
-- `source`: the detected (or given) language, `null` when it isn't one of the three. `engine` is always
+- `source`: the given `source`, else `null` (v1.50 doesn't detect it). `engine` is always
   `"risime-server"` (clients label the result "Translation (RisiMe server)").
 
 **Errors:** `404 not_found` while `private_transcribe` doesn't apply to the caller; `422 bad_request` (empty, too
@@ -116,7 +116,8 @@ agent_unavailable` (the model failed).
 - **The learning log** gets one `private_translate` row with **metadata only**: `meta` = `{"source", "target",
   "mode": "private"}`, latency, model, status. `output: null`, `prompt_sha256: null`, `source_message_ids: []`,
   `conversation_id` / `chat_id` = `"private"`.
-- The same server translate function serves the Official translate (`mode: :official`).
+- The same server translate function serves the Official translate (proposal 2026-10-14-voice-translate,
+  `RisiMe.Agent.VoiceTranslate.translate/5`; Private calls it with `private: true`).
 
 ### 37.12.5 Events
 None on the wire: no WebSocket event, no Risi kind, no stored event. The only wire changes are the `User` field,

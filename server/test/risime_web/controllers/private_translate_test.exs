@@ -47,7 +47,7 @@ defmodule RisiMeWeb.PrivateTranslateTest do
   defp me(token), do: api(:get, "/api/v1/me", token) |> assert_status(200)
 
   test "off (the default): 404, no model call, and /me has no private_transcribe", %{a: a} do
-    fake_llm!(fn _, _ -> %{"text" => "x", "source" => "en"} end)
+    fake_llm!(fn _, _ -> %{"text" => "ආයුබෝවන්"} end)
     Application.delete_env(:risime, :risi_agent_flags)
 
     assert {404, %{"error" => %{"code" => "not_found"}}} =
@@ -58,24 +58,25 @@ defmodule RisiMeWeb.PrivateTranslateTest do
   end
 
   test "canary: only RISI_DEV_USERS (through /me); on: everyone", %{a: a, b: b} do
-    fake_llm!(fn "translation", _ -> %{"text" => "ආයුබෝවන්", "source" => "en"} end)
+    fake_llm!(fn "translate", _ -> %{"text" => "ආයුබෝවන්"} end)
     flag("canary")
     assert me(a.token)["user"]["private_transcribe"] == true
     refute Map.has_key?(me(b.token)["user"], "private_transcribe")
 
     assert %{"text" => "ආයුබෝවන්", "target" => "si", "source" => "en", "engine" => "risime-server"} =
-             translate(a.token, %{"text" => "hello", "target" => "si"}) |> assert_status(200)
+             translate(a.token, %{"text" => "hello", "target" => "si", "source" => "en"})
+             |> assert_status(200)
 
     assert {404, _} = translate(b.token, %{"text" => "hello", "target" => "si"})
     assert length(llm_requests()) == 1
 
     flag("on")
     assert me(b.token)["user"]["private_transcribe"] == true
-    assert {200, _} = translate(b.token, %{"text" => "hello", "target" => "ta"})
+    assert {200, _} = translate(b.token, %{"text" => "hello", "target" => "si"})
   end
 
   test "bad requests are 422 and never reach the model", %{a: a} do
-    fake_llm!(fn _, _ -> %{"text" => "x", "source" => "en"} end)
+    fake_llm!(fn _, _ -> %{"text" => "ආයුබෝවන්"} end)
     flag("on")
 
     for body <- [
@@ -102,7 +103,7 @@ defmodule RisiMeWeb.PrivateTranslateTest do
   end
 
   test "30 per user per minute", %{b: b} do
-    fake_llm!(fn _, _ -> %{"text" => "x", "source" => "en"} end)
+    fake_llm!(fn _, _ -> %{"text" => "ආයුබෝවන්"} end)
     flag("on")
     for _ <- 1..30, do: assert({200, _} = translate(b.token, %{"text" => "hi", "target" => "si"}))
 
@@ -120,7 +121,7 @@ defmodule RisiMeWeb.PrivateTranslateTest do
 
       {:ok,
        %{
-         content: ~s({"text":"from fallback","source":"en"}),
+         content: ~s({"text":"from fallback"}),
          model: "spy",
          prompt_tokens: 1,
          completion_tokens: 1
@@ -154,7 +155,7 @@ defmodule RisiMeWeb.PrivateTranslateTest do
     flag("on")
     secret = "PRIVATE-CANARY-" <> Ecto.UUID.generate()
     translated = "TRANSLATED-CANARY-" <> Ecto.UUID.generate()
-    fake_llm!(fn "translation", _ -> %{"text" => translated, "source" => "en"} end)
+    fake_llm!(fn "translate", _ -> %{"text" => translated} end)
 
     old_level = Logger.level()
     Logger.configure(level: :debug)
@@ -163,7 +164,7 @@ defmodule RisiMeWeb.PrivateTranslateTest do
       try do
         capture_log([level: :debug], fn ->
           body =
-            translate(a.token, %{"text" => "Meet at 10 " <> secret, "target" => "si"})
+            translate(a.token, %{"text" => "හෙට 10ට " <> secret, "target" => "en"})
             |> assert_status(200)
 
           send(self(), {:body, body})
@@ -225,7 +226,7 @@ defmodule RisiMeWeb.PrivateTranslateTest do
       assert row.provider == "risi_l1"
       assert is_integer(row.latency_ms)
       meta = if is_binary(row.meta), do: Jason.decode!(row.meta), else: row.meta
-      assert Map.keys(meta) |> Enum.sort() == ["mode", "source", "target"]
+      assert Map.keys(meta) |> Enum.sort() == ["from", "to"]
     end
   end
 end

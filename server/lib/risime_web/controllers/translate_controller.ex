@@ -47,9 +47,10 @@ defmodule RisiMeWeb.TranslateController do
         )
 
       true ->
-        case Translate.text(field(params, "text"), field(params, "target"),
-               source: field(params, "source"),
-               mode: :private
+        case Translate.text(
+               field(params, "text"),
+               field(params, "target"),
+               field(params, "source")
              ) do
           {:ok, r} ->
             json(conn, %{
@@ -61,9 +62,6 @@ defmodule RisiMeWeb.TranslateController do
 
           {:error, :bad_request} ->
             ApiError.send_error(conn, 422, :bad_request)
-
-          {:error, :rate_limited} ->
-            ApiError.send_error(conn, 429, :rate_limited, retry_after: 5)
 
           {:error, _} ->
             ApiError.send_error(conn, 503, :agent_unavailable)

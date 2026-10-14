@@ -34,7 +34,7 @@ from the user, and Risi is never a member of Private.**
    by an accurate one while the flag is on.
 6. **Official unchanged:** server transcription stays automatic; the Official translate is its own proposal
    (2026-10-14-voice-translate, `RISI_VOICE_TRANSLATE`) and reuses the same server function
-   (`RisiMe.Agent.Translate.text/3`, `mode: :official`).
+   (`RisiMe.Agent.VoiceTranslate.translate/5`; Private calls it with `private: true`).
 
 ## Options considered
 - **Server transcription for Private after a yes** (our whisper models): rejected. It would make the server hold

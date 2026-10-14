@@ -183,15 +183,22 @@ defmodule RisiMe.Agent.VoiceTranslate do
   @doc """
   `text` (in `source`) translated into `target` on risi-l1: `{:ok, text, model}` or
   `{:error, :unavailable}`. The learning-log row has the language codes only.
+
+  Decision 092: `private: true` (the Private translate request, `POST /api/v1/translate`, via
+  `RisiMe.Agent.Translate`) runs on RisiMe's own model only (`local_only`: never the fallback),
+  keeps not even the prompt's hash, and logs under `"private"` (no conversation) as task
+  `private_translate`, codes only. `source` may be nil there.
   """
-  def translate(text, source, target, conv) do
+  def translate(text, source, target, conv, opts \\ []) do
+    private = Keyword.get(opts, :private, false)
+
     if source == target do
       {:ok, text, "none"}
     else
       req = %{
-        task: "translate",
-        conversation_id: conv,
-        chat_id: chat_id(conv),
+        task: if(private, do: "private_translate", else: "translate"),
+        conversation_id: if(private, do: "private", else: conv),
+        chat_id: if(private, do: "private", else: chat_id(conv)),
         system:
           "Translate the message into #{Lang.name(target)}. It is a chat message or a voice note " <>
             "transcript#{if source in ~w(si ta), do: " in " <> Lang.name(source), else: ""}. Keep " <>
@@ -207,6 +214,11 @@ defmodule RisiMe.Agent.VoiceTranslate do
         # Never the text: the learning log keeps the codes (meta) only.
         log_output: fn _ -> nil end
       }
+
+      req =
+        if private,
+          do: Map.merge(req, %{local_only: true, no_prompt_hash: true, retries: 1}),
+          else: req
 
       with {:ok, %{output: %{"text" => out}, call_ref: _}} <- LLM.complete(req),
            out = String.trim(out),
