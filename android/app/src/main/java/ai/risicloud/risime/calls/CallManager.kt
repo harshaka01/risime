@@ -103,6 +103,9 @@ interface CallAppPort {
 
     /** v1.45 §40.6: this device rang for a group call and nobody answered here: the line reads "Missed …". */
     suspend fun groupCallMissed(conv: String, callId: String, from: String, video: Boolean) = Unit
+
+    /** v1.52 §41.8: the reply to a live Call Risi's data packet (calls/risi/CallRisiCal.kt), or null to ignore it. */
+    suspend fun risiCallData(topic: String?, from: String?, payload: ByteArray, risiIdentity: String): ByteArray? = null
 }
 
 /**
@@ -483,6 +486,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     private fun newGroupMachine(me: String, device: String) = GroupCallMachine(
         me, device, scope, trackedSfu, groupPort, marks,
         serverNow = { port.serverNow() }, log = log,
+        risiData = { topic, from, payload, risi -> port.risiCallData(topic, from, payload, risi) },
     )
 
     private fun newMachine(me: String, device: String) = CallStateMachine(

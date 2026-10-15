@@ -112,6 +112,8 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, onBackups: () -> U
                     if (notesOn) OutlinedButton(onClick = onRisiNotes, modifier = Modifier.fillMaxWidth().testTag("settings_risi_notes")) { Text(ai.risicloud.risime.data.notes.RisiNotes.NOTES_TITLE) }
                     // v1.41 §37.7 Settings → Risi: transcription of my Official voice notes.
                     if (container != null) RisiVoiceSection(container)
+                    // v1.52 §41.8 Settings → Risi: "Risi can say my meeting titles on calls" (while Call Risi is on).
+                    if (container != null) ai.risicloud.risime.calls.risi.CallRisiTitlesSetting(container.callRisiFlag)
                 }
                 HorizontalDivider()
             }

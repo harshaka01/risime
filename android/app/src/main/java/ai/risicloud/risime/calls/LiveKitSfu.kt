@@ -44,7 +44,7 @@ import java.util.concurrent.ConcurrentHashMap
  *   Keys come only from MLS ([FrameKeyRing] through [SfuSession.keys]).
  * - Our coturn credentials as the ICE servers (LiveKit's own list only when we have none).
  * - No audio handler: core-telecom owns focus, mode and routing (as for 1:1 calls, decision 054).
- * - No data channel, chat or metadata use (android A7).
+ * - No data channel, chat or metadata use (android A7), except a Call Risi's `risi.cal` packets (v1.52 §41.8).
  */
 class LiveKitSfu(
     private val context: Context,
@@ -223,6 +223,8 @@ private class LiveKitSession(
                         }
                         if (e.state != E2EEState.OK) Log.i(tag, "group call: ${e.participant.identity?.value} ${e.publication.kind} cryptor ${e.state}")
                     }
+                    // v1.52 §41.8: data reaches only a Call Risi (the only tokens with canPublishData); the machine filters it.
+                    is RoomEvent.DataReceived -> listener.onData(e.topic, e.participant?.identity?.value, e.data)
                     is RoomEvent.TrackSubscribed -> {
                         // K6/K7: a track of a participant that isn't playable is dropped at once.
                         val id = e.participant.identity?.value
@@ -292,6 +294,16 @@ private class LiveKitSession(
 
     override suspend fun publishMic(): Boolean = runCatching { room.localParticipant.setMicrophoneEnabled(true) }
         .onFailure { Log.w(tag, "group call: microphone: ${it.message}") }.getOrDefault(false)
+
+    override suspend fun publishData(payload: ByteArray, topic: String, to: List<String>): Boolean =
+        !closed && to.isNotEmpty() && runCatching {
+            room.localParticipant.publishData(
+                payload,
+                io.livekit.android.room.track.DataPublishReliability.RELIABLE,
+                topic,
+                to.map { Participant.Identity(it) },
+            ).isSuccess
+        }.getOrDefault(false)
 
     override fun setMicMuted(muted: Boolean) {
         scope.launch { runCatching { room.localParticipant.setMicrophoneEnabled(!muted) } }

@@ -1309,6 +1309,19 @@ class AppContainer(
     /** Decision 090: the developer flag `call_risi` (off unless a `risi_dev` account turns it on). */
     val callRisiFlag by lazy { ai.risicloud.risime.calls.risi.CallRisiFlag(voicePrefs) }
 
+    /** v1.52 §41.8 meeting titles for Risi's spoken answer during a Call Risi (the §29 calendars; never stored). */
+    private val callRisiCal: ai.risicloud.risime.calls.risi.CallRisiCal by lazy {
+        ai.risicloud.risime.calls.risi.CallRisiCal(
+            source = object : ai.risicloud.risime.calls.risi.CallCalSource {
+                override fun canRead() = phoneCalendar.canRead()
+                override fun hasCalendars() = phoneCalendar.allCalendars().isNotEmpty()
+                override fun events(fromMs: Long, toMs: Long) = phoneCalendar.titledEvents(fromMs, toMs).orEmpty()
+            },
+            titlesOn = { callRisiFlag.calTitles.value },
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
     /** Part 12 quick fix 2: the developer flag `phone_stt` (off unless a `risi_dev` account turns it on). */
     val phoneSttFlag by lazy { ai.risicloud.risime.voice.PhoneSttFlag(voicePrefs) }
 
@@ -2113,6 +2126,10 @@ class AppContainer(
             return peer?.let { runCatching { displayName(it) }.getOrNull() } ?: "Group"
         }
         override fun dmChatForCall(conv: String): String? = chatTabs.dmChatForCall(conv)
+
+        // v1.52 §41.8: the machine checked the Risi call is live; the provider read runs off the main thread.
+        override suspend fun risiCallData(topic: String?, from: String?, payload: ByteArray, risiIdentity: String): ByteArray? =
+            withContext(Dispatchers.IO) { callRisiCal.respond(topic, from, payload, risiIdentity, callUp = true) }
 
         // ---- v1.45 §40 adding people to a call ----
         override suspend fun createCallGroup(members: List<String>, official: Boolean): ai.risicloud.risime.calls.MoveGroup? {

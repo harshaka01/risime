@@ -722,6 +722,9 @@ data class DeviceMls(
         /** Proposal 2026-10-14-call-risi §41.1: Call Risi (with `group_calls` and `risi_tools`; developer flag `call_risi` in v1). */
         const val CAP_CALL_RISI = "call_risi"
 
+        /** v1.52 §41.8: meeting titles over a Call Risi's data channel (only with `call_risi`). */
+        const val CAP_CALL_RISI_CAL = CallRisiCal152.CAP
+
         /** Proposal 2026-10-14-send-for-me §42.1: the `send_message` tool, its card and `message_sent` (only with `risi_tools`). */
         const val CAP_RISI_SEND = "risi_send"
 

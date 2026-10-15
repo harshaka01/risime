@@ -103,6 +103,11 @@ class GroupCallMachine(
     private val lingerMs: Long = 2_500,
     private val ringMs: Long = RING_MS,
     private val overlapMs: Long = FrameKeyRing.OVERLAP_MS,
+    /**
+     * v1.52 §41.8: answers a data packet of a live Call Risi ([topic], sender, payload, Risi's identity) with the reply
+     * bytes, or null to ignore it (calls/risi/CallRisiCal.kt). Null = this build never answers (other calls never ask).
+     */
+    private val risiData: (suspend (topic: String?, from: String?, payload: ByteArray, risiIdentity: String) -> ByteArray?)? = null,
 ) {
     companion object {
         /** §20.4: the ring validity, and the starter's wait for a first participant. */
@@ -728,6 +733,26 @@ class GroupCallMachine(
     }
 
     private fun listener(c: GCall) = object : SfuListener {
+        /**
+         * v1.52 §41.8: only a live Call Risi (connected, microphone published, still the current call) answers, only
+         * Risi's identity, and the reply goes to Risi's identity only. Any other call drops every packet.
+         */
+        override fun onData(topic: String?, from: String?, payload: ByteArray) {
+            val handler = risiData ?: return
+            if (!c.risiCall) return
+            scope.launch {
+                val (risi, session) = lock.withLock {
+                    if (c.ended || current !== c || !c.micPublished) return@launch
+                    (c.risiIdentity ?: return@launch) to (c.session ?: return@launch)
+                }
+                val reply = runCatching { handler(topic, from, payload, risi) }.getOrNull() ?: return@launch
+                val live = lock.withLock { !c.ended && current === c }
+                if (live && !session.publishData(reply, ai.risicloud.risime.net.CallRisiCal152.TOPIC, listOf(risi))) {
+                    log("risi call ${c.id}: calendar reply not sent")
+                }
+            }
+        }
+
         override fun onParticipants(list: List<SfuParticipant>) {
             scope.launch {
                 lock.withLock {

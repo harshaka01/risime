@@ -48,6 +48,9 @@ data class BusyRow(
     val syncId: String? = null,
 )
 
+/** v1.52 §41.8 one event with its title, for Risi's spoken answer during a call only (never stored, never logged). */
+data class TitledEvent(val begin: Long, val end: Long, val allDay: Boolean, val title: String?, val busy: Boolean)
+
 /** An event read back from the provider (`CalendarContract.Events`). */
 data class EventRow(val id: Long, val calendarId: Long, val title: String?, val dtStart: Long, val dtEnd: Long, val allDay: Boolean)
 
@@ -535,6 +538,22 @@ class PhoneCalendar(
             if (CalendarRead.isRisiCopy(r.syncId)) return@mapNotNull null
             val b = InstanceFilter.busy(r, z) ?: return@mapNotNull null
             if (!InstanceFilter.overlaps(b.begin, b.end, fromMs, toMs)) null else LocalEvent(r.title.orEmpty(), b.begin, b.end, r.allDay, eventId = r.eventId?.toString())
+        }
+    }
+
+    /**
+     * Contract v1.52 §41.8 (meeting titles during a Call Risi): the same rows and exclusions as [localEvents] (every
+     * calendar the §29 tool reads; RisiMe's own Google copies out; all-day on local dates) with the busy flag and the
+     * raw title. Null without permission; throws on a query error. Never logged.
+     */
+    fun titledEvents(fromMs: Long, toMs: Long): List<TitledEvent>? {
+        if (!backend.canRead()) return null
+        val (qf, qt) = InstanceFilter.queryWindow(fromMs, toMs)
+        val z = zone()
+        return backend.instanceRows(qf, qt).mapNotNull { r ->
+            if (CalendarRead.isRisiCopy(r.syncId)) return@mapNotNull null
+            val b = InstanceFilter.busy(r, z) ?: return@mapNotNull null
+            if (!InstanceFilter.overlaps(b.begin, b.end, fromMs, toMs)) null else TitledEvent(b.begin, b.end, r.allDay, r.title, b.busy)
         }
     }
 

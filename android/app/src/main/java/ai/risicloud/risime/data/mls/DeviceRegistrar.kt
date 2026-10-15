@@ -94,6 +94,13 @@ class DeviceRegistrar(
     @Volatile var advertised: List<String>? = null
         private set
 
+    /** Proposal 2026-10-14-call-risi §41.1: `call_risi` with the developer flag, `group_calls` and `risi_tools`. */
+    private fun callRisi(mls: MlsEngine): Boolean = ai.risicloud.risime.calls.risi.CallRisiRules.advertise(
+        flagOn = callRisiSupported(),
+        groupCalls = mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && mls.callKeysSupported && groupCallsSupported(),
+        risiTools = mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported(),
+    )
+
     /**
      * §12.1/§14.1/§15.1/§16.1: what this device can advertise right now. `calls` depends on runtime
      * state (notifications allowed, Telecom registered), so it can change after registration.
@@ -157,13 +164,9 @@ class DeviceRegistrar(
             // Proposal 2026-10-14-send-for-me §42.1: only with `risi_tools`, while the developer flag `send_for_me` is on.
             DeviceMls.CAP_RISI_SEND.takeIf { mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported() && risiSendSupported() },
             // Proposal 2026-10-14-call-risi §41.1: only with `group_calls` and `risi_tools`, while the developer flag is on.
-            DeviceMls.CAP_CALL_RISI.takeIf {
-                ai.risicloud.risime.calls.risi.CallRisiRules.advertise(
-                    flagOn = callRisiSupported(),
-                    groupCalls = mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && mls.callKeysSupported && groupCallsSupported(),
-                    risiTools = mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported(),
-                )
-            },
+            DeviceMls.CAP_CALL_RISI.takeIf { callRisi(mls) },
+            // v1.52 §41.8: meeting titles over the Call Risi data channel, exactly when `call_risi` is advertised.
+            DeviceMls.CAP_CALL_RISI_CAL.takeIf { ai.risicloud.risime.calls.risi.CallRisiRules.advertiseCal(callRisi(mls)) },
         )
         else -> null
     }

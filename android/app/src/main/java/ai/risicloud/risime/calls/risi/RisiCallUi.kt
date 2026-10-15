@@ -27,7 +27,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -71,13 +74,43 @@ fun RisiHearsBanner() {
 /** §41.4 the one-time explainer before the first Call Risi on this phone. */
 @Composable
 fun RisiCallExplainer(onOk: () -> Unit, onCancel: () -> Unit) {
+    // v1.52 §41.8: the meeting-titles setting is also a line of the first-call sheet.
+    val flag = (LocalContext.current.applicationContext as? ai.risicloud.risime.RisiMeApp)?.container?.callRisiFlag
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text(CallRisiTexts.EXPLAIN_TITLE) },
-        text = { Text(CallRisiTexts.EXPLAIN_TEXT) },
+        text = {
+            Column {
+                Text(CallRisiTexts.EXPLAIN_TEXT)
+                if (flag != null) {
+                    Spacer(Modifier.height(12.dp))
+                    CallRisiTitlesRow(flag)
+                }
+            }
+        },
         confirmButton = { TextButton(onClick = onOk, modifier = Modifier.testTag("risi_call_explain_ok")) { Text("OK") } },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
+}
+
+/** v1.52 §41.8 "Risi can say my meeting titles on calls" (default on), as a row with a switch. */
+@Composable
+fun CallRisiTitlesRow(flag: CallRisiFlag, modifier: Modifier = Modifier) {
+    val on by flag.calTitles.collectAsStateWithLifecycle()
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(CallRisiTexts.CAL_TITLES_SETTING, style = MaterialTheme.typography.bodyMedium)
+            Text(CallRisiTexts.CAL_TITLES_SUB, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = { flag.setCalTitles(it) }, modifier = Modifier.testTag("settings_call_risi_titles"))
+    }
+}
+
+/** v1.52 §41.8 Settings → Risi: the meeting-titles setting, only while Call Risi is on for this phone. */
+@Composable
+fun CallRisiTitlesSetting(flag: CallRisiFlag) {
+    val callRisi by flag.on.collectAsStateWithLifecycle()
+    if (callRisi) CallRisiTitlesRow(flag, Modifier.padding(vertical = 4.dp))
 }
 
 /** RECORD_AUDIO first (asked on the first call), then [onCall]; a refusal → [onBlocked]. */
@@ -154,6 +187,15 @@ fun CallTranscriptCard(t: CallTranscript, modifier: Modifier = Modifier) {
                 color = if (dim) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(top = 2.dp),
             )
+            // v1.52 §41.8: the titles were spoken from the phone and are not in the stored text.
+            if (l.titlesSpoken) {
+                Text(
+                    CallRisiTexts.TITLES_SPOKEN,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("call_transcript_titles_spoken"),
+                )
+            }
         }
         if (t.truncated) Text("Earlier lines aren't shown.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

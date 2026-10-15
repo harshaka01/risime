@@ -52,11 +52,25 @@ class CallRisiFlag(private val prefs: SharedPreferences?) {
         runCatching { prefs?.edit()?.putBoolean(KEY_EXPLAINED, true)?.apply() }
     }
 
+    private val _calTitles = MutableStateFlow(prefs?.getBoolean(KEY_CAL_TITLES, true) ?: true)
+
+    /**
+     * v1.52 §41.8 "Risi can say my meeting titles on calls" (Settings → Risi and the first-call sheet). **On by default**
+     * (root decision): off → this phone answers Risi's calendar request with `reason: "off"` and Risi says times only.
+     */
+    val calTitles: StateFlow<Boolean> = _calTitles
+
+    fun setCalTitles(on: Boolean) {
+        runCatching { prefs?.edit()?.putBoolean(KEY_CAL_TITLES, on)?.apply() }
+        _calTitles.value = on
+    }
+
     companion object {
         const val NAME = "call_risi"
         private const val KEY_ON = "dev_call_risi"
         private const val KEY_DEV = "dev_call_risi_risi_dev"
         private const val KEY_EXPLAINED = "call_risi_explained"
+        private const val KEY_CAL_TITLES = "call_risi_cal_titles"
     }
 }
 
@@ -74,6 +88,9 @@ object CallRisiRules {
 
     /** §41.1: `call_risi` is advertised only with the flag on and both `group_calls` and `risi_tools`. */
     fun advertise(flagOn: Boolean, groupCalls: Boolean, risiTools: Boolean): Boolean = flagOn && groupCalls && risiTools
+
+    /** v1.52 §41.8: `call_risi_cal` is advertised exactly when `call_risi` is (this build answers `risi.cal`). */
+    fun advertiseCal(callRisi: Boolean): Boolean = callRisi
 
     /** §41.3: Risi's identity not in the room this long after connect → leave. */
     const val JOIN_TIMEOUT_MS = 12_000L
@@ -100,6 +117,13 @@ object CallRisiTexts {
     const val MESSAGE = "Message"
     const val CONTACT_SUBTITLE = "Agent · answers when you call"
 
+    /** v1.52 §41.8 the setting (Settings → Risi, and the first-call sheet). */
+    const val CAL_TITLES_SETTING = "Risi can say my meeting titles on calls"
+    const val CAL_TITLES_SUB = "Titles are read from this phone for Risi's spoken answer only. They're never saved."
+
+    /** v1.52 §41.8 under a transcript line with `titles_spoken: true`. */
+    const val TITLES_SPOKEN = "Meeting titles were said aloud, not saved."
+
     /** The error a refused `start` shows (§41.2), null for other failures (the generic "Can't connect"). */
     fun error(code: String?): String? = when (code) {
         CallErrors.CALL_RISI_OFF -> "Calling Risi isn't available for this account yet"
@@ -125,7 +149,14 @@ object CallRisiTexts {
 }
 
 /** §41.5 one line of a `call_transcript`. */
-data class CallTranscriptLine(val who: String, val text: String, val filler: Boolean = false, val interrupted: Boolean = false) {
+data class CallTranscriptLine(
+    val who: String,
+    val text: String,
+    val filler: Boolean = false,
+    val interrupted: Boolean = false,
+    /** v1.52 §41.8: Risi said meeting titles from the phone here; [text] has the time-only wording. */
+    val titlesSpoken: Boolean = false,
+) {
     val risi: Boolean get() = who == WHO_RISI
 
     companion object {
@@ -168,6 +199,7 @@ data class CallTranscript(val callId: String, val durationS: Long?, val lines: L
                     who, text,
                     filler = (o["filler"] as? JsonPrimitive)?.booleanOrNull == true,
                     interrupted = (o["interrupted"] as? JsonPrimitive)?.booleanOrNull == true,
+                    titlesSpoken = (o["titles_spoken"] as? JsonPrimitive)?.booleanOrNull == true,
                 )
             }
             if (lines.isEmpty()) return null

@@ -195,11 +195,12 @@ class CallRisiTest {
         assertTrue("group_calls" in off && "risi_tools" in off)
         flag = true
         val on = reg.capabilities(mls)!!
-        assertEquals(off + "call_risi", on) // the only difference, appended last
+        // The only difference, appended last; v1.52 §41.8 `call_risi_cal` comes exactly with `call_risi`.
+        assertEquals(off + listOf("call_risi", "call_risi_cal"), on)
         groupCalls = false
-        assertFalse("call_risi" in reg.capabilities(mls)!!)
+        assertFalse(reg.capabilities(mls)!!.any { it == "call_risi" || it == "call_risi_cal" })
         groupCalls = true
         risiTools = false
-        assertFalse("call_risi" in reg.capabilities(mls)!!)
+        assertFalse(reg.capabilities(mls)!!.any { it == "call_risi" || it == "call_risi_cal" })
     }
 }

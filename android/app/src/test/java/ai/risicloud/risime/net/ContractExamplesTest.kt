@@ -844,7 +844,51 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + callRisiV148 + v149 + mapOf(
+    /** v1.52 §41.8 meeting titles over the Call Risi data channel (net/Protocol152.kt, calls/risi/CallRisiCal.kt). */
+    private val callRisiCalV152: Map<String, (String) -> Any> by lazy {
+        mapOf(
+            "device_put_call_risi_cal.json" to { s ->
+                ProtocolJson.decodeFromString<DevicePut>(s).also { d ->
+                    val caps = d.mls!!.capabilities!!
+                    require(DeviceMls.CAP_CALL_RISI_CAL in caps && DeviceMls.CAP_CALL_RISI in caps)
+                }
+            },
+            // Server-side claims for Risi's own token: never sent to the app; data on (the caller's token has the same grant).
+            "livekit_token_claims_call_risi_v152.json" to { s ->
+                (ProtocolJson.parseToJsonElement(s) as JsonObject).also { o ->
+                    val v = o["video"]!!.jsonObject
+                    require(v["canPublishData"]!!.jsonPrimitive.boolean && v["canSubscribe"]!!.jsonPrimitive.boolean)
+                    require(v["canPublishSources"]!!.jsonArray.map { it.jsonPrimitive.content } == listOf("microphone"))
+                }
+            },
+            "call_risi_cal_request.json" to { s ->
+                ProtocolJson.decodeFromString<CallRisiCalRequest>(s).also { require(it.t == CallRisiCal152.T_REQUEST) }
+                ai.risicloud.risime.calls.risi.CallRisiCal.parseRequest(s.toByteArray())!!.also {
+                    require(it.toMs - it.fromMs == 2L * 86_400_000 && it.offset.id == "+05:30")
+                }
+            },
+            "call_risi_cal_reply.json" to { s ->
+                ProtocolJson.decodeFromString<CallRisiCalReply>(s).also { r ->
+                    require(r.t == CallRisiCal152.T_REPLY && r.ok && r.reason == null)
+                    val e = r.events!!
+                    require(e.size in 1..CallRisiCal152.MAX_EVENTS && e.first().title == "Call with Shakya" && e.any { it.title == null })
+                    require(e.all { (it.title?.length ?: 0) <= CallRisiCal152.MAX_TITLE })
+                }
+            },
+            "call_risi_cal_reply_error.json" to { s ->
+                ProtocolJson.decodeFromString<CallRisiCalReply>(s).also { require(!it.ok && it.reason == CallRisiCal152.NO_PERMISSION && it.events == null) }
+            },
+            "envelope_risi_call_risi_transcript_titles.json" to { s ->
+                ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { e ->
+                    require(e.risi!!.kind == ai.risicloud.risime.calls.risi.CallTranscript.KIND && !s.contains("Shakya"))
+                    val t = ai.risicloud.risime.calls.risi.CallTranscript.parseJson(s)!!
+                    require(t.lines.size == 3 && t.lines[2].titlesSpoken && !t.lines[0].titlesSpoken && !t.lines[1].titlesSpoken)
+                }
+            },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + callRisiV148 + v149 + callRisiCalV152 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.
