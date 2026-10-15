@@ -48,7 +48,7 @@ defmodule RisiMe.Agent.ScheduleIntent do
 
   @other ~r/\b(?:summari[sz]e|summary|translate|explain|pdf|export|share|forward|feel\s+free|for\s+free|free\s+to)\b/iu
 
-  @presence ~r/\b(?:do|did|have|will)\s+i\s+(?:have|got)\b|\bwhat\s+(?:do|did)\s+i\s+have\b|\bwhat'?s\s+(?:on|happening|planned)\b|\bcheck\b/iu
+  @presence ~r/\banything\b|\b(?:do|did|have|will)\s+i\s+(?:have|got)\b|\bwhat\s+(?:do|did)\s+i\s+have\b|\bwhat'?s\s+(?:on|happening|planned)\b|\bcheck\b/iu
 
   @doc "Classifies `text` (see the module doc); `today` is the asker's local date."
   def classify(text, %Date{} = today) when is_binary(text) do
@@ -142,7 +142,8 @@ defmodule RisiMe.Agent.ScheduleIntent do
 
     with :none <- date(t, today),
          :none <- relative(t, today),
-         :none <- weekdays(t, today) do
+         :none <- weekdays(t, today),
+         :none <- ordinal(t, today) do
       {:none, nil}
     else
       {from, to} -> {:day, {from, to}}
@@ -191,6 +192,10 @@ defmodule RisiMe.Agent.ScheduleIntent do
     end
   end
 
+  @today_re ~r/\btoday\b|\btonight\b|අද|\bada\b|இன்று|இன்றைக்கு/u
+  @tomorrow_re ~r/\btomorrow\b|\btmrw\b|\btmr\b|හෙට|\bheta\b|நாளை/u
+  @week_re ~r/\b(?:this|the|entire|whole|full)\s+week\b|\brest\s+of\s+(?:the|this)\s+week\b|මේ\s+සති|\bme\s+sathi|இந்த\s+வார/u
+
   defp relative(t, today) do
     dow = Date.day_of_week(today)
 
@@ -198,15 +203,21 @@ defmodule RisiMe.Agent.ScheduleIntent do
       Regex.match?(~r/day\s+after\s+tomorrow|අනිද්දා|\banidda\b|\banidda\b|நாளை\s+மறுநாள்/u, t) ->
         one(Date.add(today, 2))
 
-      Regex.match?(~r/\btomorrow\b|\btmrw\b|\btmr\b|හෙට|\bheta\b|நாளை/u, t) ->
+      # P0 2026-10-15 (Harsha's call): "today and tomorrow" is both days, not tomorrow alone.
+      Regex.match?(@today_re, t) and Regex.match?(@tomorrow_re, t) ->
+        {today, Date.add(today, 2)}
+
+      Regex.match?(@tomorrow_re, t) ->
         one(Date.add(today, 1))
 
       Regex.match?(~r/\bnext\s+week\b|ලබන\s+සති|\blabana\s+sathi|அடுத்த\s+வார/u, t) ->
         mon = Date.add(today, 8 - dow)
         {mon, Date.add(mon, 7)}
 
-      Regex.match?(~r/\bthis\s+week\b|මේ\s+සති|\bme\s+sathi|இந்த\s+வார|\bthe\s+week\b/u, t) ->
-        {today, Date.add(today, 7)}
+      # P0 2026-10-15 (Harsha): "this week" / "the (entire) week" = today to the end of Sunday.
+      # On a Sunday it is the coming seven days (the normative §34 fixture: Sun 11 → Sun 18).
+      Regex.match?(@week_re, t) ->
+        if dow == 7, do: {today, Date.add(today, 7)}, else: {today, Date.add(today, 8 - dow)}
 
       Regex.match?(~r/\b(?:this\s+)?weekend\b|සති\s+අන්ත|வார\s+இறுதி/u, t) ->
         sat = if dow == 7, do: Date.add(today, -1), else: Date.add(today, 6 - dow)
@@ -218,7 +229,7 @@ defmodule RisiMe.Agent.ScheduleIntent do
           do: {Date.add(today, 8 - dow), Date.add(today, 13 - dow)},
           else: {today, Date.add(today, 6 - dow)}
 
-      Regex.match?(~r/\btoday\b|\btonight\b|අද|\bada\b|இன்று|இன்றைக்கு/u, t) ->
+      Regex.match?(@today_re, t) ->
         one(today)
 
       true ->
@@ -254,6 +265,31 @@ defmodule RisiMe.Agent.ScheduleIntent do
         end
     end
   end
+
+  # P0 2026-10-15: "on the 18th" / "the 18th" = this month's 18th when it is today or later, else
+  # next month's (recorded in docs/status/risi.md). After every other day form, so "the 2nd meeting
+  # tomorrow" stays tomorrow.
+  defp ordinal(t, today) do
+    m =
+      Regex.run(~r/\b(\d{1,2})(?:st|nd|rd|th)\b/u, t) ||
+        Regex.run(~r/\bon\s+the\s+(\d{1,2})\b(?!\s*(?:am|pm|a\.m|p\.m|:|o'?clock))/u, t)
+
+    case m do
+      [_, d] -> one(this_or_next_month(today, String.to_integer(d)))
+      _ -> :none
+    end
+  end
+
+  defp this_or_next_month(today, d) when d >= today.day, do: make(today.year, today.month, d)
+
+  defp this_or_next_month(today, d) do
+    nm = Date.add(Date.end_of_month(today), 1)
+    make(nm.year, nm.month, d)
+  end
+
+  @doc "True when `text` names a day or range (not just \"now\")."
+  def day_named?(text, %Date{} = today) when is_binary(text),
+    do: elem(day(text, today), 0) != :none
 
   defp positions(t, w) do
     if String.match?(w, ~r/^[a-z]+$/),

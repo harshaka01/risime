@@ -75,8 +75,18 @@ defmodule RisiMe.Agent.CallRisi.SessionTest do
   end
 
   setup do
-    keys = [:risi_call_media, :risi_speech, :risi_call_llm, :risi_call_turn, :risi_call_runs]
+    keys = [
+      :risi_call_media,
+      :risi_speech,
+      :risi_call_llm,
+      :risi_call_turn,
+      :risi_call_runs,
+      :risi_call_merge_ms
+    ]
+
     prev = for k <- keys, do: {k, Application.get_env(:risime, k)}
+    # These turns are seconds apart in real life: no fragment merging (call_p0_test covers it).
+    Application.put_env(:risime, :risi_call_merge_ms, -100_000)
     Application.put_env(:risime, :risi_call_media, Media)
     Application.put_env(:risime, :risi_speech, Speech)
     Application.put_env(:risime, :risi_call_llm, LLM)

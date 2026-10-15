@@ -180,7 +180,14 @@ defmodule RisiMe.Agent.Turn do
     question = retry_text(String.trim(env["text"] || ""), conv, asker, request_id)
     # v1.35 §34.1/§34.4: the deterministic route (schedule question, Risi's items).
     today = ctx.now |> Clock.local(ctx.tz) |> NaiveDateTime.to_date()
-    intent = ScheduleIntent.classify(question, today)
+    # P0 2026-10-15: a Call Risi voice turn hands its own schedule range (the call's follow-up
+    # topic: "on the 18th?" after a calendar question); every other request classifies its text.
+    intent =
+      case env["__schedule"] do
+        %{from: %Date{}, to: %Date{}} = r -> {:schedule_read, Map.put_new(r, :now?, false)}
+        _ -> ScheduleIntent.classify(question, today)
+      end
+
     # v1.35 §34.5: a tap on a name question's chip; §34.2: every other open card is superseded.
     clarified = Writes.clarify_answer(asker, conv, question)
     Writes.supersede(asker, conv, request_id, clarified && elem(clarified, 0).write_id)
@@ -1566,17 +1573,26 @@ defmodule RisiMe.Agent.Turn do
         do: Map.put(answer_risi, "footer", CalendarV2.footer(List.last(checks), first_read?)),
         else: answer_risi
 
-    answer_risi = voice_sink(answer, answer_risi)
+    answer_risi = voice_sink(answer, answer_risi, fn -> voice_facts(schedule?, checks, ctx) end)
     Audience.deliver(ctx, answer, answer_risi, st.personal)
   end
 
   # Decision 090 (Call Risi): a turn run by a call's Voice agent hands the answer text to the call
   # (to be spoken) and marks the card with the call's `call_id`. Without the call's process key
   # (every other turn) nothing changes.
+  #
+  # P0 2026-10-15: the call never speaks the card's text (a v2 card with local events is only its
+  # head line and footer): a schedule turn also hands the call the read's facts
+  # (`RisiItems.voice_facts/4`, computed only for a call), which the call phrases for speech.
   @doc false
-  def voice_sink(answer, answer_risi) do
+  def voice_sink(answer, answer_risi, facts \\ fn -> nil end) do
     case Process.get(:risi_voice_sink) do
       {pid, call_id} when is_pid(pid) ->
+        case safe_facts(facts) do
+          nil -> :ok
+          f -> send(pid, {:risi_voice_facts, answer_risi["request_id"], f})
+        end
+
         send(pid, {:risi_voice_answer, answer_risi["request_id"], answer})
         Map.put(answer_risi, "call_id", call_id)
 
@@ -1584,6 +1600,28 @@ defmodule RisiMe.Agent.Turn do
         answer_risi
     end
   end
+
+  defp safe_facts(f) do
+    f.()
+  rescue
+    e ->
+      require Logger
+      Logger.warning("call risi: voice facts failed (#{inspect(e.__struct__)})")
+      nil
+  end
+
+  defp voice_facts(true, checks, ctx),
+    do: RisiItems.voice_facts(checks, ctx.asker, ctx.tz, ctx.now)
+
+  # A calendar check outside a schedule question: only a failed read matters (what failed).
+  defp voice_facts(_schedule?, [_ | _] = checks, ctx) do
+    case RisiItems.voice_facts(checks, ctx.asker, ctx.tz, ctx.now) do
+      %{ok?: false} = f -> f
+      _ -> nil
+    end
+  end
+
+  defp voice_facts(_schedule?, _checks, _ctx), do: nil
 
   ## v1.35 §34.3: "Ask me again"
 

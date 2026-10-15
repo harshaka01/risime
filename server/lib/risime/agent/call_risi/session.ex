@@ -74,6 +74,11 @@ defmodule RisiMe.Agent.CallRisi.Session do
            history: [],
            turn: nil,
            filler_n: 0,
+           # P0 2026-10-15: the call's last tool topic (a follow-up inherits it), the
+           # once-per-call lines said, and the last user utterance (fragments merge).
+           topic: nil,
+           once: MapSet.new(),
+           last_user: nil,
            barge_ins: 0,
            ended?: false
          }}
@@ -138,7 +143,16 @@ defmodule RisiMe.Agent.CallRisi.Session do
   end
 
   defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64} = ev, st) do
-    {prefix, st} = take_unanswered(st)
+    now = System.monotonic_time(:millisecond)
+    end_ms = now - (ev["eot_wait_ms"] || 0)
+    start_ms = end_ms - (ev["speech_ms"] || 0)
+
+    {prefix, st} =
+      case take_unanswered(st) do
+        {"", st} -> take_fragment(st, start_ms)
+        {p, st} -> {p, %{st | last_user: nil}}
+      end
+
     st = cancel_turn(st, :replaced)
     wav = b64 |> Base.decode64!() |> wav16k()
 
@@ -151,11 +165,20 @@ defmodule RisiMe.Agent.CallRisi.Session do
       device_id: st.args.device_id,
       history: st.history,
       filler_n: st.filler_n,
-      tools?: Map.get(st.args, :tools?, true)
+      tools?: Map.get(st.args, :tools?, true),
+      topic: st.topic,
+      once: st.once,
+      # The hook for the phone's titles (speech only; root's contract change): nil until then.
+      titles: Map.get(st.args, :titles),
+      caps: Map.get(st.args, :caps)
     }
 
     {:ok, pid} = Task.start_link(fn -> Brain.run(ctx, wav, prefix) end)
-    turn = new_turn(utt, pid, st) |> Map.put(:eot_wait_ms, ev["eot_wait_ms"])
+
+    turn =
+      new_turn(utt, pid, st)
+      |> Map.merge(%{eot_wait_ms: ev["eot_wait_ms"], end_ms: end_ms})
+
     {:noreply, %{st | turn: turn}}
   end
 
@@ -166,8 +189,17 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   defp media(%{"ev" => "said", "seq" => seq, "interrupted" => false}, st) do
     case Map.pop(st.pieces, seq) do
-      {{utt, text, kind}, pieces} ->
-        {:noreply, %{add_line(st, :risi, text, kind, utt) | pieces: pieces}}
+      {{utt, text, kind, store}, pieces} ->
+        st = answered(st, utt, kind)
+
+        st =
+          case store do
+            :skip -> st
+            s when is_binary(s) -> add_line(st, :risi, s, kind, utt)
+            _ -> add_line(st, :risi, text, kind, utt)
+          end
+
+        {:noreply, %{st | pieces: pieces}}
 
       {nil, _} ->
         {:noreply, st}
@@ -196,7 +228,10 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
     st =
       if r.text != "",
-        do: add_line(%{st | turn: t}, :user, r.text, nil, t.utt),
+        do: %{
+          add_line(%{st | turn: t}, :user, r.text, nil, t.utt)
+          | last_user: %{utt: t.utt, text: r.text, end_ms: t.end_ms, answered?: false}
+        },
         else: %{st | turn: t}
 
     {:noreply, st}
@@ -204,17 +239,22 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   defp brain({:route, route}, st), do: {:noreply, put_in(st.turn.route, route)}
   defp brain({:first_token, ms}, st), do: {:noreply, put_in(st.turn.first_token_ms, ms)}
+  defp brain({:topic, topic}, st), do: {:noreply, %{st | topic: topic}}
+  defp brain({:once, key}, st), do: {:noreply, %{st | once: MapSet.put(st.once, key)}}
 
-  defp brain({:piece, text, kind}, st) do
+  defp brain({:piece, text, kind}, st), do: brain({:piece, text, kind, nil}, st)
+
+  defp brain({:piece, text, kind, store}, st) do
     st = if kind == :filler, do: %{st | filler_n: st.filler_n + 1}, else: st
     t = st.turn
     t = if t.first_piece_ms == nil, do: %{t | first_piece_ms: since(t.t0)}, else: t
-    {:noreply, speak(%{st | turn: t}, text, kind)}
+    {:noreply, speak(%{st | turn: t}, text, kind, store)}
   end
 
   defp brain({:done, %{status: status} = d}, st) do
     t = %{st.turn | brain_done?: true, status: status, request_id: d.request_id}
-    answer = t.spoken |> Enum.reverse() |> Enum.join(" ")
+    # The history keeps what the transcript keeps (never a title from the phone).
+    answer = t.stored |> Enum.reverse() |> Enum.join(" ")
 
     history =
       if t.text not in [nil, ""],
@@ -253,13 +293,15 @@ defmodule RisiMe.Agent.CallRisi.Session do
       lang: "en",
       text: nil,
       spoken: [],
+      stored: [],
+      end_ms: nil,
       brain_done?: false,
       status: nil,
       request_id: nil
     }
   end
 
-  defp speak(st, text, kind) do
+  defp speak(st, text, kind, store \\ nil) do
     seq = st.seq + 1
 
     Media.impl().command(st.media, %{
@@ -270,8 +312,65 @@ defmodule RisiMe.Agent.CallRisi.Session do
       "voice" => st.voice
     })
 
-    turn = %{st.turn | spoken: [text | st.turn.spoken]}
-    %{st | seq: seq, pieces: Map.put(st.pieces, seq, {st.turn.utt, text, kind}), turn: turn}
+    stored =
+      case store do
+        :skip -> st.turn.stored
+        s when is_binary(s) -> [s | st.turn.stored]
+        _ -> [text | st.turn.stored]
+      end
+
+    turn = %{st.turn | spoken: [text | st.turn.spoken], stored: stored}
+
+    %{
+      st
+      | seq: seq,
+        pieces: Map.put(st.pieces, seq, {st.turn.utt, text, kind, store}),
+        turn: turn
+    }
+  end
+
+  # An answer piece of the last user utterance was heard in full: no merging into it any more.
+  defp answered(%{last_user: %{utt: utt} = l} = st, utt, kind) when kind != :filler,
+    do: %{st | last_user: %{l | answered?: true}}
+
+  defp answered(st, _utt, _kind), do: st
+
+  # P0 2026-10-15: the user paused mid-question ("Do you have anything …" / "on the 18th?"). When
+  # the new utterance starts within the merge window of the last one's end and no answer to it
+  # was heard yet (a filler may have been), it continues that one: its text is the prefix and
+  # that turn is cancelled.
+  defp take_fragment(%{last_user: %{answered?: false, text: text, end_ms: e}} = st, start_ms)
+       when is_integer(e) and is_binary(text) and text != "" do
+    if start_ms - e <= merge_ms() do
+      lines = drop_first(st.lines, &(&1["who"] == "user" and &1["text"] == text))
+
+      history =
+        case Enum.reverse(st.history) do
+          [%{"role" => "assistant"}, %{"role" => "user", "content" => ^text} | rest] ->
+            Enum.reverse(rest)
+
+          [%{"role" => "user", "content" => ^text} | rest] ->
+            Enum.reverse(rest)
+
+          _ ->
+            st.history
+        end
+
+      {text, %{st | lines: lines, history: history, last_user: nil}}
+    else
+      {"", st}
+    end
+  end
+
+  defp take_fragment(st, _start_ms), do: {"", st}
+
+  defp merge_ms, do: Application.get_env(:risime, :risi_call_merge_ms, 1_500)
+
+  defp drop_first(list, f) do
+    case Enum.split_while(list, &(not f.(&1))) do
+      {before, [_ | rest]} -> before ++ rest
+      {before, []} -> before
+    end
   end
 
   # The user paused and went on before Risi said anything: the next utterance continues this one.

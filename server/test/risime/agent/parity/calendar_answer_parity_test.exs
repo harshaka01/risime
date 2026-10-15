@@ -94,7 +94,7 @@ defmodule RisiMe.Agent.Parity.CalendarAnswerTest do
 
       posts()
       fake_llm!(fn _name, _body -> final(@free) end)
-      job = request!(ctx.hrc, ctx.harsha.user, ctx.hd, "what's on my calendar this week")
+      job = request!(ctx.hrc, ctx.harsha.user, ctx.hd, "what's on my calendar next week")
       t = System.monotonic_time(:millisecond)
       assert :ok = perform_job(Job, job.args)
       assert System.monotonic_time(:millisecond) - t < @bound_ms
@@ -103,7 +103,7 @@ defmodule RisiMe.Agent.Parity.CalendarAnswerTest do
       assert conv == ctx.hrc
 
       assert body ==
-               "Fri 9 Oct – Thu 15 Oct:\n- Mon 12 Oct, 14:00–15:00 · Interview (Risi Calendar)" <>
+               "Mon 12 Oct – Sun 18 Oct:\n- Mon 12 Oct, 14:00–15:00 · Interview (Risi Calendar)" <>
                  "\n\nChecked: Risi Calendar · Risi's items."
 
       refute body =~ "free"

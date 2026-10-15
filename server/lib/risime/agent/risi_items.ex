@@ -742,49 +742,7 @@ defmodule RisiMe.Agent.RisiItems do
       alias RisiMe.Agent.CalendarV2
       sources = result["sources"] || []
       read = CalendarV2.read_sources(last)
-
-      risi =
-        if "risi_calendar" in read do
-          case Calendar.own_events(user, from, to) do
-            {:ok, evs} ->
-              for %{event: e, title: title} <- evs,
-                  do: %{
-                    "kind" => "risi_calendar_event",
-                    "title" => title,
-                    "start" => Clock.ts(e.start_at),
-                    "end" => Clock.ts(e.end_at),
-                    "all_day" => e.all_day == true,
-                    "group" => e.source_item_id
-                  }
-
-            _ ->
-              []
-          end
-        else
-          []
-        end
-
-      ledger =
-        case list(user,
-               from: from,
-               to: DateTime.add(to, 2 * 86_400, :second),
-               kinds: ~w(phone_event_added reminder scheduled_message promise follow_up),
-               undated: false
-             ) do
-          {:ok, items} ->
-            items
-            |> Enum.map(&Map.merge(&1, %{"_user" => user, "group" => group_of(&1)}))
-            # A reminder may fire before the range for a thing in it; the rest stay in range.
-            |> Enum.filter(&(&1["kind"] == "reminder" or in_window?(&1["start"], from, to)))
-
-          _ ->
-            []
-        end
-
-      rows =
-        CalendarV2.merge(risi ++ ledger, tz)
-        |> Enum.filter(&in_window?(&1["start"], from, to))
-        |> Enum.sort_by(&{sort_key(&1["start"]), &1["title"] || ""})
+      {rows, ledger} = v2_rows(read, user, from, to, tz)
 
       phone_busy =
         for b <- result["blocks"] || [], b["busy"] != false, not Map.has_key?(b, "status"), do: b
@@ -850,6 +808,142 @@ defmodule RisiMe.Agent.RisiItems do
       _ -> {honesty, [], true}
     end
   end
+
+  # §44.6: Risi's own things in the range (Risi Calendar events + the ledger's items), merged
+  # one row per thing and sorted; and the raw ledger items (the answer's sources).
+  defp v2_rows(read, user, from, to, tz) do
+    risi =
+      if "risi_calendar" in read do
+        case Calendar.own_events(user, from, to) do
+          {:ok, evs} ->
+            for %{event: e, title: title} <- evs,
+                do: %{
+                  "kind" => "risi_calendar_event",
+                  "title" => title,
+                  "start" => Clock.ts(e.start_at),
+                  "end" => Clock.ts(e.end_at),
+                  "all_day" => e.all_day == true,
+                  "group" => e.source_item_id
+                }
+
+          _ ->
+            []
+        end
+      else
+        []
+      end
+
+    ledger =
+      case list(user,
+             from: from,
+             to: DateTime.add(to, 2 * 86_400, :second),
+             kinds: ~w(phone_event_added reminder scheduled_message promise follow_up),
+             undated: false
+           ) do
+        {:ok, items} ->
+          items
+          |> Enum.map(&Map.merge(&1, %{"_user" => user, "group" => group_of(&1)}))
+          # A reminder may fire before the range for a thing in it; the rest stay in range.
+          |> Enum.filter(&(&1["kind"] == "reminder" or in_window?(&1["start"], from, to)))
+
+        _ ->
+          []
+      end
+
+    rows =
+      RisiMe.Agent.CalendarV2.merge(risi ++ ledger, tz)
+      |> Enum.filter(&in_window?(&1["start"], from, to))
+      |> Enum.sort_by(&{sort_key(&1["start"]), &1["title"] || ""})
+
+    {rows, ledger}
+  end
+
+  @doc """
+  P0 2026-10-15 (Harsha's Call Risi call): the **spoken** answer's facts for a schedule turn run
+  by a call (`RisiMe.Agent.CallRisi.Spoken` phrases them; the Risi chat's card is unchanged).
+  `%{ok?: true, today, from, to (local dates, `to` exclusive), events, unread}` where each event
+  is `%{kind, title, start, end (local NaiveDateTime), all_day, start_utc, end_utc, tags}`: the
+  phone's busy blocks (no titles: they stay on the phone, §29.7) merged with Risi's own things
+  (§44.6 rows), sorted by time. A failed read: `%{ok?: false, failed: <what failed, one
+  sentence>}`. Never stored: it lives only in the call's process.
+  """
+  def voice_facts(checks, user, tz, now \\ Clock.now()) do
+    last = List.last(checks)
+    {honesty, no_read?} = RisiMe.Agent.CalendarHonesty.enforce_made("", checks, tz)
+
+    with false <- no_read?,
+         %{result: %{"from" => f, "to" => t} = result} <- last,
+         {:ok, from, _} <- DateTime.from_iso8601(f),
+         {:ok, to, _} <- DateTime.from_iso8601(t) do
+      read = RisiMe.Agent.CalendarV2.read_sources(last)
+      {rows, _ledger} = v2_rows(read, user, from, to, tz)
+      added = for %{"kind" => "phone_event_added"} = r <- rows, do: {r["start"], r["end"]}
+
+      phone =
+        for b <- result["blocks"] || [],
+            b["busy"] != false,
+            not Map.has_key?(b, "status"),
+            not same_time?(b, added),
+            do: %{
+              "kind" => "busy",
+              "title" => nil,
+              "start" => b["start"],
+              "end" => b["end"],
+              "all_day" => b["all_day"] == true,
+              "tags" => ["busy"]
+            }
+
+      events =
+        (phone ++ rows)
+        |> Enum.filter(&is_binary(&1["start"]))
+        |> Enum.sort_by(&{sort_key(&1["start"]), &1["title"] || ""})
+        |> Enum.map(&voice_event(&1, tz))
+
+      last_day = to |> DateTime.add(-1, :second) |> Clock.local(tz) |> NaiveDateTime.to_date()
+
+      %{
+        ok?: true,
+        today: now |> Clock.local(tz) |> NaiveDateTime.to_date(),
+        from: from |> Clock.local(tz) |> NaiveDateTime.to_date(),
+        to: Date.add(last_day, 1),
+        events: events,
+        unread: RisiMe.Agent.CalendarV2.unread_lines(last)
+      }
+    else
+      _ -> %{ok?: false, failed: first_sentence(honesty)}
+    end
+  end
+
+  defp voice_event(r, tz) do
+    %{
+      kind: r["kind"],
+      title: r["title"],
+      start: local_ts(r["start"], tz),
+      end: local_ts(r["end"], tz),
+      all_day: r["all_day"] == true,
+      start_utc: r["start"],
+      end_utc: r["end"],
+      tags: r["tags"] || [r["kind"]]
+    }
+  end
+
+  defp local_ts(s, tz) when is_binary(s) do
+    case DateTime.from_iso8601(s) do
+      {:ok, d, _} -> Clock.local(d, tz)
+      _ -> nil
+    end
+  end
+
+  defp local_ts(_, _), do: nil
+
+  defp first_sentence(text) when is_binary(text) and text != "" do
+    case Regex.run(~r/^.*?[.!?](?=\s|$)/su, String.trim(text)) do
+      [s] -> s
+      _ -> String.trim(text)
+    end
+  end
+
+  defp first_sentence(_), do: "I couldn't read your calendar just now."
 
   defp in_window?(s, from, to) when is_binary(s) do
     case DateTime.from_iso8601(s) do
