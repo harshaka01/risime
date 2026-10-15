@@ -16,6 +16,13 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
   English first, si/ta → one line + answer in English.
 - **P1-3 Video + YouTube in chat:** inline YouTube (official IFrame player, "Open in YouTube"), inline mp4, own
   videos (720p, thumbnail, stream, E2EE blobs); first say what exists.
+- **Next APK (app items found 15 Oct):** the Official summary card renders `key_points` (then `card_line` goes back to
+  the plain summary); its count line no longer says "0 items" above an items card; Call Risi failure says "Risi
+  couldn't join the call. Try again." with a Try again button; when Call Risi is on for others, the button follows
+  the server switch only (no developer switch); RISI_LIVE_FAST app chunker (branch worktree-agent-a5446a9fcfee99bb3).
+- **Call Risi blocker:** the pilot has no `/livekit` Caddy route and no LIVEKIT_URL, so rooms answer 503 (group calls
+  too). Harsha runs the Caddy block (docs/status/admin-console.md A); then root sets LIVEKIT_URL, restarts LiveKit
+  (loopback candidate), one headless call, "try now".
 - The release-speed item (0 below) follows these.
 
 0. **15 Oct, before any other work: release speed** (Harsha 21:55). Release ≤ 10 min from "release" to APK on
