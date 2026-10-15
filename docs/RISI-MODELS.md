@@ -19,7 +19,7 @@ Script: `infra/voice/tts_voice_pick_bench.py`.
 | 1 | Kokoro 82M (`af_heart`, today's call voice) | **112 / 129 ms** (streamed) | 112 / 129 ms | 0.04 | resident: 2.5 GB GPU (nvidia-smi), 160 MB container RSS | always loaded |
 | 2 | Chatterbox-Turbo 350M (built-in stock voice) | 760 / 1 891 ms (not streamed: first sentence) | 760 / 1 891 ms | 0.29 | 3.4 GB CUDA, 5.2 GB process RSS (host free memory −2.9 GB) | 15.8 s |
 | 3 | Dia2 1B (stock speaker, seed 3) | 2 665 / 2 694 ms (streaming estimate) | 4 713 / 8 587 ms | **1.31** (slower than real time) | 5.8 GB CUDA, 5.4 GB RSS (free −8.5 GB) | 17.5 s |
-| 4 | Orpheus 3B 0.1 ft (`tara`) | *see below* | | | | |
+| 4 | Orpheus 3B 0.1 ft (`tara`), transformers `generate` | 1 198 / 1 369 ms (streaming estimate) | 13 634 / 28 345 ms | **3.34** (slower than real time) | 7.8 GB CUDA, 13.2 GB RSS (free −10.7 GB) | 28.6 s |
 
 How to read the table:
 - **First audio:** what a caller would wait for after Risi has its text.
@@ -42,8 +42,14 @@ How to read the table:
     Seed 3 was picked from seeds 2–8 by the numbers: adult female, median F0 224 Hz, 2.4 words/s,
     4.9 semitones of pitch movement. Harsha judges the sound.
 - **Live budget:** today's live budget for Call Risi is 1.5 s first audio (p50). Only Kokoro (0.11 s)
-  and Chatterbox-Turbo (0.76 s, with long first sentences over budget) are within it. Dia2 is not, and
-  it is also slower than real time.
+  and Chatterbox-Turbo (0.76 s, with long first sentences over budget) are within it. Dia2 and Orpheus
+  are not, and both are slower than real time here.
+- **Orpheus** ran on plain transformers `generate` in the lab (no vLLM: the vLLM on this machine is
+  risi-l1's). An Orpheus server on vLLM would be several times faster, but it would need its own
+  resident vLLM, about 8 GB more beside risi-l1. Its streaming estimate (1.2 s) is the time to the first
+  4 SNAC frames.
+- **Samples:** all 12 are in `~/risime-voice-samples` (outside Git): `<engine>-<greeting|calendar|check>.wav`,
+  plus `stats.json`. They are posted with `scripts/voice-pick-post`.
 
 **Hotfix for Harsha's pick (committed, not deployed):**
 - Kokoro voice: no new code. Set `tts_voice_en` on the Voices page.
