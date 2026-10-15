@@ -546,6 +546,55 @@ defmodule RisiMe.Agent.CallRisi.Call3Test do
     end
   end
 
+  describe "the phone's own writes on a call (device call 4, 15 Oct 15:29Z)" do
+    test "card summaries of every kind, spoken" do
+      t = ~D[2026-10-15]
+
+      assert WriteTruth.card_line(
+               ~s(Add "Call with the bank" to your calendar on Fri 16 Oct, 16:00–17:00),
+               t
+             ) =~ "I've put a card in your Risi chat: Call with the bank, tomorrow, 4 pm to 5 pm."
+
+      assert WriteTruth.added_line("Remind you on Fri 16 Oct, 17:00: call Ruwan", t) ==
+               "Added to your reminders: call Ruwan, tomorrow, 5 pm."
+    end
+
+    test "a voice yes never runs the phone's calendar_add or an alarm; only the caller's own cards" do
+      ctx = %{user_id: "u", conv: "grp:rc"}
+
+      w = %{
+        user_id: "u",
+        tool: "risi_calendar_add",
+        personal: true,
+        card_conversation_id: "grp:rc"
+      }
+
+      assert RisiMe.Agent.CallRisi.VoiceConfirm.allowed(w, ctx) == :ok
+
+      for {k, v} <- [
+            tool: "calendar_add",
+            tool: "set_alarm",
+            tool: "send_message",
+            user_id: "other",
+            personal: false,
+            card_conversation_id: "grp:official"
+          ],
+          do:
+            assert(
+              {:not_allowed, _} =
+                RisiMe.Agent.CallRisi.VoiceConfirm.allowed(Map.put(w, k, v), ctx)
+            )
+    end
+
+    test "a pending phone card: the yes is told to tap Add (it isn't added)" do
+      w = %{request_id: "r", route: "calendar_write", last?: true}
+      st = fn _ -> %{state: "pending", confirmed?: false, tool: "calendar_add"} end
+      line = WriteTruth.status_line(w, :confirm, st)
+      assert line =~ "I haven't added it yet. Your phone adds this one itself, so tap Add"
+      assert line =~ "your calendar"
+    end
+  end
+
   describe "Spoken" do
     test "natural titles" do
       assert Spoken.natural_title("Free up calendar on 18th Oct whole day") == "free up calendar"

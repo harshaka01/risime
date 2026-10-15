@@ -114,8 +114,14 @@ defmodule RisiMe.Agent.CallRisi.WriteTruth do
           else: "It's done: it's in your #{where}."
 
       %{state: "confirmed"} ->
-        "You tapped Add, but it didn't go through yet, so it isn't in your #{where}. " <>
+        "It was confirmed, but it didn't go through, so it isn't in your #{where}. " <>
           "Tap Retry on the card in your Risi chat."
+
+      # Contract §25.3: the phone adds to its own calendar only after its user's own tap (or a
+      # typed request): a call can't confirm it.
+      %{state: "pending", tool: t} when t in ~w(calendar_add set_alarm) and why != :complaint ->
+        "I haven't added it yet. Your phone adds this one itself, so tap Add on the card in your " <>
+          "Risi chat to put it in your #{where}."
 
       %{state: "pending"} ->
         if why == :complaint,
@@ -190,19 +196,22 @@ defmodule RisiMe.Agent.CallRisi.WriteTruth do
 
   def added_line(_summary, _today), do: "Added."
 
+  # The card's summary → `{where, what}`. Summaries: "Add to your Risi Calendar: T · Fri 16 Oct, 9–10
+  # AM", "Add \"T\" to your calendar on Fri 16 Oct, 16:00–17:00", "Remind you on <when>: T".
   defp parts(summary, today) do
-    {head, what} =
-      case String.split(summary, ":", parts: 2) do
-        [h, w] -> {h, w}
-        [w] -> {"", w}
-      end
-
-    where =
+    {where, what} =
       cond do
-        head =~ ~r/risi\s+calendar/iu -> "your Risi Calendar"
-        head =~ ~r/calendar/iu -> "your calendar"
-        head =~ ~r/remind/iu -> "your reminders"
-        true -> nil
+        m = Regex.run(~r/^Add to your Risi Calendar:\s*(.+)$/su, summary) ->
+          {"your Risi Calendar", Enum.at(m, 1)}
+
+        m = Regex.run(~r/^Add "(.+)" to your calendar(?: on)?\s*(.*)$/su, summary) ->
+          {"your calendar", Enum.at(m, 1) <> ", " <> Enum.at(m, 2)}
+
+        m = Regex.run(~r/^Remind you (?:on|at)\s+(.+):\s+(.+)$/su, summary) ->
+          {"your reminders", Enum.at(m, 2) <> ", " <> Enum.at(m, 1)}
+
+        true ->
+          {nil, summary}
       end
 
     what =
@@ -211,9 +220,14 @@ defmodule RisiMe.Agent.CallRisi.WriteTruth do
       |> String.trim_trailing("?")
       |> String.replace(~r/\s*·\s*/u, ", ")
       |> days(today)
-      |> String.replace(~r/(\d{1,2}(?::\d\d)?)\s*[–-]\s*(\d{1,2}(?::\d\d)?)/u, "\\1 to \\2")
+      |> String.replace(
+        ~r/\b(\d{1,2}(?::\d\d)?)\s*[–-]\s*(\d{1,2}(?::\d\d)?)\s*(AM|PM)\b/u,
+        "\\1 to \\2 \\3"
+      )
       |> String.replace(~r/\b(AM|PM)\s*[–-]\s*/u, "\\1 to ")
       |> String.replace(~r/\b(AM|PM)\b/u, &String.downcase/1)
+      |> RisiMe.Agent.CallRisi.Spoken.speakable()
+      |> String.trim_trailing(".")
 
     {where, what}
   end

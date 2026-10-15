@@ -70,7 +70,22 @@ defmodule RisiMe.Agent.Tools do
   end
 
   @doc "The tools `authorize/3` allows for this context (computed once per step)."
-  def allowed(ctx), do: Enum.filter(tools(), &(authorize(&1, ctx) == :ok))
+  def allowed(ctx) do
+    tools() |> Enum.filter(&(authorize(&1, ctx) == :ok)) |> on_call(ctx)
+  end
+
+  # §41.9 (Harsha 15 Oct: "risi failed to add appointment in the calendar"): on a Call Risi turn
+  # the phone can't run `calendar_add` from a voice yes (it needs its user's own tap, §25.3), so a
+  # caller with voice confirm and the Risi Calendar gets the Risi Calendar for adds on the call.
+  defp on_call(ts, ctx) do
+    with {pid, _} when is_pid(pid) <- Process.get(:risi_voice_sink),
+         true <- Enum.any?(ts, &(&1.name == "risi_calendar_add")),
+         true <- RisiMe.Agent.CallRisi.VoiceConfirm.enabled?(Map.get(ctx, :asker)) do
+      Enum.reject(ts, &(&1.name == "calendar_add"))
+    else
+      _ -> ts
+    end
+  end
 
   defp member?(ctx) do
     Map.get_lazy(ctx, :member?, fn ->

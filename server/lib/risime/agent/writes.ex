@@ -82,10 +82,17 @@ defmodule RisiMe.Agent.Writes do
   # Principle 4: a consequential write is always asked (`RisiMe.Agent.ActionGuard`): its confirm
   # card is the approval request.
   defp mode(ctx, tool, card) do
-    if RisiMe.Agent.ActionGuard.must_ask?(tool, card),
-      do: :ask,
-      else: RisiMe.Agent.Skills.write_mode(ctx, tool, card)
+    cond do
+      RisiMe.Agent.ActionGuard.must_ask?(tool, card) -> :ask
+      # Call Risi (Harsha's 3rd call, 15 Oct): a phone tool's "Allowed" needs the user's own typed
+      # request in the phone's history (§26.3 rule b); a call has none, so the phone declined and
+      # the write went void. On a call a phone write is always a card.
+      call_turn?() and Map.get(tool, :where) == :client -> :ask
+      true -> RisiMe.Agent.Skills.write_mode(ctx, tool, card)
+    end
   end
+
+  defp call_turn?, do: match?({pid, _} when is_pid(pid), Process.get(:risi_voice_sink))
 
   defp ask(ctx, tool, card) do
     # v1.35 §34.5: a card after a name question carries the question's write_id.

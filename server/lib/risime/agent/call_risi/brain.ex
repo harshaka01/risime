@@ -735,8 +735,14 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     end
   end
 
-  defp card_line(ctx, summary),
-    do: WriteTruth.card_line(summary, today(ctx), VoiceConfirm.enabled?(ctx.user_id))
+  # "Shall I add it?" only for a card a voice yes can confirm (§41.9: Risi Calendar, reminders).
+  defp card_line(ctx, summary) do
+    voice? =
+      VoiceConfirm.enabled?(ctx.user_id) and
+        String.starts_with?(summary, ["Add to your Risi Calendar:", "Remind you "])
+
+    WriteTruth.card_line(summary, today(ctx), voice?)
+  end
 
   # A long card answer: the first three sentences, then where the rest is.
   defp short(text) do

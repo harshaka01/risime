@@ -41,6 +41,15 @@ stored), the write went `void`; the model then made a Risi Calendar card: 14:15:
 - "Was that for me?" only when Risi's last line was no question/offer and the words are no reply.
 - "The 16th?" on his call: the phone WAS read (card footer "From: your phone calendars · Risi"); a phone that
   doesn't answer is said first (test added).
+- **srv11 device run (15:27Z) found the real cause of "failed to add":** the phone runs `calendar_add` only
+  after its user's own tap on the card (§25.3 rule a) or a typed `risi_request` in its history (rule b). A
+  call turn has neither, so the phone declines within ~20 ms: Harsha's Allowed attempts went `void`, and a
+  voice yes on a phone card ends `confirmed` (failed). Fix (srv12): on a call a phone write is always a card
+  (never "Allowed"); a caller with voice confirm and the Risi Calendar gets `risi_calendar_add` for adds on
+  the call (not `calendar_add`); voice confirm only for server-side writes (`risi_calendar_add`,
+  `set_reminder`); a phone card's yes is told "Your phone adds this one itself, so tap Add". For root: a voice
+  yes for the phone's own calendar needs an app/contract change (the phone accepting a server-attested voice
+  confirm) — not done here. Card readback of every summary kind fixed ("00 to 17:00" on srv11).
 - Tests: `test/risime/agent/call_risi/call_3_test.exs` (the replay, call 4 voice confirm, units),
   `test/risime/agent/claim_guard_test.exs` (10 adversarial prompts); question set 52/52 with
   `harsha-2026-10-15-call-3`. Device: `pilot-device-test` seeds an all-day "Family day" on the 18th and turns on the

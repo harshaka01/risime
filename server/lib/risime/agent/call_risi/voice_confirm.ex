@@ -7,8 +7,9 @@ defmodule RisiMe.Agent.CallRisi.VoiceConfirm do
   `confirm_write` (same write path, same `write_id` as the result id, the same `ActionGuard` check).
   Risi then says "Added: …" only from that result (`RisiMe.Agent.ClaimGuard`).
 
-  Only the caller's **own** calendar and reminder writes (`risi_calendar_add`, `calendar_add`,
-  `set_reminder`, `set_alarm`, a personal card in the caller's own Risi chat, still pending);
+  Only the caller's **own** Risi Calendar and reminder writes (`risi_calendar_add`, `set_reminder`:
+  server-side; the phone's own `calendar_add`/`set_alarm` need the tap on the phone, §25.3), a
+  personal card in the caller's own Risi chat, still pending;
   never money, deletion or sending to other people. Flag `RISI_CALL_VOICE_CONFIRM`
   (`off | canary | on`, default `canary`).
   """
@@ -18,7 +19,9 @@ defmodule RisiMe.Agent.CallRisi.VoiceConfirm do
   alias RisiMe.Agent.Writes
 
   @flag "RISI_CALL_VOICE_CONFIRM"
-  @tools ~w(risi_calendar_add calendar_add set_reminder set_alarm)
+  # Server-side writes only: the phone runs `calendar_add` / `set_alarm` only after its user's own
+  # tap on the card (§25.3 rule a) or a typed request (rule b), so a voice yes can't run them.
+  @tools ~w(risi_calendar_add set_reminder)
   @wait_ms 8_000
 
   @doc "The flag's name."
