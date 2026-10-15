@@ -183,8 +183,9 @@ defmodule RisiMe.Agent.Turn do
     # P0 2026-10-15: a Call Risi voice turn hands its own schedule range (the call's follow-up
     # topic: "on the 18th?" after a calendar question); every other request classifies its text.
     intent =
-      case env["__schedule"] do
-        %{from: %Date{}, to: %Date{}} = r -> {:schedule_read, Map.put_new(r, :now?, false)}
+      case {env["__schedule"], env["__intent"]} do
+        {%{from: %Date{}, to: %Date{}} = r, _} -> {:schedule_read, Map.put_new(r, :now?, false)}
+        {_, "risi_items"} -> :risi_items
         _ -> ScheduleIntent.classify(question, today)
       end
 

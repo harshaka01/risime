@@ -129,7 +129,8 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
       {pid, _} = Process.get(:risi_voice_sink)
       text = env["text"]
 
-      if text =~ "slow", do: Process.sleep(:infinity)
+      if text =~ "slow" and not (text =~ "slowish"), do: Process.sleep(:infinity)
+      if text =~ "slowish" and not (text =~ "Sunday"), do: Process.sleep(1_500)
 
       range =
         case env["__schedule"] do
@@ -375,8 +376,7 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
     refute Enum.any?(texts, &(&1 =~ @still_busy))
   end
 
-  test "a new question kills a stuck tool turn and frees the user's turn lock", %{args: args} do
-    # Seconds apart (no fragment merge): the stuck turn is replaced, not continued.
+  test "'Risi, stop' kills a stuck tool turn and frees the user's turn lock", %{args: args} do
     Application.put_env(:risime, :risi_call_merge_ms, -100_000)
     pid = start!(args)
     utter(pid, 1, "en:what's on my calendar tomorrow, slow")
@@ -384,10 +384,101 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
     [filler] = says(1, [], 300)
     assert filler["text"] in Fillers.all()
 
-    utter(pid, 2, "en:what's on my calendar tomorrow")
+    # While checking, a repeat of the question doesn't cancel it (it merges).
+    utter(pid, 2, "en:are you there")
+    refute_receive {:media_cmd, %{"cmd" => "stop_speaking"}}, 300
+    utter(pid, 3, "en:Risi, stop")
+    assert_receive {:media_cmd, %{"cmd" => "stop_speaking"}}, 2_000
+
+    utter(pid, 4, "en:what's on my calendar tomorrow")
+    u4 = says(4)
+    assert answer_text(u4) =~ "Tomorrow: busy from 10 to 11 am"
+    refute answer_text(u4) =~ @still_busy
+  end
+
+  test "hold: speech while checking merges into the question; one 'Still checking…'", %{
+    args: args
+  } do
+    Application.put_env(:risime, :risi_call_merge_ms, -100_000)
+    Application.put_env(:risime, :risi_call_still_ms, 400)
+    on_exit(fn -> Application.delete_env(:risime, :risi_call_still_ms) end)
+    pid = start!(args)
+    utter(pid, 1, "en:what's on my calendar tomorrow, slowish")
+    assert_receive {:turn_run, _}
+    Process.sleep(100)
+    utter(pid, 2, "en:hmm okay")
+    u1 = says(1)
+    texts = Enum.map(u1, & &1["text"])
+    assert "Still checking…" in texts
+    assert Enum.count(texts, &(&1 == "Still checking…")) == 1
+    assert answer_text(u1) =~ "Tomorrow: busy from 10 to 11 am"
+    refute_received {:media_cmd, %{"cmd" => "say", "utt" => 2}}
+    heard(pid, u1)
+    lines = transcript(pid)
+    assert "what's on my calendar tomorrow, slowish hmm okay" in Enum.map(lines, & &1["text"])
+  end
+
+  test "hold: a fragment naming another day restarts the question for that day", %{args: args} do
+    Application.put_env(:risime, :risi_call_merge_ms, -100_000)
+    pid = start!(args)
+    utter(pid, 1, "en:what's on my calendar tomorrow, slowish")
+    assert_receive {:turn_run, %{"__schedule" => %{from: ~D[2026-10-16]}}}
+    Process.sleep(100)
+    utter(pid, 2, "en:no, on Sunday")
+    assert_receive {:turn_run, %{"__schedule" => %{from: ~D[2026-10-18]}} = env}, 3_000
+    assert env["text"] == "what's on my calendar tomorrow, slowish no, on Sunday"
+    a = answer_text(says(2))
+    assert a =~ "Sunday the 18th: busy from 9 to 10:30 am."
+    # One holding line for the question (none for the restart).
+    refute a =~ "calendar…"
+  end
+
+  test "thinking aloud is ignored; an unclear short statement gets 'Was that for me?'", %{
+    args: args
+  } do
+    # Seconds apart (no fragment merge).
+    Application.put_env(:risime, :risi_call_merge_ms, -100_000)
+    pid = start!(args)
+    utter(pid, 1, "en:Let me see. I need to listen to it.")
+    assert says(1, [], 800) == []
+    utter(pid, 2, "en:the car is outside")
+    assert answer_text(says(2)) == "Was that for me?"
+  end
+
+  test "Harsha's 2nd call, 15 Oct (id harsha-2026-10-15-call-2): promises are Risi's own data",
+       %{args: args} do
+    pid = start!(args)
+    utter(pid, 1, "en:Let me see. I need to listen to it.")
+    assert says(1, [], 800) == []
+
+    utter(pid, 2, "en:Did I promise anything today or tomorrow?")
     u2 = says(2)
-    assert answer_text(u2) =~ "Tomorrow: busy from 10 to 11 am"
-    refute answer_text(u2) =~ @still_busy
+    assert_received {:turn_run, %{"__schedule" => %{from: ~D[2026-10-15], to: ~D[2026-10-17]}}}
+    a2 = answer_text(u2)
+    assert a2 =~ "Tomorrow: a reminder, Call Ruwan, at 5 pm."
+    refute a2 =~ "busy"
+    refute a2 =~ ~r/access/i
+    heard(pid, u2)
+
+    utter(pid, 3, "en:You should have access, you add the notes and calendar")
+    u3 = says(3)
+    a3 = answer_text(u3)
+    assert a3 =~ "Call Ruwan"
+    refute a3 =~ ~r/access|From:|Thu 15 Oct/i
+    heard(pid, u3)
+
+    utter(pid, 4, "en:Did I promise anything on Saturday?")
+
+    assert answer_text(says(4)) =~
+             "You have no promises, reminders or follow-ups Saturday the 17th."
+  end
+
+  test "the chat route never claims it has no access to the user's own things" do
+    assert RisiMe.Agent.CallRisi.Brain.no_access_guard(
+             "I don't have access to your personal commitments."
+           ) =~ "ask me directly"
+
+    assert RisiMe.Agent.CallRisi.Brain.no_access_guard("Canberra.") == "Canberra."
   end
 
   test "a tool turn that never answers: the timeout line says what failed, once a call", %{

@@ -237,7 +237,8 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
 
   test "the Call Risi question set" do
     cases = @set |> File.read!() |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
-    assert length(cases) == 50
+    assert length(cases) >= 50
+    assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call-2"))
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call"))
 
     results = for c <- cases, do: {c["id"], run_case(c)}
@@ -312,7 +313,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
             {[], utt}
 
           exp ->
-            cmds = says(utt)
+            cmds = if exp["silent"], do: says(utt, [], 1_500), else: says(utt)
             run = last_run()
             heard(pid, cmds)
             route = receive_route(utt)
@@ -332,7 +333,11 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
     tag = "t#{utt}"
 
     [
-      if(said == "", do: "#{tag}: nothing said"),
+      cond do
+        exp["silent"] == true and said != "" -> "#{tag}: should be silent, said #{inspect(said)}"
+        exp["silent"] != true and said == "" -> "#{tag}: nothing said"
+        true -> nil
+      end,
       if(exp["route"] && route != exp["route"],
         do: "#{tag}: route #{inspect(route)} != #{exp["route"]}"
       ),

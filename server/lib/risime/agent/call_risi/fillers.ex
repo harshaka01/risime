@@ -35,6 +35,11 @@ defmodule RisiMe.Agent.CallRisi.Fillers do
     Enum.at(lines, rem(n, length(lines)))
   end
 
+  @still "Still checking…"
+
+  @doc "Said once when a tool takes over 4 s (P0 2026-10-15)."
+  def still, do: @still
+
   @doc "Every filler line (tests: none of them states a result)."
-  def all, do: for({_l, t} <- @lines, {_r, ls} <- t, l <- ls, do: l)
+  def all, do: [@still | for({_l, t} <- @lines, {_r, ls} <- t, l <- ls, do: l)]
 end

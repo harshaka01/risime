@@ -123,6 +123,24 @@ defmodule RisiMe.Agent.CallRisi.Session do
     end
   end
 
+  def handle_info({:side_stt, held, utt, r}, st) do
+    text =
+      case r do
+        {:ok, %{text: t} = x} when is_binary(t) ->
+          if x[:speech] == false, do: "", else: String.trim(t)
+
+        _ ->
+          ""
+      end
+
+    cond do
+      text == "" -> {:noreply, st}
+      match?(%{turn: %{utt: ^held}}, st) and holding?(st) -> held_fragment(st, utt, text)
+      # The answer came meanwhile: the words are a new question.
+      true -> {:noreply, start_text_turn(cancel_turn(st, :replaced), utt, text, true)}
+    end
+  end
+
   def handle_info({:EXIT, _pid, _reason}, st), do: {:noreply, st}
   def handle_info(_msg, st), do: {:noreply, st}
 
@@ -141,9 +159,44 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp media(%{"ev" => "caller_left"}, st), do: finish(st, :hangup)
   defp media(%{"ev" => "left", "reason" => r}, st), do: finish(st, left_reason(r))
 
+  # P0 2026-10-15 (Harsha's 2nd call): while Risi is checking (a tool turn, no answer yet) the
+  # user's speech never cancels the question: barge-in only stops the holding line.
   defp media(%{"ev" => "barge_in"}, st) do
     st = %{st | barge_ins: st.barge_ins + 1}
-    {:noreply, cancel_turn(st, :barge_in)}
+
+    if holding?(st) do
+      Media.impl().command(st.media, %{"cmd" => "stop_speaking"})
+      {:noreply, st}
+    else
+      {:noreply, cancel_turn(st, :barge_in)}
+    end
+  end
+
+  # The hook for the app's Talk/Interrupt button (root adds the wire/worker event): stops
+  # whatever Risi is doing, also while holding.
+  defp media(%{"ev" => "interrupt"}, st), do: {:noreply, cancel_turn(st, :barge_in)}
+
+  # While holding, an utterance is transcribed on the side and merged into the question
+  # (`{:side_stt, …}`): no new turn, no cancel (unless it changes the request or says "stop").
+  defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64}, st)
+       when is_map(st.turn) and st.turn.brain_done? == false and
+              st.turn.route not in [nil, "chat", "capabilities"] do
+    me = self()
+    held = st.turn.utt
+    wav = b64 |> Base.decode64!() |> wav16k()
+
+    Task.start(fn ->
+      r =
+        try do
+          RisiMe.Agent.Speech.transcribe(wav, language: "en")
+        catch
+          _, _ -> {:error, :failed}
+        end
+
+      send(me, {:side_stt, held, utt, r})
+    end)
+
+    {:noreply, st}
   end
 
   defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64} = ev, st) do
@@ -159,23 +212,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
     st = cancel_turn(st, :replaced)
     wav = b64 |> Base.decode64!() |> wav16k()
-
-    ctx = %{
-      pid: self(),
-      utt: utt,
-      conv: st.args.conv,
-      call_id: st.args.call_id,
-      user_id: st.args.user_id,
-      device_id: st.args.device_id,
-      history: st.history,
-      filler_n: st.filler_n,
-      tools?: Map.get(st.args, :tools?, true),
-      topic: st.topic,
-      once: st.once,
-      cal?: st.cal?,
-      caps: Map.get(st.args, :caps)
-    }
-
+    ctx = brain_ctx(st, utt)
     {:ok, pid} = Task.start_link(fn -> Brain.run(ctx, wav, prefix) end)
 
     turn =
@@ -250,6 +287,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   end
 
   defp brain({:route, route}, st), do: {:noreply, put_in(st.turn.route, route)}
+  defp brain({:decided, d}, st), do: {:noreply, %{st | turn: Map.put(st.turn, :decided, d)}}
   defp brain({:first_token, ms}, st), do: {:noreply, put_in(st.turn.first_token_ms, ms)}
   defp brain({:topic, topic}, st), do: {:noreply, %{st | topic: topic}}
   defp brain({:once, key}, st), do: {:noreply, %{st | once: MapSet.put(st.once, key)}}
@@ -346,6 +384,84 @@ defmodule RisiMe.Agent.CallRisi.Session do
         pieces: Map.put(st.pieces, seq, {st.turn.utt, text, kind, store}),
         turn: turn
     }
+  end
+
+  # Risi is checking (a tool turn without its answer yet): the user's speech joins the question.
+  defp holding?(%{turn: %{brain_done?: false, route: r, pid: pid}})
+       when is_pid(pid) and r not in [nil, "chat", "capabilities"],
+       do: true
+
+  defp holding?(_st), do: false
+
+  @stop ~r/^\W*(?:risi\W+)?(?:stop|cancel(?:\s+that)?|never\s*mind|forget\s+it)\b/iu
+
+  # A fragment said while holding: "Risi, stop" stops; one that changes the request (another
+  # day, a calendar follow-up) restarts it with the merged words (no second holding line);
+  # anything else is merged into the question's line and the wait goes on.
+  defp held_fragment(st, utt, text) do
+    t = st.turn
+    merged = String.trim((t.text || "") <> " " <> text)
+
+    cond do
+      Regex.match?(@stop, text) ->
+        {:noreply, add_line(cancel_turn(st, :barge_in), :user, text, nil, utt)}
+
+      changed?(Brain.decide(text, decide_ctx(st, t)), Map.get(t, :decided)) ->
+        lines = drop_first(st.lines, &(&1["who"] == "user" and &1["text"] == t.text))
+        st = cancel_turn(%{st | lines: lines}, :replaced)
+
+        decision = Brain.decide(text, decide_ctx(st, t))
+        {:noreply, start_text_turn(st, utt, merged, false, decision)}
+
+      true ->
+        lines =
+          Enum.map(st.lines, fn
+            %{"who" => "user", "text" => x} = l when x == t.text -> %{l | "text" => merged}
+            l -> l
+          end)
+
+        {:noreply, %{st | lines: lines, turn: %{t | text: merged}}}
+    end
+  end
+
+  # The fragment alone, read as a follow-up of the question being checked.
+  defp decide_ctx(st, t) do
+    topic =
+      case Map.get(t, :decided) do
+        {"calendar_read", %{} = r} -> %{route: "calendar_read", range: r}
+        _ -> st.topic
+      end
+
+    %{user_id: st.args.user_id, topic: topic}
+  end
+
+  # A fragment changes the request when it is a tool request of its own that differs.
+  defp changed?({route, _} = d, decided),
+    do: route not in ~w(chat capabilities) and d != decided
+
+  defp brain_ctx(st, utt) do
+    %{
+      pid: self(),
+      utt: utt,
+      conv: st.args.conv,
+      call_id: st.args.call_id,
+      user_id: st.args.user_id,
+      device_id: st.args.device_id,
+      history: st.history,
+      filler_n: st.filler_n,
+      tools?: Map.get(st.args, :tools?, true),
+      topic: st.topic,
+      once: st.once,
+      cal?: st.cal?,
+      caps: Map.get(st.args, :caps)
+    }
+  end
+
+  # A turn from words already transcribed (a merged or late fragment).
+  defp start_text_turn(st, utt, text, filler?, decision \\ nil) do
+    ctx = brain_ctx(st, utt) |> Map.merge(%{filler?: filler?, decision: decision})
+    {:ok, pid} = Task.start_link(fn -> Brain.run_text(ctx, text) end)
+    %{st | turn: new_turn(utt, pid, st)}
   end
 
   # A failed device lookup (even an exit from the pool) means "don't ask": times only.
@@ -463,7 +579,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
             after_end > 2 * @budget_ms ->
           "over_budget"
 
-        status in [:ok, :barged, :replaced, :no_speech] ->
+        status in [:ok, :barged, :replaced, :no_speech, :ignored] ->
           "ok"
 
         true ->

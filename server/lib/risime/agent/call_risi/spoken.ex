@@ -46,6 +46,9 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
 
     text =
       cond do
+        busy_days == [] and f[:items_only] == true ->
+          "You have no promises, reminders or follow-ups #{range_phrase(f.from, f.to, f.today)}."
+
         busy_days == [] ->
           "You have nothing on your calendar #{range_phrase(f.from, f.to, f.today)}."
 
@@ -88,6 +91,16 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
     unread = Enum.join(f.unread || [], " ")
     {String.trim(text <> " " <> unread), missing?}
   end
+
+  @own ~w(promise follow_up reminder scheduled_message)
+
+  @doc "Only Risi's own items of `facts` (promises, follow-ups, reminders, scheduled messages)."
+  def items_only(%{ok?: true, events: evs} = f) do
+    own = for e <- evs, e.kind in @own or Enum.any?(e.tags || [], &(&1 in @own)), do: e
+    Map.merge(f, %{events: own, items_only: true})
+  end
+
+  def items_only(f), do: f
 
   defp with_title(%{title: t} = e, _titles) when is_binary(t) and t != "", do: e
 
