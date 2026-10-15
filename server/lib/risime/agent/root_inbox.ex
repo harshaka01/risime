@@ -400,15 +400,48 @@ defmodule RisiMe.Agent.RootInbox do
   def cli_post(b64) do
     %{"text" => text} = args = b64 |> Base.decode64!() |> Jason.decode!()
 
+    cmd =
+      if is_binary(args["sudo"]) and String.trim(args["sudo"]) != "",
+        do: String.trim(args["sudo"])
+
+    # Harsha 15 Oct: the command comes next as its own message (long-press → Copy copies exactly
+    # it), so the question only points at it.
     text =
-      case args["sudo"] do
-        s when is_binary(s) and s != "" -> text <> "\n\n" <> s <> "\n\nRun on spark2 (gx10-e23a)."
-        _ -> text
-      end
+      if cmd,
+        do:
+          text <>
+            "\n\nThe command is in the next message: long-press it and tap Copy. Run on spark2 (gx10-e23a).",
+        else: text
 
     case post(args["topic"], text, args["options"] || [], args["kind"] || "ask") do
-      {:ok, id} -> IO.puts("posted #{id}")
-      {:error, why} -> IO.puts("refused: #{why}")
+      {:ok, id} ->
+        if cmd, do: post_command(cmd)
+        IO.puts("posted #{id}")
+
+      {:error, why} ->
+        IO.puts("refused: #{why}")
+    end
+  end
+
+  # The bare command, one Risi message (no chips, no second push).
+  defp post_command(cmd) do
+    with {:ok, user} <- configured(),
+         rc when is_binary(rc) <- RisiMe.RisiChat.active_id(user) do
+      risi = %{
+        "kind" => "answer",
+        "request_id" => Ecto.UUID.generate(),
+        "answer" => cmd,
+        "refs" => [],
+        "confidence" => 1.0,
+        "sources" => [],
+        "next_steps" => [],
+        "next_actions" => [],
+        "call_ref" => nil,
+        "made_by" => MadeBy.rule(),
+        "notify" => []
+      }
+
+      Out.post(rc, cmd, risi, memory: false)
     end
   end
 

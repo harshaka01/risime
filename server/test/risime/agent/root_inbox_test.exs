@@ -64,6 +64,20 @@ defmodule RisiMe.Agent.RootInboxTest do
     end
   end
 
+  test "a command comes as its own message, to long-press and copy (Harsha 15 Oct)", _ctx do
+    b64 =
+      %{"text" => "Please run this.", "topic" => "cmd", "options" => ["Done"], "sudo" => "ls -la"}
+      |> Jason.encode!()
+      |> Base.encode64()
+
+    ExUnit.CaptureIO.capture_io(fn -> RootInbox.cli_post(b64) end)
+    [{_, q, qa}, {_, c, ca}] = posts()
+    assert q =~ "The command is in the next message"
+    refute q =~ "ls -la"
+    assert qa["next_actions"] != []
+    assert c == "ls -la" and ca["next_actions"] == [] and ca["notify"] == []
+  end
+
   test "a post renders the body and ask chips in the configured user's Risi chat", ctx do
     {:ok, id} = RootInbox.post("apk", "Install nightly.60?", ["Yes", "Not now"])
     assert is_binary(id)
