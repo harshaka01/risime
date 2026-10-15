@@ -157,7 +157,13 @@ defmodule RisiMe.Agent.Speech.Http do
                  |> Map.put(:deferred, true)}
 
               lang == "en" and en != nil ->
-                fast_en(audio, en, opts)
+                prompted(opts, &fast_en(audio, en, &1))
+
+              lang == "en" ->
+                prompted(
+                  opts,
+                  &post_transcription(audio, "auto", Keyword.put(&1, :language, "en"))
+                )
 
               true ->
                 post_transcription(audio, "auto", Keyword.put(opts, :language, lang))
@@ -173,6 +179,44 @@ defmodule RisiMe.Agent.Speech.Http do
           e
       end
     end
+  end
+
+  # P0-1b English context (off unless the caller passes `en_prompt`): the speaker's previous line
+  # as Whisper's initial prompt (the service's `prompt` field, served since decision 071); a
+  # prompted answer that repeats itself or echoes the prompt is redone without it.
+  defp prompted(opts, run) do
+    case opts[:en_prompt] do
+      prompt when is_binary(prompt) and prompt != "" ->
+        case run.(Keyword.put(opts, :prompt, prompt)) do
+          {:ok, %{text: text}} = ok ->
+            if prompt_suspicious?(text, prompt), do: run.(opts), else: ok
+
+          other ->
+            other
+        end
+
+      _ ->
+        run.(opts)
+    end
+  end
+
+  @doc "A prompted English answer that repeats a 1-4-gram 3 times in a row or echoes the prompt."
+  def prompt_suspicious?(text, prompt) do
+    w = RisiMe.Agent.CallTranscribe.Overlap.words(text)
+    pw = MapSet.new(RisiMe.Agent.CallTranscribe.Overlap.words(prompt))
+
+    repeats? =
+      Enum.any?(1..4, fn n ->
+        w
+        |> Enum.chunk_every(n, 1, :discard)
+        |> Enum.chunk_every(2 * n + 1, 1, :discard)
+        |> Enum.any?(fn win ->
+          Enum.at(win, 0) == Enum.at(win, n) and Enum.at(win, n) == Enum.at(win, 2 * n)
+        end)
+      end)
+
+    echo? = length(w) >= 3 and Enum.count(w, &MapSet.member?(pw, &1)) / length(w) >= 0.8
+    repeats? or echo?
   end
 
   defp fast_en(audio, en, opts) do
@@ -283,6 +327,11 @@ defmodule RisiMe.Agent.Speech.Http do
 
       fields =
         if is_binary(opts[:language]), do: fields ++ [language: opts[:language]], else: fields
+
+      fields =
+        if is_binary(opts[:prompt]) and opts[:prompt] != "",
+          do: fields ++ [prompt: opts[:prompt]],
+          else: fields
 
       case Req.post(req(base <> "/v1/audio/transcriptions", timeout), form_multipart: fields) do
         {:ok, %{status: 200, body: %{} = b}} ->

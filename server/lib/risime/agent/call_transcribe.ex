@@ -52,8 +52,13 @@ defmodule RisiMe.Agent.CallTranscribe do
     join_min_ms: 4_000,
     join_pause_ms: 600,
     join_wait_ms: 6_000,
-    # A chunk shorter than this was cut at a pause by the phone (its maximum is 4 s).
-    join_cut_ms: 3_900
+    # A chunk shorter than this was cut at a pause by the phone: a piece that hits the 4-s limit is
+    # cut after its quietest frame of the last second (VadChunker, 3-4 s), so it never looks shorter.
+    join_cut_ms: 3_000,
+    # P0-1b English context: the speaker's previous line as the prompt of the next English piece
+    # (off: on the bench it raised WER 7.0 % -> 10.5 % even with the guard; docs/status/ci.md).
+    fast_en_prompt: false,
+    fast_en_prompt_gap_ms: 1_000
   }
 
   @max_live 4

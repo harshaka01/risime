@@ -44,3 +44,37 @@ transcription; English stays per chunk.** Same bench, live pilot service:
 
 `beam_size 1` for English was not tried: the speech service has no per-request beam size (one env for all
 requests), so it needs a service change and an image rebuild.
+
+**English previous-line context (P0-1b follow-up, 2026-10-15): tried, left off.** The speaker's previous line as
+Whisper's initial prompt (`prompt` field; the speech service has always accepted it, so no image rebuild is
+needed), only for an English piece that continues that line (gap ≤ 1 s). Same bench, en, 3 speakers, live service:
+
+| English piece prompt | p50 speech→line | p95 | end-of-utterance p50 / p95 | WER |
+|---|---|---|---|---|
+| none (shipped) | 2.9 s | 4.6 s | 1.7 / 2.7 s | **0.070** (12-s chunks: 0.053) |
+| own previous line, any gap | 2.7 s | 4.5 s | 1.9 / 2.5 s | 0.404 |
+| own + other speakers' last lines, any gap | 2.7 s | 4.5 s | 1.8 / 2.5 s | 0.316 |
+| own previous line, only when continuing (≤ 1 s) | 2.7 s | 4.5 s | 1.9 / 2.5 s | 0.289 |
+| the same + guard (redo without prompt on repeats/echo) | 2.8 s | 4.6 s | 2.5 / 2.6 s | 0.105 |
+
+The prompt makes large-v3 hallucinate on near-silent tails ("Thank you. Thank you. …") and loop on the opening
+phrase ("and so my fellow Americans" ×3). The remaining loss without a prompt comes from the 4-s forced cut
+mid-word (the last word comes out wrong, e.g. "ask" → "and") and the clip's noisy tail. The server code is in place
+behind the timing switch `fast_en_prompt` (default **false**), so it can be re-tested on real conversation clips.
+The likely real fix is on the phone: cut a 4-s piece at the quietest 20-ms frame of its last second rather than at
+exactly 4 s (needs an APK).
+
+**Quiet cut at the 4-s limit (phone, next APK; 2026-10-15).** `VadChunker` now ends a piece that reaches 4 s
+without a pause after the quietest 20-ms frame of its last second (overlap rules unchanged); the bench chunks the
+same way (`--cut quiet`, default). Because those pieces are now 3–4 s long, the server's "ended at a pause cut"
+join rule moved from < 3.9 s to < 3 s (`join_cut_ms`), else Tamil lines were closed too early (CER 13.6 %).
+
+| fast, en (3 speakers) | p50 speech→line | p95 | end-of-utterance p50 / p95 | WER |
+|---|---|---|---|---|
+| cut at exactly 4 s | 2.7 s | 4.5 s | 1.7 / 2.5 s | 0.070 |
+| **cut at the quietest frame** | 2.7 s | 4.4 s | 1.7 / 2.5 s | **0.061** (12-s chunks: 0.053) |
+
+Same run, joined si/ta with the quiet cut and `join_cut_ms` 3 s: si p50 4.2 s, CER 0.026; ta p50 4.7 s (end of
+phrase 2.7 / 3.0 s), CER 0.095, unchanged from before. The cut word ("ask" → "and") is gone; what remains in
+English is tail hallucination on the clip's noisy end ("Thank you.", "All right.") and one overlap word misheard
+("devised quote").
