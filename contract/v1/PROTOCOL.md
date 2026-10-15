@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.52 (Release 0.3)
+# RisiMe Wire Protocol — v1.53 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -11974,7 +11974,88 @@ Amends §41.5 ("never confirmed by voice in v1"). Server-only, no wire change. B
   - 10 adversarial prompts ("did you add it?", "you said you added it", …);
   - a voice add followed by "did you add it?" on the device test.
 
+### 41.10 The caller's speech recognised on the phone (v1.53, Harsha 2026-10-16 04:52 SLT, P0)
+Harsha's 04:4x call: the server's speech-to-text "heard" lines nobody said (Whisper hallucinating on noise, silence
+and echo). For English, the phone now recognises the caller's speech **on the device**
+(`SpeechRecognizer.createOnDeviceSpeechRecognizer`, en) and sends Risi the text over the call's data channel (§41.8).
+The server's speech-to-text stays the fallback. **Additive:** without the capability every call is byte-identical to
+v1.52.
+
+**Capability.** The device capability **`"call_risi_stt"`** (`device_put_call_risi_stt.json`) is valid only together
+with `call_risi`; the server drops it otherwise. The phone advertises it when it implements this section, **and** the
+device has an on-device recogniser for English (`SpeechRecognizer.isOnDeviceRecognitionAvailable`, API 31+). A
+device without one doesn't advertise the capability, and its calls use the server's speech-to-text.
+
+**Topic `"risi.stt"`.** Reliable data packets on the call's LiveKit data channel (the §41.8 grants). The phone
+publishes to `risi_identity` only, Risi to the caller only.
+
+**Phone → Risi:**
+- **A partial** (`call_risi_stt_partial.json`), at most 5 per second, while the caller speaks:
+  `{"t": "partial", "seq": 7, "text": "do I have anything"}`
+- **The final text of one utterance** (`call_risi_stt_final.json`), once the recogniser ends it:
+  `{"t": "final", "seq": 7, "text": "Do I have anything to do today?", "conf": 0.91, "lang": "en"}`
+  - `conf` is the recogniser's confidence, 0–1, or `null` when the recogniser gives none.
+  - `text` is at most 1000 characters. An utterance with no recognised words sends nothing.
+  - `seq` grows by one for each utterance, starting at 1. A partial carries its utterance's `seq`.
+- **On-device recognition not available or stopped** (`call_risi_stt_off.json`):
+  `{"t": "off", "reason": "unavailable"}`
+  - `reason`: `unavailable` | `error` | `busy` | `language`.
+  - After `off`, the phone sends no more finals in that call, and Risi uses its own speech-to-text for the rest of it.
+
+**Risi → phone:**
+- **`{"t": "mode", "mode": "phone"}`** (`call_risi_stt_mode.json`), once, after the call connects, when Risi accepts the
+  phone's text for this call. Until it arrives (or with `"mode": "server"`), the phone **must not** send finals.
+- **`{"t": "speaking", "on": true}`** / **`false`**: when Risi's own speech starts and ends. While `on`, the phone keeps
+  recognising (for "Risi, stop" and real barge-in) but marks its finals `"during_risi": true`.
+
+**Server (normative).**
+- With `mode: "phone"`, a turn's text is the phone's `final` text. The server doesn't run its own speech-to-text on
+  that call's audio for turns.
+  - The audio still drives end-of-turn timing and barge-in.
+  - The server takes over again (`mode` back to server) after an `off`, or after 3 utterances with clear speech on
+    the audio that get no `final` within 3 s of their end.
+- A final with `conf` < 0.4, or with `during_risi: true` and no clear barge-in energy on the audio, gets no answer.
+  At most once in a row, Risi says "Sorry, I didn't catch that."
+- The phone's text is handled like the server's transcript: it goes into the `risi_call_transcript` (§41.5). It never
+  goes into logs, telemetry or the learning log (which records `stt: "phone"` and the latency only).
+- The same low-confidence rule applies to the server's own speech-to-text: a voice-activity gate (no speech, no text);
+  drop segments with a high no-speech probability, a low average log-probability or a high compression ratio; drop
+  known hallucination phrases when the audio is quiet; no transcription of Risi's own speech (the echo window) unless
+  barge-in energy is clear. Server-only, no wire change: it ships before the app.
+
+**The phone (normative).**
+- Recognise only while the Risi call is connected. Stop and release the recogniser when the call ends.
+- Recognise only the call's own microphone audio. Never open a second microphone capture that could get silence while
+  the call holds the microphone. Feed the recogniser the call's captured audio
+  (`RecognizerIntent.EXTRA_AUDIO_SOURCE`, API 33+). Where that isn't possible, don't advertise the capability.
+- **On-device only:** `createOnDeviceSpeechRecognizer` never sends audio to Google. The phone must never fall back to
+  a networked recogniser (`createSpeechRecognizer`).
+- Never send anything on `risi.stt` before `mode: "phone"`, or after the call ends.
+
+**Honesty (decision 048).** The call label stays as §41.0 says: the audio still reaches RisiMe's server for timing,
+barge-in and fallback.
+
+**Examples:** `device_put_call_risi_stt.json`, `call_risi_stt_partial.json`, `call_risi_stt_final.json`,
+`call_risi_stt_off.json`, `call_risi_stt_mode.json`, `call_risi_stt_speaking.json`.
+
+**Gate.**
+- **Server:**
+  - `mode: "phone"` only with the capability;
+  - a final drives a turn;
+  - low `conf` gets no answer, plus one "Sorry, I didn't catch that.";
+  - after `off`, the server's speech-to-text takes over;
+  - parity without the capability;
+  - the phone's text is never logged.
+- **Android (JVM):**
+  - decoders for every new example;
+  - nothing is sent before `mode: "phone"`, after the call ends, or to anyone but `risi_identity`;
+  - no networked fallback;
+  - the capability only with an on-device recogniser.
+
 ## Changelog
+- **v1.53** (2026-10-16, Harsha 04:52 SLT, P0 hearing): §41.10, the caller's English speech recognised on the phone
+  (capability `call_risi_stt`, data topic `risi.stt`: `partial`, `final`, `off`, `mode`, `speaking`). The server's
+  speech-to-text stays the fallback, with a voice-activity gate and low-confidence drops. Additive.
 - **v1.52 text amendment** (2026-10-15, Harsha 20:01): §41.9 voice confirm of the caller's own calendar and reminder
   writes (`RISI_CALL_VOICE_CONFIRM`, default `canary`; amends §41.5), and the claim guard on every output path. No
   wire change.
