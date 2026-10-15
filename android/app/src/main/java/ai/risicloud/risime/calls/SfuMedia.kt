@@ -61,6 +61,12 @@ interface SfuListener {
     fun onParticipants(list: List<SfuParticipant>)
 
     fun onConnection(state: SfuConnection)
+
+    /**
+     * v1.52 §41.8: a data packet from [from] (a remote identity; null from the server) on [topic]. Only a Call Risi
+     * room's tokens may publish data, so only a Call Risi sees one; every other call ignores it.
+     */
+    fun onData(topic: String?, from: String?, payload: ByteArray) = Unit
 }
 
 interface SfuSession {
@@ -88,6 +94,9 @@ interface SfuSession {
 
     /** Debug and device-test evidence: per remote identity, what the receivers decoded so far. */
     suspend fun stats(): List<SfuStats> = emptyList()
+
+    /** v1.52 §41.8: a reliable data packet on [topic] to [to] only (a Call Risi's `risi.cal` reply). False = not sent. */
+    suspend fun publishData(payload: ByteArray, topic: String, to: List<String>): Boolean = false
 
     fun disconnect()
 }

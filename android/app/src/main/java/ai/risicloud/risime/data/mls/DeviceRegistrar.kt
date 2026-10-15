@@ -81,6 +81,8 @@ class DeviceRegistrar(
     private val addToCallSupported: () -> Boolean = { false },
     /** Proposal 2026-10-14-call-risi §41.1: the developer flag `call_risi` is on (advertised only with `group_calls` and `risi_tools`). */
     private val callRisiSupported: () -> Boolean = { false },
+    /** v1.53 §41.10: API 33+ and an on-device recogniser (advertised only with `call_risi`). */
+    private val callRisiSttSupported: () -> Boolean = { false },
     /** Proposal 2026-10-14-send-for-me §42.1: the developer flag `send_for_me` is on (advertised only with `risi_tools`). */
     private val risiSendSupported: () -> Boolean = { false },
     /** Proposal 2026-10-14-permission-fixit §43.1: the developer flag `permission_fixit` is on (advertised only with `risi_skills`). */
@@ -162,6 +164,18 @@ class DeviceRegistrar(
                     flagOn = callRisiSupported(),
                     groupCalls = mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && mls.callKeysSupported && groupCallsSupported(),
                     risiTools = mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported(),
+                )
+            },
+            // v1.53 §41.10: the caller's speech recognised on the phone, only with `call_risi` and an on-device recogniser.
+            ai.risicloud.risime.net.CallRisiStt153.CAPABILITY.takeIf {
+                ai.risicloud.risime.calls.risi.CallRisiSttRules.advertise(
+                    callRisi = ai.risicloud.risime.calls.risi.CallRisiRules.advertise(
+                        flagOn = callRisiSupported(),
+                        groupCalls = mls.deletesSupported && imagesSupported() && callsSupported() && videoSupported() && mls.callKeysSupported && groupCallsSupported(),
+                        risiTools = mls.tabsSupported && tabsSupported() && mls.risiChatSupported && risiToolsSupported(),
+                    ),
+                    sdk = Int.MAX_VALUE, // the API level is part of callRisiSttSupported (JVM tests run without one)
+                    onDeviceAvailable = callRisiSttSupported,
                 )
             },
         )

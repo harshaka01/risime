@@ -103,6 +103,11 @@ class GroupCallMachine(
     private val lingerMs: Long = 2_500,
     private val ringMs: Long = RING_MS,
     private val overlapMs: Long = FrameKeyRing.OVERLAP_MS,
+    /**
+     * v1.53 §41.10: a new on-device recogniser for a live Call Risi (calls/risi/OnDeviceCallStt.kt), or null when the
+     * phone has none. Null = this build never recognises on the phone (the server's speech-to-text is used).
+     */
+    private val risiSttEngine: (() -> ai.risicloud.risime.calls.risi.CallSttEngine?)? = null,
 ) {
     companion object {
         /** §20.4: the ring validity, and the starter's wait for a first participant. */
@@ -185,6 +190,10 @@ class GroupCallMachine(
         var risiCall = false
         var risiIdentity: String? = null
         var risiStarted = false
+
+        /** v1.53 §41.10: the phone's speech recognition of this Call Risi (read from the SFU's data callback). */
+        @Volatile var stt: ai.risicloud.risime.calls.risi.CallRisiStt? = null
+        var sttOut: kotlinx.coroutines.channels.Channel<ByteArray>? = null
     }
 
     /** §40.4 the `sent_at` (ms) of the last offer of each call id this device acted on (the re-ring rule). */
@@ -309,6 +318,7 @@ class GroupCallMachine(
                     leave(x, CallNotice.RISI_NO_ANSWER)
                 }
             }
+            startStt(c, info.risiIdentity, session)
             refresh(c)
         }
         // §41.3: the durable line (no `call_offer`, no ring, no `call_member`).
@@ -728,6 +738,12 @@ class GroupCallMachine(
     }
 
     private fun listener(c: GCall) = object : SfuListener {
+        /** v1.53 §41.10: only a Call Risi's `risi.stt` packets reach its session (which checks the sender); others drop. */
+        override fun onData(topic: String?, from: String?, payload: ByteArray) {
+            if (!c.risiCall || c.ended) return
+            if (topic == ai.risicloud.risime.net.CallRisiStt153.TOPIC) c.stt?.onData(topic, from, payload)
+        }
+
         override fun onParticipants(list: List<SfuParticipant>) {
             scope.launch {
                 lock.withLock {
@@ -764,7 +780,31 @@ class GroupCallMachine(
         }
     }
 
-    /** §41.3 a Call Risi's roster: only Risi's identity is played; anyone else ends the call (fail closed). */
+    /**
+     * Under the lock, once the Call Risi is up (connected, microphone published): v1.53 §41.10's session. Its packets go
+     * out in order, reliable, to Risi's identity only, and only while this is still the current, live call.
+     */
+    private fun startStt(c: GCall, risi: String, session: SfuSession) {
+        val engine = risiSttEngine ?: return
+        val out = kotlinx.coroutines.channels.Channel<ByteArray>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        c.sttOut = out
+        c.stt = ai.risicloud.risime.calls.risi.CallRisiStt(
+            risiIdentity = risi,
+            engine = engine,
+            send = { b -> out.trySend(b) },
+            now = now,
+            log = log,
+        )
+        scope.launch {
+            for (b in out) {
+                val live = lock.withLock { !c.ended && current === c && c.session === session }
+                if (!live) break
+                if (!session.publishData(b, ai.risicloud.risime.net.CallRisiStt153.TOPIC, listOf(risi))) log("risi call ${c.id}: stt packet not sent")
+            }
+        }
+    }
+
+    /** §41.3 a Call Risi's roster:only Risi's identity is played; anyone else ends the call (fail closed). */
     private fun refreshRisi(c: GCall) {
         val risi = c.risiIdentity ?: return publish(c)
         val others = c.participants.filter { !it.local }
@@ -926,6 +966,11 @@ class GroupCallMachine(
         c.hold?.takeIf { !c.readyFired }?.let { h -> runCatching { h.onFailed() } }
         c.timers.values.forEach { it.cancel() }
         c.timers.clear()
+        // v1.53 §41.10: the recogniser is released and nothing more goes out on `risi.stt`.
+        c.stt?.end()
+        c.stt = null
+        c.sttOut?.close()
+        c.sttOut = null
         // K10: keys are overwritten before the room (and its key provider) goes.
         runCatching { c.ring?.wipeAll() }
         runCatching { c.session?.disconnect() }

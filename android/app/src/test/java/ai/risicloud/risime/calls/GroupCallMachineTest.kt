@@ -47,6 +47,10 @@ class FakeSfuSession(override val localIdentity: String, val listener: SfuListen
     override fun setPlayable(identity: String, playable: Boolean) { this.playable[identity] = playable }
     override fun disconnect() { disconnected = true }
 
+    /** v1.52 §41.8 the data packets this device published: (payload, topic, destination identities). */
+    val data = CopyOnWriteArrayList<Triple<String, String, List<String>>>()
+    override suspend fun publishData(payload: ByteArray, topic: String, to: List<String>): Boolean = true.also { data += Triple(payload.decodeToString(), topic, to) }
+
     /** The room now has [remote] besides this device. */
     fun room(vararg remote: SfuParticipant) = listener.onParticipants(listOf(SfuParticipant(localIdentity, local = true, hasAudio = true, cryptor = CryptorState.OK)) + remote)
 }

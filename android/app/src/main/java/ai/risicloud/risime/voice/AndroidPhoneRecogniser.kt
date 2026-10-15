@@ -46,8 +46,9 @@ class AndroidPhoneRecogniser(private val context: Context, private val log: (Str
 
     fun precheck(): String? = PhoneSttGate.precheck(Build.VERSION.SDK_INT) { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }
 
+    /** The one construction point of the on-device recogniser (also used by the v1.53 §41.10 Call Risi recogniser). */
     @RequiresApi(PhoneSttGate.MIN_SDK)
-    private fun newOnDevice(): SpeechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+    internal fun newOnDevice(): SpeechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
 
     private fun intent(tag: String, online: Boolean = false) = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)

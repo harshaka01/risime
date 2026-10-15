@@ -1313,6 +1313,11 @@ class AppContainer(
     val phoneSttFlag by lazy { ai.risicloud.risime.voice.PhoneSttFlag(voicePrefs) }
 
     /** The on-device recogniser (never the online one); used only while `phone_stt` is on and by the developer test. */
+    /** v1.53 §41.10: API 33+ (the call's audio can be fed in) and an on-device recogniser on this phone. */
+    fun callRisiSttAvailable(): Boolean = ai.risicloud.risime.calls.risi.CallRisiSttRules.advertise(
+        callRisi = true, sdk = android.os.Build.VERSION.SDK_INT,
+    ) { phoneRecogniser.precheck() == null }
+
     val phoneRecogniser by lazy { ai.risicloud.risime.voice.AndroidPhoneRecogniser(appContext) { Log.i("RisiMe", it) } }
 
     /** §37.3 the one player: in-memory decrypt, `played` on first start, auto-play next, screen off, earpiece. */
@@ -1716,6 +1721,7 @@ class AppContainer(
             addToCallSupported = { runCatching { calls.canAdvertiseAddToCall() }.getOrDefault(false) },
             // Decision 090: the developer flag `call_risi` (off: never advertised, the PUT body is v1.47's).
             callRisiSupported = { callRisiFlag.on.value },
+            callRisiSttSupported = { callRisiSttAvailable() },
             // Proposal 2026-10-14-send-for-me §42.1: the developer flag `send_for_me` (risi_dev accounts first).
             risiSendSupported = { sendForMeFlag.on.value },
             // Proposal 2026-10-14-permission-fixit §43.1: the developer flag `permission_fixit` (risi_dev accounts first).
@@ -2113,6 +2119,10 @@ class AppContainer(
             return peer?.let { runCatching { displayName(it) }.getOrNull() } ?: "Group"
         }
         override fun dmChatForCall(conv: String): String? = chatTabs.dmChatForCall(conv)
+
+        // v1.53 §41.10: the on-device recogniser over the Call Risi's own microphone capture (never a networked one).
+        override fun risiCallSttEngine(): ai.risicloud.risime.calls.risi.CallSttEngine? =
+            if (callRisiSttAvailable()) ai.risicloud.risime.calls.risi.OnDeviceCallStt(phoneRecogniser) { Log.i("RisiMe", it) } else null
 
         // ---- v1.45 §40 adding people to a call ----
         override suspend fun createCallGroup(members: List<String>, official: Boolean): ai.risicloud.risime.calls.MoveGroup? {
