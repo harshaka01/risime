@@ -57,3 +57,4 @@ check.
 | tamil-asr-qwen3 | lemuralabs/tamil-asr-qwen3 | 15 | 0 | 1 | 4.09 | ok | - |
 | whisper-large-v3-sinhala | kasunw/whisper-large-v3-sinhala | 15 | 0 | 2 | 6.18 | ok | - |
 | whisper-small-sinhala | SinhaSpeech/whisper-small-sinhala-v6-e6-run11-best | 16 | 0 | 1 | 0.97 | ok | - |
+| 2026-10-15 15:39 UTC (21:09 SLT) – | **Harsha exception 21:08**: Chatterbox-Turbo, Dia2-1B + Mimi, Orpheus retry, started now instead of 22:00 (scripts/dl-approved-2026-10-15-tts3 with DL_NOW=1) | ~8.7 GB (+15.2 GB Orpheus) | Hugging Face | Harsha 2026-10-15 21:08 SLT (exception to the 22:00 window), **6 MB/s** | in progress. Orpheus still 403: "Access to model canopylabs/orpheus-3b-0.1-ft is restricted and you are not in the authorized list" (token "spark2" of harshaka001, canReadGatedRepos true); sent to Harsha |

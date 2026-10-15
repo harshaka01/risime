@@ -13,7 +13,7 @@ L="$HOME/risime-eval-data/dl/downloads-2026-10-15-tts3.log"; B="$HOME/risime-eva
 mkdir -p "$(dirname "$L")"
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$L"; }
 tok() { grep '^HF_TOKEN=' .env | grep -v '^HF_TOKEN=$' | tail -1 | cut -d= -f2- | tr -d "\"' \r"; }
-night() { local h; h=$((10#$(date -u +%H%M))); [ "$h" -ge 1630 ] || [ "$h" -lt 30 ]; }
+night() { [ "${DL_NOW:-0}" = 1 ] && return 0; local h; h=$((10#$(date -u +%H%M))); [ "$h" -ge 1630 ] || [ "$h" -lt 30 ]; }
 busy() { pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null || [ -e "$PAUSE_FILE" ] || ! night; }
 get() { # repo dir file size sha256
   local url="https://huggingface.co/$1/resolve/main/$3" dest="$B/$2/$3"
