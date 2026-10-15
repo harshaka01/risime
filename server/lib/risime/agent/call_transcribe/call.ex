@@ -22,10 +22,12 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
   alias RisiMe.Agent.{Clock, Lang, LearningLog, Out, Speech, SpeechGuard, Transcript}
   alias RisiMe.Agent.CallTranscribe
-  alias RisiMe.Agent.CallTranscribe.{Lines, Overlap, Session}
+  alias RisiMe.Agent.CallTranscribe.{Lines, OggJoin, Overlap, Session}
   alias RisiMe.{Repo, TimeUUID}
 
   @max_sessions 3
+  # v1.50 §36.12: the languages whose fast-session chunks are joined before transcription.
+  @joined ["si", "ta"]
   @queue_max 2
   @compare_ttl_s 30 * 86_400
   @idle_ms 300_000
@@ -198,6 +200,18 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
   def handle_info({:room, _sid}, st), do: {:noreply, st}
 
+  def handle_info({:flush_pending, sid, user, ref}, st) do
+    st =
+      with_rt(st, sid, fn st, rt ->
+        case rt.parts[user] do
+          %{pend_ref: ^ref} -> {st, flush(rt, user)}
+          _ -> {st, rt}
+        end
+      end)
+
+    {:noreply, run_next(st, sid, user)}
+  end
+
   def handle_info({:flush_turn, sid, ref}, st) do
     {:noreply, with_rt(st, sid, &flush_turn(&1, &2, ref))}
   end
@@ -305,7 +319,11 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       tokens_at: now,
       # Fast sessions: the speaker's last words and line end (the overlap de-duplication).
       tail: [],
-      tail_end: nil
+      tail_end: nil,
+      # v1.50 §36.12: Sinhala/Tamil chunks waiting to be joined (audio in memory only).
+      pending: [],
+      pend_ms: 0,
+      pend_ref: nil
     }
   end
 
@@ -578,7 +596,10 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
             if discard,
               do: %{
                 rt
-                | parts: Map.new(rt.parts, fn {u, p} -> {u, %{p | queue: :queue.new()}} end)
+                | parts:
+                    Map.new(rt.parts, fn {u, p} ->
+                      {u, %{p | queue: :queue.new(), pending: [], pend_ms: 0, pend_ref: nil}}
+                    end)
               },
               else: rt
 
@@ -722,8 +743,27 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
         {audio, meta} = Map.pop(chunk, :audio)
         compare? = st_session(st, sid).compare
         opts = Speech.hint_opts(Map.get(rt, :hint))
-        # Proposal 2026-10-15-live-call-latency: live GPU priority and the fast English model.
-        opts = if Map.get(rt, :fast), do: opts ++ [fast: true, priority: "live"], else: opts
+        p = rt.parts[user]
+
+        # v1.50 §36.12: live GPU priority and the fast English model; Sinhala and Tamil chunks
+        # are only detected here and transcribed joined (`lang`: a joined item).
+        opts =
+          cond do
+            # A joined item: the service detects its language on the whole of it and routes it.
+            Map.get(meta, :joined) ->
+              opts ++ [joined: true, priority: "live"]
+
+            # The same utterance as the speaker's waiting si/ta chunks (no pause between): it
+            # joins them whatever a short chunk's own detection says.
+            Map.get(rt, :fast) and continues?(p, meta) ->
+              opts ++ [fast: true, priority: "live", defer_langs: @joined ++ ["en"]]
+
+            Map.get(rt, :fast) ->
+              opts ++ [fast: true, priority: "live", defer_langs: @joined]
+
+            true ->
+              opts
+          end
 
         task =
           Task.Supervisor.async_nolink(CallTranscribe.TaskSup, fn ->
@@ -733,6 +773,13 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
               if compare?,
                 do: Speech.compare(audio, opts),
                 else: Speech.transcribe(audio, opts)
+
+            # A deferred (si/ta) chunk keeps its audio for the join (memory only).
+            r =
+              case r do
+                {:ok, %{deferred: true} = d} -> {:ok, Map.put(d, :audio, audio)}
+                other -> other
+              end
 
             {r, System.monotonic_time(:millisecond) - t0}
           end)
@@ -844,7 +891,14 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     end
   end
 
+  defp speech_result(st, rt, meta, {:ok, {{:ok, %{deferred: true, audio: audio} = r}, _ms}}) do
+    {st, pend(%{rt | fail_since: nil}, meta, audio, r.language)}
+  end
+
   defp speech_result(st, rt, meta, {:ok, {{:ok, r}, elapsed}}) do
+    # v1.50 §36.12: another language from a speaker with joined chunks waiting: they go first.
+    rt = if Map.get(meta, :joined), do: rt, else: flush(rt, meta.speaker)
+
     rt = %{
       rt
       | fail_since: nil,
@@ -939,6 +993,118 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   end
 
   defp guard(rt), do: rt
+
+  ## Joined Sinhala/Tamil chunks (v1.50 §36.12)
+
+  # A deferred chunk joins the speaker's waiting ones: a new language, or a pause of ≥ 600 ms
+  # after ≥ 4 s, flushes the waiting ones first; ≥ 8 s of audio, or ≥ 4 s ending at a pause cut,
+  # flushes; the first one starts the 6-s clock.
+  defp pend(rt, meta, audio, lang) do
+    t = CallTranscribe.timing()
+    user = meta.speaker
+    p = rt.parts[user]
+
+    # A contiguous chunk deferred whatever its language continues the waiting ones.
+    lang =
+      case p.pending do
+        [%{lang: l} | _] when lang not in @joined -> l
+        _ -> lang
+      end
+
+    rt =
+      case p.pending do
+        [%{lang: l, meta: last} | _] ->
+          gap = DateTime.diff(meta.start, last.end, :millisecond)
+
+          if l != lang or (gap >= t.join_pause_ms and p.pend_ms >= t.join_min_ms),
+            do: flush(rt, user),
+            else: rt
+
+        [] ->
+          rt
+      end
+
+    p = rt.parts[user]
+
+    drop =
+      case p.pending do
+        [%{meta: last} | _] -> max(DateTime.diff(last.end, meta.start, :millisecond), 0)
+        [] -> 0
+      end
+
+    ms = max(meta.duration_ms - drop, 0)
+
+    p =
+      if p.pending == [] do
+        ref = make_ref()
+        Process.send_after(self(), {:flush_pending, rt.sid, user, ref}, t.join_wait_ms)
+        %{p | pend_ref: ref}
+      else
+        p
+      end
+
+    p = %{
+      p
+      | pending: [%{meta: meta, audio: audio, lang: lang, drop: drop} | p.pending],
+        pend_ms: p.pend_ms + ms
+    }
+
+    rt = %{rt | parts: Map.put(rt.parts, user, p)}
+
+    # ≥ 8 s, or ≥ 4 s ending at a pause: a chunk shorter than the phone's 4-s maximum was cut at
+    # a pause (§36.4 fast: ≥ 300 ms of silence), so the utterance may have ended.
+    cond do
+      p.pend_ms >= t.join_max_ms -> flush(rt, user)
+      p.pend_ms >= t.join_min_ms and meta.duration_ms < t.join_cut_ms -> flush(rt, user)
+      true -> rt
+    end
+  end
+
+  # The chunk follows the speaker's waiting si/ta chunks without a pause.
+  defp continues?(%{pending: [%{meta: last} | _]}, meta),
+    do: DateTime.diff(meta.start, last.end, :millisecond) < CallTranscribe.timing().join_pause_ms
+
+  defp continues?(_p, _meta), do: false
+
+  # The speaker's waiting chunks become one queued item (first in line): one Ogg/Opus stream
+  # without the overlaps, transcribed with their language.
+  defp flush(rt, user) do
+    case rt.parts[user] do
+      %{pending: [_ | _] = pending} = p ->
+        [first | _] = items = Enum.reverse(pending)
+        last = hd(pending)
+
+        p = %{p | pending: [], pend_ms: 0, pend_ref: nil}
+
+        p =
+          if rt.discard do
+            p
+          else
+            audio =
+              OggJoin.join(
+                Enum.with_index(items, fn it, i ->
+                  {it.audio, if(i == 0, do: 0, else: it.drop)}
+                end)
+              )
+
+            item =
+              Map.merge(last.meta, %{
+                start: first.meta.start,
+                duration_ms: rt.parts[user].pend_ms,
+                sha256: :crypto.hash(:sha256, audio) |> Base.encode16(case: :lower),
+                joined: true,
+                audio: audio
+              })
+
+            %{p | queue: :queue.in_r(item, p.queue)}
+          end
+
+        %{rt | parts: Map.put(rt.parts, user, p)}
+
+      _ ->
+        rt
+    end
+  end
 
   ## Turns (§36.5 grouping)
 
@@ -1058,6 +1224,23 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   ## Draining a final session
 
   defp drain(st, sid) do
+    # v1.50 §36.12: joined chunks still waiting are transcribed before the session closes.
+    waiting =
+      case st.draining do
+        %{^sid => {_s, rt}} -> for {u, %{pending: [_ | _]}} <- rt.parts, do: u
+        _ -> []
+      end
+
+    if waiting == [] do
+      drain_idle(st, sid)
+    else
+      st
+      |> with_rt(sid, fn st, rt -> {st, Enum.reduce(waiting, rt, &flush(&2, &1))} end)
+      |> then(fn st -> Enum.reduce(waiting, st, &run_next(&2, sid, &1)) end)
+    end
+  end
+
+  defp drain_idle(st, sid) do
     case st.draining do
       %{^sid => {s, rt}} ->
         idle? =

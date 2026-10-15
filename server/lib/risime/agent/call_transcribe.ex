@@ -45,7 +45,15 @@ defmodule RisiMe.Agent.CallTranscribe do
     fast_queue_max: 4,
     # The speech-guard pause file is held while a fast session is on (evals, the night run and
     # the TTS lab stand back), extended every minute.
-    fast_guard_s: 120
+    fast_guard_s: 120,
+    # v1.50 §36.12: a fast session's Sinhala/Tamil chunks of one speaker are joined until 8 s of
+    # audio, a pause of >= 600 ms after >= 4 s, or 6 s after the first one arrived.
+    join_max_ms: 8_000,
+    join_min_ms: 4_000,
+    join_pause_ms: 600,
+    join_wait_ms: 6_000,
+    # A chunk shorter than this was cut at a pause by the phone (its maximum is 4 s).
+    join_cut_ms: 3_900
   }
 
   @max_live 4

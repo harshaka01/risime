@@ -122,11 +122,16 @@ defmodule RisiMe.Agent.Speech.Http do
   (`model=auto` with the detected `language`, so the service doesn't detect twice). When the
   service can't load it (`503`: not enough memory; `404`: not served), every chunk goes to
   `model=auto` as before (one request) for 5 min before the model is tried again.
+
+  v1.50 §36.12: `opts[:defer_langs]` (`["si", "ta"]` in a fast session) are detected only: the
+  result is `speech: true, deferred: true` with the language and no text, and the caller
+  transcribes the speaker's joined chunks later (`language` forced, one request).
   """
   def transcribe_fast(audio, opts) do
-    en = fast_en_model()
+    en = if fast_backoff?(), do: nil, else: fast_en_model()
+    defer = Keyword.get(opts, :defer_langs, [])
 
-    if en == nil or fast_backoff?() do
+    if en == nil and defer == [] do
       transcribe_auto(audio, opts)
     else
       case detect_routed(audio, opts) do
@@ -138,9 +143,25 @@ defmodule RisiMe.Agent.Speech.Http do
           p = d["probability"]
 
           r =
-            if lang == "en",
-              do: fast_en(audio, en, opts),
-              else: post_transcription(audio, "auto", Keyword.put(opts, :language, lang))
+            cond do
+              # v1.50 §36.12: detected only; the caller joins it with the speaker's next chunks.
+              lang != nil and lang in defer ->
+                {:ok,
+                 %{
+                   no_speech()
+                   | speech: true,
+                     language: lang,
+                     model: Speech.route(lang),
+                     language_probability: p
+                 }
+                 |> Map.put(:deferred, true)}
+
+              lang == "en" and en != nil ->
+                fast_en(audio, en, opts)
+
+              true ->
+                post_transcription(audio, "auto", Keyword.put(opts, :language, lang))
+            end
 
           with {:ok, res} <- r,
                do: {:ok, %{res | language_probability: res.language_probability || p}}

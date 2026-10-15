@@ -34,7 +34,37 @@ defmodule RisiMe.FakeSpeech do
     parsed =
       if Application.get_env(:risime, :fake_speech_down) == true, do: :fail, else: parse(audio)
 
+    # v1.50 §36.12: a fast session's si/ta chunk is only detected (`defer_langs`); a joined one
+    # (`language` forced) is the chunks' scripts one after another ("si:a" <> "si:b").
+    parsed =
+      case {parsed, opts[:joined]} do
+        {{lang, _}, nil} when is_binary(lang) ->
+          if lang in Keyword.get(opts, :defer_langs, []), do: {:defer, lang}, else: parsed
+
+        {{lang, _}, true} when is_binary(lang) ->
+          {lang,
+           audio
+           |> String.split(~r/(si|ta|en):/, trim: true)
+           |> Enum.map(&String.trim/1)
+           |> Enum.join(" ")}
+
+        _ ->
+          parsed
+      end
+
     case parsed do
+      {:defer, lang} ->
+        {:ok,
+         %{
+           text: "",
+           language: lang,
+           model: Speech.route(lang),
+           elapsed_ms: 5,
+           speech: true,
+           deferred: true,
+           language_probability: 0.97
+         }}
+
       :fail ->
         {:error, :unavailable}
 

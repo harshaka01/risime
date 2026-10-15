@@ -190,6 +190,117 @@ defmodule RisiMe.Agent.CallTranscribeFastTest do
     assert left > 60 and left <= 120
   end
 
+  describe "v1.50 §36.12: Sinhala and Tamil chunks are joined" do
+    test "until 8 s of audio (minus the overlap): one line, transcribed with its language" do
+      fast!("on")
+      w = transcribe_world!()
+      sid = start_on!(w)
+      _ = await_post(w.og, "call_transcribe")
+
+      say!(w, :a, sid, 0, 0, "si:හෙට", 4_000)
+      assert_receive {:fake_speech_opts, "si:හෙට", opts}
+      assert opts[:defer_langs] == ["si", "ta"]
+      say!(w, :a, sid, 1, 3_500, "si:උදේ", 4_000)
+      refute_post(w.og, "call_transcript", 200)
+      # 4 + 3.5 + 3.5 ≥ 8 s (4-s cuts, 0.5 s overlaps): the three go as one.
+      say!(w, :a, sid, 2, 7_000, "si:දහයට", 4_000)
+      assert_receive {:fake_speech_opts, "si:උදේ", _}
+      assert_receive {:fake_speech_opts, "si:දහයට", _}
+      assert_receive {:fake_speech_opts, joined, jopts}, 2_000
+      assert jopts[:joined] == true
+      refute jopts[:language]
+      assert jopts[:priority] == "live"
+      refute jopts[:fast]
+      assert joined =~ "si:හෙට"
+      {_, t} = await_post(w.og, "call_transcript")
+      assert t["text"] == "හෙට උදේ දහයට"
+      assert t["language"] == "si"
+      assert t["model"] == "whisper-small-sinhala"
+      assert t["start"] == RisiMe.Agent.Clock.ts(session!(sid).started_at)
+    end
+
+    test "a pause of ≥ 600 ms after ≥ 4 s closes the joined line" do
+      fast!("on")
+      w = transcribe_world!()
+      sid = start_on!(w)
+      _ = await_post(w.og, "call_transcribe")
+      say!(w, :a, sid, 0, 0, "ta:நாளை", 4_000)
+      say!(w, :a, sid, 1, 3_500, "ta:காலை", 4_000)
+      refute_post(w.og, "call_transcript", 200)
+      # 7.5 s waiting, then 1 s of silence before the next chunk.
+      say!(w, :a, sid, 2, 8_500, "ta:சந்திப்போம்", 4_000)
+      {_, t} = await_post(w.og, "call_transcript")
+      assert t["text"] == "நாளை காலை"
+      assert t["language"] == "ta"
+    end
+
+    test "≥ 4 s ending at the phone's pause cut (< 4 s chunk) goes out at once" do
+      fast!("on")
+      w = transcribe_world!()
+      sid = start_on!(w)
+      _ = await_post(w.og, "call_transcribe")
+      say!(w, :a, sid, 0, 0, "si:හෙට", 4_000)
+      refute_post(w.og, "call_transcript", 200)
+      say!(w, :a, sid, 1, 3_500, "si:උදේ", 1_500)
+      {_, t} = await_post(w.og, "call_transcript")
+      assert t["text"] == "හෙට උදේ"
+    end
+
+    test "a lone chunk goes out after the 6-s wait; English is never held" do
+      fast!("on")
+      w = transcribe_world!(timing: [join_wait_ms: 150])
+      sid = start_on!(w)
+      _ = await_post(w.og, "call_transcribe")
+      say!(w, :a, sid, 0, 0, "si:හෙට")
+      say!(w, :b, sid, 0, 500, "en:see you")
+      {_, t} = await_post(w.og, "call_transcript")
+      assert t["text"] == "see you"
+      {_, t} = await_post(w.og, "call_transcript")
+      assert t["text"] == "හෙට"
+    end
+
+    test "the same speaker's English sends the waiting Sinhala first; the end flushes the rest" do
+      fast!("on")
+      w = transcribe_world!()
+      sid = start_on!(w)
+      _ = await_post(w.og, "call_transcribe")
+      say!(w, :a, sid, 0, 0, "si:හෙට")
+      say!(w, :a, sid, 1, 4_000, "en:tomorrow then")
+      texts = for _ <- 1..2, do: elem(await_post(w.og, "call_transcript"), 1)["text"]
+      assert Enum.sort(texts) == Enum.sort(["හෙට", "tomorrow then"])
+      say!(w, :a, sid, 2, 6_000, "ta:சரி")
+      tpush!(w, :a, "stop", %{"session_id" => sid, "reason" => "ended"})
+      {_, t} = await_post(w.og, "call_transcript")
+      assert t["text"] == "சரி"
+    end
+
+    test "a contiguous chunk joins the waiting Sinhala whatever its own detection says" do
+      fast!("on")
+      w = transcribe_world!(timing: [join_wait_ms: 300])
+      sid = start_on!(w)
+      _ = await_post(w.og, "call_transcribe")
+      say!(w, :a, sid, 0, 0, "si:හෙට")
+      say!(w, :a, sid, 1, 3_000, "en:ude")
+      assert_receive {:fake_speech_opts, "en:ude", opts}
+      assert "en" in opts[:defer_langs]
+      {_, t} = await_post(w.og, "call_transcript")
+      assert t["text"] == "හෙට ude"
+      assert t["language"] == "si"
+    end
+
+    test "stop and delete drops the waiting chunks untranscribed" do
+      fast!("on")
+      w = transcribe_world!()
+      sid = start_on!(w)
+      _ = await_post(w.og, "call_transcribe")
+      say!(w, :a, sid, 0, 0, "si:හෙට")
+      tpush!(w, :a, "stop", %{"session_id" => sid, "reason" => "stopped", "discard" => true})
+      Process.sleep(300)
+      refute_receive {:fake_speech, :transcribe, _}, 100
+      refute_post(w.og, "call_transcript", 100)
+    end
+  end
+
   test "Session.chunk/1 of a stored row follows its fast column" do
     assert Session.chunk(%Session{fast: true})["mode"] == "vad"
     assert Session.chunk(%Session{fast: false}) == Session.chunk()

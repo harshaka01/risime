@@ -581,6 +581,41 @@ defmodule RisiMe.Agent.SpeechHttpTest do
       end
     end
 
+    test "v1.50 §36.12: a deferred language is detected only (even while the fast model is off)" do
+      cfg = Application.get_env(:risime, :risi_speech_http)
+      Application.put_env(:risime, :risi_speech_http, Keyword.put(cfg, :fast_en_model, "none"))
+
+      rec =
+        stub(fn conn, _ ->
+          assert conn.request_path == "/v1/audio/detect"
+          detected(conn, "ta", 0.91)
+        end)
+
+      assert {:ok, %{deferred: true, speech: true, language: "ta", text: ""} = r} =
+               Http.transcribe("a", fast: true, defer_langs: ["si", "ta"])
+
+      assert r.model == "tamil-asr-qwen3"
+      assert r.language_probability == 0.91
+      assert length(Agent.get(rec, & &1)) == 1
+
+      # English is still transcribed (auto with language=en, the fast model being off).
+      stub(fn conn, body ->
+        case conn.request_path do
+          "/v1/audio/detect" ->
+            detected(conn, "en")
+
+          _ ->
+            assert field(body, "model") == "auto" and field(body, "language") == "en"
+            Req.Test.json(conn, %{"text" => "ok", "language" => "en"})
+        end
+      end)
+
+      assert {:ok, %{text: "ok"} = r} =
+               Http.transcribe("a", fast: true, defer_langs: ["si", "ta"])
+
+      refute Map.get(r, :deferred)
+    end
+
     test "no speech at detection: nothing is transcribed" do
       rec =
         stub(fn conn, _ ->
