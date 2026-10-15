@@ -414,6 +414,8 @@ defmodule RisiMe.Agent.RootInbox do
       if is_binary(args["sudo"]) and String.trim(args["sudo"]) != "",
         do: String.trim(args["sudo"])
 
+    text = sections(args["kind"], text, args)
+
     # Harsha 15 Oct: the command comes next as its own message (long-press → Copy copies exactly
     # it), so the question only points at it.
     text =
@@ -432,6 +434,32 @@ defmodule RisiMe.Agent.RootInbox do
         IO.puts("refused: #{why}")
     end
   end
+
+  @doc """
+  Harsha 15 Oct: a release or done notice has three sections, in this order: the details, what
+  Harsha has to do, and where it is available. Other kinds: `text` unchanged.
+  """
+  def sections(kind, text, args) when kind in ~w(release done) do
+    {d, a} =
+      if kind == "release",
+        do: {"Release details:", "New release available:"},
+        else: {"Work details:", "Available now:"}
+
+    bullets = fn
+      [] -> nil
+      xs -> Enum.map_join(xs, "\n", &("• " <> &1))
+    end
+
+    [
+      text,
+      d <> "\n" <> (bullets.(args["details"] || []) || "• (none)"),
+      "Harsha to action:\n" <> (bullets.(args["actions"] || []) || "Nothing for you."),
+      a <> "\n" <> (args["available"] || "Now, on the pilot server (no app update needed).")
+    ]
+    |> Enum.join("\n\n")
+  end
+
+  def sections(_kind, text, _args), do: text
 
   # The bare command, one Risi message (no chips, no second push).
   defp post_command(cmd) do

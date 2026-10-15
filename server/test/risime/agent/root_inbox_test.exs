@@ -71,6 +71,27 @@ defmodule RisiMe.Agent.RootInboxTest do
     assert RootInbox.fetch_new() == []
   end
 
+  test "a release notice has its three sections in order (Harsha 15 Oct)", _ctx do
+    b64 =
+      %{
+        "text" => "v0.3.0-nightly.11",
+        "kind" => "release",
+        "topic" => "rel11",
+        "details" => ["Calendar answers fixed"],
+        "actions" => ["Install the update"],
+        "available" => "Update screen in the app"
+      }
+      |> Jason.encode!()
+      |> Base.encode64()
+
+    ExUnit.CaptureIO.capture_io(fn -> RootInbox.cli_post(b64) end)
+    [{_, body, _}] = posts()
+
+    assert body ==
+             "New release: v0.3.0-nightly.11\n\nRelease details:\n• Calendar answers fixed\n\n" <>
+               "Harsha to action:\n• Install the update\n\nNew release available:\nUpdate screen in the app"
+  end
+
   test "a command comes as its own message, to long-press and copy (Harsha 15 Oct)", _ctx do
     b64 =
       %{"text" => "Please run this.", "topic" => "cmd", "options" => ["Done"], "sudo" => "ls -la"}
