@@ -244,6 +244,11 @@ defmodule RisiMe.Agent.ActionItems do
       duration_s: Summary.duration_s(s),
       also: Summary.also(rows),
       lang: Summary.majority(rows),
+      # v1.39 §36.7: each speaker's language (the §27.3 copy is in its reader's language).
+      langs:
+        rows
+        |> Enum.group_by(& &1.speaker)
+        |> Map.new(fn {sp, rs} -> {sp, Summary.majority(rs)} end),
       audio_s: Float.round(Enum.sum(Enum.map(rows, & &1.ms)) / 1000, 1),
       turns: length(rows)
     }
@@ -602,7 +607,8 @@ defmodule RisiMe.Agent.ActionItems do
       created_at: now,
       source_ref: src.ref,
       note_message_id: src.note_id,
-      lang: found.lang
+      lang: found.lang,
+      langs: src[:langs]
     }
 
     with {:ok, d} <- Discussion.seal(d),
@@ -731,7 +737,8 @@ defmodule RisiMe.Agent.ActionItems do
 
     # P0 2026-10-15: a call's discussion summary (the §35.4 summary card: its one line and key
     # points) is posted with its action items; the items alone are never the whole summary.
-    if d.source == "call" and d.key_points != [], do: LedgerOut.summary_card(d)
+    summary? = d.source == "call" and d.key_points != []
+    if summary?, do: LedgerOut.summary_card(d)
 
     {body, risi} = card(d, found.items, src, names)
 
@@ -747,6 +754,11 @@ defmodule RisiMe.Agent.ActionItems do
       {body, risi} = confirm_card(d, owner, items, src, names)
       LedgerOut.deliver_or_hold(d, owner, body, risi)
     end
+
+    # The phones show the summary card's one line only; the key points go to each participant's
+    # Risi chat as the §27.3 copy (items: [], `action_confirm` carries them). After the confirm
+    # cards: a held copy shares their (summary, user) hold slot, and the confirm one wins.
+    if summary?, do: LedgerOut.summary_copies(d)
 
     :ok
   end

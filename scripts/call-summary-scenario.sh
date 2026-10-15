@@ -244,17 +244,27 @@ official_run() {  # <tag> <items 0|1> <clip> <reps> <words regex> <label>
 # 4a. One action item: the action_items card with the item, on both phones.
 official_run cs1 1 en 4 'office|quote|friday|meet|revised' "official (1 item)"
 await_card "official (1 item)" 'cs1i|cs1s|cs1k|cs1d|cs1p|cs1r'
-# P0 2026-10-15: a call with an action item gets its discussion summary card (key points) too, not only the items.
+# P0 2026-10-15: a call with an action item gets its discussion summary too, not only the items. The phones show the
+# Official discussion_card's one line (its summary) with [Open Risi chat]; the key points are in each participant's
+# Risi chat (the §27.3 discussion_summary copy, items: [] since action_confirm carries them).
 for DEV in A B; do
-  ok=""; to_bottom; for _ in $(seq 1 10); do dump; grep -qE 'cs1p The office|cs1r The whole call' "$WORK/ui-$DEV.xml" && { ok=1; break; }; A shell input swipe 540 900 540 1300 300; sleep 1; done
-  [ -n "$ok" ] || { csshot "1-item-no-summary-$DEV"; fail "official (1 item): $DEV shows the items but no discussion summary card (key points)"; }
-  for _ in 1 2 3 4 5; do to_bottom; done   # back to the newest posts for the item check below
+  ok=""; to_bottom; for _ in $(seq 1 10); do dump; grep -qF 'text="Open Risi chat"' "$WORK/ui-$DEV.xml" && { ok=1; break; }; A shell input swipe 540 900 540 1300 300; sleep 1; done
+  [ -n "$ok" ] || { csshot "1-item-no-summary-$DEV"; fail "official (1 item): $DEV shows the items but no discussion summary card ([Open Risi chat])"; }
+  tap "Open Risi chat" || fail "official (1 item): $DEV can't open the Risi chat from the summary card"
+  sleep 2; ok=""
+  for _ in $(seq 1 20); do to_bottom; dump; grep -qE 'cs1p The office|cs1r The whole call' "$WORK/ui-$DEV.xml" && { ok=1; break; }; sleep 1; done
+  [ -n "$ok" ] || { csshot "1-item-no-keypoints-$DEV"; fail "official (1 item): $DEV's Risi chat has no discussion summary with the call's key points"; }
+  csshot "1-item-keypoints-$DEV"
+  if [ "${CS_SECTION_S:-20}" != 0 ] && [ "$DEV" = A ]; then
+    grep -qF 'cs1r The whole call' "$WORK/ui-$DEV.xml" || echo "CALLTEST WARN official (1 item): the reduced key point (cs1r) isn't on screen; a section's own point is"
+  fi
+  to_official || fail "official (1 item): $DEV can't get back to the Official tab"
+  for _ in 1 2 3 4 5; do to_bottom; done   # the newest posts for the item check below
 done
-pass "official (1 item): the discussion summary card (key points) is there with the action items on both phones"
+pass "official (1 item): the summary card in Official and its key points in each Risi chat, with the action items, on both phones"
 if [ "${CS_SECTION_S:-20}" != 0 ]; then
   na="$(grep -cE '"name": ?"action_items"' "$WORK/llm-requests.jsonl" || true)"; nr="$(grep -cE '"name": ?"call_summary"' "$WORK/llm-requests.jsonl" || true)"
   [ "$na" -ge 2 ] && [ "$nr" -ge 1 ] || fail "official (1 item): the call wasn't summarised in sections (${CS_SECTION_S:-20}-s sections: $na action_items requests, $nr reduce requests)"
-  grep -qF 'cs1r The whole call' "$WORK/ui-A.xml" "$WORK/ui-B.xml" 2>/dev/null || echo "CALLTEST WARN official (1 item): the reduced summary (cs1r) isn't on screen; the section's own points are"
   pass "official (1 item): long-call path: $na section extractions and $nr reduce for one card (sections of ${CS_SECTION_S:-20} s)"
 fi
 for DEV in A B; do

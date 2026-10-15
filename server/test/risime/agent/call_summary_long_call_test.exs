@@ -281,6 +281,46 @@ defmodule RisiMe.Agent.CallSummaryLongCallTest do
     refute_post(w.og, "action_items")
   end
 
+  # The gate (15 Oct): the phones show only the Official card's line, so the key points go to
+  # each participant's Risi chat as the §27.3 copy, items or not.
+  test "the key points reach each participant's Risi chat (with items, and without)", w do
+    rca = RisiMe.RisiHelpers.own_risi_chat!(w.a.user)
+    rcb = RisiMe.RisiHelpers.own_risi_chat!(w.b.user)
+    llm!()
+    s = call!(w, 4)
+    assert :ok = job(w, s)
+
+    {_body, card} = await_post(w.og, "discussion_card")
+
+    for rc <- [rca, rcb] do
+      {body, copy} = await_post(rc, "discussion_summary")
+      assert copy["summary_id"] == card["summary_id"]
+      assert copy["key_points"] == ["Point of part 1."] and copy["items"] == []
+      assert body =~ "• Point of part 1."
+    end
+
+    # A owns the promise: its confirm card, too.
+    {_body, confirm} = await_post(rca, "action_confirm")
+    assert [%{"text" => "Send the revised quote"}] = confirm["items"]
+
+    # No items (action items off): the §27 path sends the copies as well.
+    Application.put_env(:risime, :risi_action_items, false)
+
+    RisiMe.RisiHelpers.fake_llm!(fn
+      "discussion_summary", _ ->
+        %{"key_points" => ["Only talk."], "summary" => "Talk.", "items" => []}
+
+      _, _ ->
+        %{"commitments" => []}
+    end)
+
+    s2 = call!(w, 4)
+    assert :ok = job(w, s2)
+    {_body, _card} = await_post(w.og, "discussion_card")
+    {_body, copy} = await_post(rca, "discussion_summary")
+    assert copy["key_points"] == ["Only talk."] and copy["items"] == []
+  end
+
   test "sections: at most max_chars of text and max_span_s of call time each" do
     t0 = ~U[2026-10-14 22:00:00Z]
     lines = for i <- 0..149, do: %{text: String.duplicate("x", 40), at: DateTime.add(t0, i * 12)}

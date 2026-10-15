@@ -63,7 +63,9 @@ defmodule RisiMe.Agent.LedgerOut do
 
     copies = targets -- noted
 
-    if items != [] do
+    # P0 2026-10-15: a transcribed call's key points reach each participant even with no items
+    # (the Official `discussion_card` shows only its one line on the phones).
+    if items != [] or d.source == "call" do
       for r <- copies do
         {body, risi} = copy(d, items, r, names)
         deliver_or_hold(d, r, body, risi)
@@ -79,6 +81,23 @@ defmodule RisiMe.Agent.LedgerOut do
     end
 
     kept
+  end
+
+  @doc """
+  P0 2026-10-15: the §27.3 `discussion_summary` copy (key points, no items) of a call summary
+  whose items went on the §38 `action_items` card, to every recipient with a `risi_ledger`
+  device (held like any copy). §38.1: `action_confirm` replaces only the copy's items. The
+  Official `discussion_card` shows one line on the phones; the key points are read here.
+  """
+  def summary_copies(%Discussion{} = d) do
+    names = names(d.conversation_id)
+
+    for r <- Devices.risi_ledger_users(d.recipients) do
+      {body, risi} = copy(d, [], r, names)
+      deliver_or_hold(d, r, body, risi)
+    end
+
+    :ok
   end
 
   defp note_users(note), do: RisiMe.Agent.Notes.recipients(note.note_id)
