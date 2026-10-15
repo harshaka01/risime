@@ -50,6 +50,8 @@ defmodule RisiMe.Agent.ScheduleIntent do
 
   @presence ~r/\banything\b|\b(?:do|did|have|will)\s+i\s+(?:have|got)\b|\bwhat\s+(?:do|did)\s+i\s+have\b|\bwhat'?s\s+(?:on|happening|planned)\b|\bcheck\b/iu
 
+  @promise ~r/\bpromis(?:e|ed|es)\b|\bcommit(?:ted|ments?)\b|පොරොන්දු|வாக்குறுதி/iu
+
   @doc "Classifies `text` (see the module doc); `today` is the asker's local date."
   def classify(text, %Date{} = today) when is_binary(text) do
     t = String.trim(text)
@@ -57,6 +59,9 @@ defmodule RisiMe.Agent.ScheduleIntent do
     cond do
       t == "" -> :none
       Enum.any?(@items, &Regex.match?(&1, t)) -> :risi_items
+      # P0 2026-10-15: "did I promise anything today or tomorrow?" is the day's agenda (it lists
+      # the promises, reminders and follow-ups due then); without a day it is memory (below).
+      Regex.match?(@promise, t) and day_named?(t, today) -> {:schedule_read, range(t, today)}
       # v1.36 §35.2: summarise a range / what did I agree / what's pending → memory.
       match?({:memory, _}, memory = RisiMe.Agent.MemoryIntent.classify(t, today)) -> memory
       Enum.any?(@write, &Regex.match?(&1, t)) -> :none

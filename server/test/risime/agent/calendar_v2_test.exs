@@ -294,6 +294,36 @@ defmodule RisiMe.Agent.CalendarV2Test do
       assert String.starts_with?(body3, "✓ I can see your calendars now.")
     end
 
+    test "P0 15 Oct: a calendar claim without a read reads the phone, never \"connect it\"",
+         ctx do
+      fake_llm!(fn "risi_next_action", _body ->
+        %{
+          "tool" => "final",
+          "answer" => "You have nothing on your calendar today, so you're free.",
+          "sources" => [],
+          "next_steps" => []
+        }
+      end)
+
+      {_, body, _risi} = ask_with_phone!(ctx, "should I go to the gym later?", sync_off())
+      refute body =~ "Connect it"
+      refute body =~ "didn't check"
+      assert body =~ "From: your phone calendars · Risi"
+    end
+
+    test "P0 15 Oct: Harsha's promise question never blames calendar setup", ctx do
+      q = "We see but have I promised you should be able to read what I promised and let me know"
+      assert {:memory, %{mode: :agreed}} = RisiMe.Agent.ScheduleIntent.classify(q, ~D[2026-10-15])
+
+      assert {:schedule_read, %{from: ~D[2026-10-15], to: ~D[2026-10-17]}} =
+               RisiMe.Agent.ScheduleIntent.classify(
+                 "Did I promise anything today or tomorrow?",
+                 ~D[2026-10-15]
+               )
+
+      _ = ctx
+    end
+
     test "parity: the switch off keeps today's \"Not checked: Phone calendar (sync is off)\"",
          ctx do
       Application.put_env(:risime, :risi_calendar_v2, false)

@@ -1378,6 +1378,28 @@ defmodule RisiMe.Agent.Turn do
   defp rule_final(st, ctx, answer),
     do: finish(%{st | rule_made: true}, ctx, answer, [], ["Ask me again"])
 
+  # P0 2026-10-15 (Harsha 15:00): the model answered about the calendar without reading it. The
+  # turn reads the phone's calendar now and answers from the read, never "connect it" when the
+  # phone wasn't asked (once per turn: `:read_forced`).
+  defp finish(st, ctx, answer, source_refs, next_steps)
+       when is_binary(answer) and not is_map_key(ctx, :read_forced) do
+    if Map.get(st, :calendar_checks, []) == [] and not Map.get(st, :prebuilt, false) and
+         ctx.in_risi_chat? and CalendarHonesty.claims_calendar_free?(answer) do
+      today = ctx.now |> Clock.local(ctx.tz) |> NaiveDateTime.to_date()
+
+      q = ctx.question || ""
+
+      r =
+        if ScheduleIntent.day_named?(q, today),
+          do: ScheduleIntent.range(q, today),
+          else: %{from: today, to: Date.add(today, 2), now?: true}
+
+      forced_read(st, Map.merge(ctx, %{schedule: r, read_forced: true}))
+    else
+      finish(st, Map.put(ctx, :read_forced, false), answer, source_refs, next_steps)
+    end
+  end
+
   defp finish(st, ctx, answer, source_refs, next_steps) do
     {st, answer, source_refs} = memory_finish(st, ctx, answer, source_refs)
     checks = Map.get(st, :calendar_checks, [])

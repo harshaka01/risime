@@ -30,6 +30,8 @@ defmodule RisiMe.Agent.MemoryIntent do
   @agreed [
     ~r/\bwhat\s+(?:did|have)\s+(?:i|we|you)\s+(?:agree[d]?|decide[d]?|promise[d]?|say|said|discuss(?:ed)?|talk(?:ed)?\s+about|settle[d]?\s+on|commit(?:ted)?\s+to)\b/iu,
     ~r/\bwhat\s+(?:was|were|has\s+been|had\s+been)\s+(?:agreed|decided|promised|discussed|settled)\b/iu,
+    # P0 2026-10-15 (Harsha's voice note): "have I promised…", "what I promised", "my promises".
+    ~r/\b(?:have|did|had)\s+i\s+(?:promised?|committed)\b|\bwhat\s+(?:i|we)\s+(?:promised|committed\s+to|agreed)\b|\bmy\s+(?:promises|commitments)\b|\bany\s+promises\b/iu,
     ~r/\b(?:agreement|agreements|decisions?)\s+(?:with|about|on)\b/iu,
     ~r/\bwhat\s+did\s+\p{Lu}[\p{L}'-]+\s+(?:say|agree|promise|decide)\b/u,
     ~r/එකඟ|එකග|තීරණය|පොරොන්දු|කතා\s+කර(?:පු|ගත්|ගත්තේ|ගත්ත)|කිව්වේ|කිව්ව/u,
