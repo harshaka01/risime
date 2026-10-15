@@ -15,6 +15,21 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
 - **C) Voice quality (frozen 15 Oct 15:00, Harsha):** gapless streamed TTS; 3 candidate voices (Kokoro vs Orpheus/Chatterbox)
   to rate on the Voices page; use his pick. Built (8fb149ad worker, 805f589b Voices page), reverted on main by 40ab4a93 /
   e4957651 under the freeze; resume = revert the reverts + a real harness gap run. Orpheus weights missing (night download).
+- **C) Voice, Harsha 20:26 (starts right after the brain device test passes):**
+  1. TTS lab candidates: Chatterbox-Turbo (MIT, 350M) and Dia2 (Apache) next to Kokoro and Orpheus. Night
+     download allowed even when > 2 GB. One stock voice each (warm, friendly, professional, adult, clear). Streaming
+     with continuous playback.
+  2. Rating: 3 samples per engine in his Risi chat (a greeting, a calendar answer, a "let me check" line). He replies
+     1/2/3/4, and his pick becomes the call voice. Kokoro stays the fallback when GPU memory is short.
+  3. Fillers upgrade:
+     - lines fit the context and vary;
+     - timing: at once, then ~4 s "still on it…", then ~10 s "this is taking a bit longer";
+     - no line repeated within a call;
+     - "anything else while I'm at it?" (what he says merges into the same request);
+     - rare natural touches or tags;
+     - never hint at a result, never claim to be human.
+  4. Measure start-of-speech p50/p95 per engine on calls, plus his rating. Ship his pick as a server hotfix and send
+     him one line with the numbers.
 - **D) (frozen):** wip 1e084c1c on branch worktree-agent-aac73afcdb58cac1f (weather + SearXNG, untested; no decision doc yet).
 - **D) Open-domain answers:** model knowledge + weather (Open-Meteo, no key) + web search (self-hosted SearXNG,
   outbound only the query); a decision; "what can you do" lists them.
