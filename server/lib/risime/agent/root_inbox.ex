@@ -115,8 +115,8 @@ defmodule RisiMe.Agent.RootInbox do
               options: options,
               posted_at: now,
               # A release or done notice asks nothing: never catches a reply.
-              answered_at: if(kind in ~w(release done), do: now),
-              delivered_at: if(kind in ~w(release done), do: now)
+              answered_at: if(kind in ~w(release done) and options == [], do: now),
+              delivered_at: if(kind in ~w(release done) and options == [], do: now)
             }
           ])
 
@@ -425,7 +425,19 @@ defmodule RisiMe.Agent.RootInbox do
             "\n\nThe command is in the next message: long-press it and tap Copy. Run on spark2 (gx10-e23a).",
         else: text
 
-    case post(args["topic"], text, args["options"] || [], args["kind"] || "ask") do
+    # Harsha 15 Oct: an action for Harsha (a command, or "Harsha to action" items) asks back:
+    # "It's done" or "Did it differently" (then "Root: <what he ran>", captured at any length).
+    options = args["options"] || []
+    todo? = cmd != nil or (args["actions"] || []) != []
+
+    {text, options} =
+      if todo? and options == [],
+        do:
+          {text <> "\n\nDid it differently? Reply \"Root: \" and what you ran instead.",
+           ["It's done", "Did it differently"]},
+        else: {text, options}
+
+    case post(args["topic"], text, options, args["kind"] || "ask") do
       {:ok, id} ->
         if cmd, do: post_command(cmd)
         IO.puts("posted #{id}")

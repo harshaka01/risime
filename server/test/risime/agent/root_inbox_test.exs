@@ -85,11 +85,15 @@ defmodule RisiMe.Agent.RootInboxTest do
       |> Base.encode64()
 
     ExUnit.CaptureIO.capture_io(fn -> RootInbox.cli_post(b64) end)
-    [{_, body, _}] = posts()
+    [{_, body, a}] = posts()
 
     assert body ==
              "New release: v0.3.0-nightly.11\n\nRelease details:\n• Calendar answers fixed\n\n" <>
-               "Harsha to action:\n• Install the update\n\nNew release available:\nUpdate screen in the app"
+               "Harsha to action:\n• Install the update\n\nNew release available:\nUpdate screen in the app" <>
+               "\n\nDid it differently? Reply \"Root: \" and what you ran instead."
+
+    # An action for Harsha asks back: done, or done differently.
+    assert Enum.map(a["next_actions"], & &1["label"]) == ["It's done", "Did it differently"]
   end
 
   test "a command comes as its own message, to long-press and copy (Harsha 15 Oct)", _ctx do
