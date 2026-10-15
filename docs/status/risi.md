@@ -442,3 +442,21 @@ can ship through the fast lane (483b14d); the client part needs the next APK. Ga
   - posts `ops_alert` `conversation_stuck` to the `RISI_DEV_USERS` Risi chats;
   - writes the daily scoreboard row `health` (accuracy = reliability).
 - **Device gate:** `scripts/official-start-test`.
+
+## 2026-10-15 13:20Z — device test fixes (calls + chat), srv7 → srv9
+
+Live: v0.3.0-nightly.10-srv7 (11:47Z), -srv8 (12:32Z), -srv9 (13:01Z). Redroid test phone, test account:
+- Chat pass on srv9: 10/10 PASS + skills + reminder card (PDT OK, run 20261015T131121Z). "What did I promise?" with no
+  commitments lists "Reminders I'm keeping for you:"; "What can you do?" in the Risi chat reads `capabilities` first.
+- Calls on srv9 (13:07Z): the fragments merge ("Do you have anything? On the 18th." → Sunday 2–3 pm; "Give me the entire
+  week and tell me the important things" → today→Sunday with phone events + the reminder); promises: "You have no
+  promises or reminders for today. Tomorrow at 10 am you have a reminder to call Shakya."
+- Session: an utterance still at STT is transcribed with the next one; a fragment after a restart merges (root utt); an
+  "and …" fragment joins a calendar question; the caller starting to speak before Risi is audible holds Risi's pieces.
+- Spoken: phone calendar unread → said first, days are "no promises or reminders", never "nothing scheduled".
+- Harness: pilot-call-test waits for Risi's answer (turn log + 2.5 s quiet, 45 s cap), foregrounds the app, trims Kokoro's
+  padding (the "1 s" pause was 1.9 s; a comma was 0.94 s).
+- Committed, NOT live (deploy budget): the phrasing guard against commentary ("You have access and should add the notes").
+- For root (media worker, infra/voice/risi_voice_worker.py): caller speech that starts as Risi starts speaking is lost
+  (no barge, utterance not emitted) — a barge-in run needs 300 ms of strictly consecutive voiced windows above the echo
+  level, and the utterance keeps only `run + PREROLL_WINS` windows of `pre`.

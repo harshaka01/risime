@@ -90,6 +90,18 @@ defmodule RisiMe.Agent.CallRisi.SpokenTest do
              )
     end
 
+    test "pilot call 15 Oct: a phrasing that comments on the complaint is not used" do
+      r = %{ev("reminder", "Call Shakya", {~D[2026-10-16], 10, 0}, 0) | end: nil}
+      {text, _} = Spoken.render(facts(~D[2026-10-16], ~D[2026-10-17], [r]))
+
+      refute Spoken.checked(
+               "You have access and should add the notes in Calendar. Tomorrow you have a reminder to call Shakya at 10 am.",
+               text
+             )
+
+      assert Spoken.checked("Tomorrow you have a reminder to call Shakya at 10 am.", text)
+    end
+
     test "a week: free days listed once, at most 8 items then the chat" do
       evs = for h <- 8..17, do: ev("busy", nil, {~D[2026-10-16], h, 0}, 30)
       {text, _} = Spoken.render(facts(~D[2026-10-15], ~D[2026-10-19], evs))

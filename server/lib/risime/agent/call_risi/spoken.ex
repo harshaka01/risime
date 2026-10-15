@@ -305,6 +305,8 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
 
   @free ~r/\b(?:nothing\s+(?:scheduled|planned|on)|free|clear|no\s+(?:events|plans|appointments|meetings))\b/iu
 
+  @comment ~r/\b(?:access|notes?|permission|should\s+(?:have|add|be\s+able))\b/iu
+
   @refuse ~r/\b(?:can(?:'|no)?t|cannot|unable to|don'?t have access|no access)\b.{0,30}\b(?:see|access|read|check|get)\b/iu
 
   @doc """
@@ -326,6 +328,11 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
         nil
 
       Regex.match?(@refuse, said) ->
+        nil
+
+      # Pilot call 15 Oct, 13:10Z: "You have access and should add the notes in Calendar." The
+      # model echoed the user's complaint: only the calendar, never a comment on the question.
+      Regex.match?(@comment, said) and not Regex.match?(@comment, rendered) ->
         nil
 
       # What couldn't be read is always said.

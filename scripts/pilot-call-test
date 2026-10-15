@@ -42,12 +42,31 @@ say c1e "Give me the entire week and tell me the important things."
 say c2a "Let me see. I need to listen to it."
 say c2b "Did I promise anything today or tomorrow?"
 say c2c "You should have access, you add the notes and calendar."
+# Like Harsha's speech (15 Oct): Kokoro pads each clip (~0.4 s lead, ~0.5 s tail) and makes a comma a ~0.9 s pause,
+# so "1 s" between the parts of c1c was really ~1.9 s and "access, you add…" became two utterances. Trim the
+# padding to 50 ms and pauses inside a clip to 250 ms (c1c's 1 s pause is added after).
+for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c; do
+  "$PY" -I -c 'import sys, wave, numpy as np
+p = sys.argv[1]
+w = wave.open(p, "rb"); prm = w.getparams(); x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16); w.close()
+sr = prm.framerate; win = sr // 50
+e = np.array([np.sqrt(np.mean(x[i:i + win].astype(float) ** 2)) for i in range(0, len(x) - win + 1, win)])
+loud = e > e.max() * 0.03
+idx = np.flatnonzero(loud)
+keep, gap = [], 0
+for i in range(idx[0], idx[-1] + 1):
+    gap = 0 if loud[i] else gap + 1
+    if gap * 20 <= 250: keep.append(x[i * win:(i + 1) * win])
+pad = np.zeros(sr // 20, dtype=np.int16)
+y = np.concatenate([pad] + keep + [pad])
+o = wave.open(p, "wb"); o.setparams(prm); o.writeframes(y.tobytes()); o.close()' "$WORK/$c.wav" || die "trim $c"
+done
 "$PY" -I -c 'import sys, wave
 out, a, b = sys.argv[1:4]
 ws = [wave.open(p, "rb") for p in (a, b)]; p = ws[0].getparams()
 o = wave.open(out, "wb"); o.setparams(p)
 o.writeframes(ws[0].readframes(ws[0].getnframes()))
-o.writeframes(b"\0" * (p.sampwidth * p.nchannels * p.framerate))  # the 1 s pause
+o.writeframes(b"\0" * (p.sampwidth * p.nchannels * (p.framerate - p.framerate // 10)))  # 1 s with the two 50 ms pads
 o.writeframes(ws[1].readframes(ws[1].getnframes())); o.close()' "$WORK/c1c.wav" "$WORK/c1c1.wav" "$WORK/c1c2.wav" || die "c1c clip"
 
 # ---------------------------------------------------------------- a session for the test number (dev OTP, never printed)
