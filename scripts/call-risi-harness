@@ -31,7 +31,8 @@ cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$tmp"; }
 trap cleanup EXIT
 fail() { echo "HARNESS FAIL $*" >&2; exit 1; }
 avail=$(awk '/MemAvailable/ {print int($2/1048576)}' /proc/meminfo)
-[ "$avail" -ge 3 ] || fail "MemAvailable ${avail} GB < 3 GB"
+min_gb="${CALLRISI_MIN_MEM_GB:-3}"  # MemAvailable reads low on spark2 by design (watermark); 2 is enough for one round
+[ "$avail" -ge "$min_gb" ] || fail "MemAvailable ${avail} GB < ${min_gb} GB"
 curl -sf --max-time 3 http://127.0.0.1:8230/health >/dev/null || fail "risime-tts is not up"
 ss -ltnH "sport = :$LK_PORT" | grep -q . && fail "port $LK_PORT busy"
 
