@@ -40,3 +40,10 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
 | 2026-10-14 03:52 (09:22 SLT) | RISI_VOICE_TRANSCRIBE | **on** (everyone) | Harsha |
 | 2026-10-15 00:52 (06:22 SLT) | RISI_CALL_RISI | canary (Harsha only) | root (Harsha 15 Oct P0-2: device test, his account) |
 | 2026-10-15 02:26 (07:56 SLT) | RISI_LIVE_FAST | canary (Harsha's calls) | root (Harsha 07:48: ship the server side) |
+
+### 2026-10-15 ~09:45 UTC (15:15 SLT): pilot-device-test account (allowlist only)
+- `RisiMe.Accounts.allow/1` via `scripts/risi-rpc`: allowlist entry `+94770000995` / `pilot-device-test@example.com`
+  ("ZZ Pilot Device Test", repo test-number range) for the real-device test (Harsha's 15:00 rule). No user created yet,
+  no flag, env or restart change. Not in `RISI_DEV_USERS` (Flags reads it from the application env at boot, so the
+  canary switches CALENDAR_V2 / CALL_RISI / LIVE_FAST would not apply to this account without a change).
+- Remove: `scripts/risi-rpc 'RisiMe.Repo.delete_all(Ecto.Query.where(RisiMe.Accounts.AllowlistEntry, phone: "+94770000995"))'`.
