@@ -78,3 +78,4 @@ Same run, joined si/ta with the quiet cut and `join_cut_ms` 3 s: si p50 4.2 s, C
 phrase 2.7 / 3.0 s), CER 0.095, unchanged from before. The cut word ("ask" → "and") is gone; what remains in
 English is tail hallucination on the clip's noisy end ("Thank you.", "All right.") and one overlap word misheard
 ("devised quote").
+| v0.3.0-nightly.10 (RELEASE_CORE) | 15 Oct 02:27 | 03:45 | 78 min | same core gates |
