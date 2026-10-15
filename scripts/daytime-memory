@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Daytime memory rule (Harsha 2026-10-15 15:00 SLT): between 06:00 and 22:00 SLT the pilot comes first
+# (risi-l1, the live speech route, Kokoro, the server). Model-lab containers are stopped unless in active use.
+#   scripts/daytime-memory            # apply now (no-op at night); prints free memory before/after
+#   scripts/daytime-memory --install  # a user systemd timer that runs it every 30 min
+# Never touches risi-l1, whisper (live route), Kokoro (risime-tts-tts-1), LiveKit, the databases or the server.
+# "In active use" = the container logged a request in the last 15 min.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [ "${1:-}" = "--install" ]; then
+  d="$HOME/.config/systemd/user"; mkdir -p "$d"
+  cat > "$d/risime-daytime-memory.service" <<EOF
+[Unit]
+Description=RisiMe daytime memory rule (stop idle model-lab containers 06-22 SLT)
+[Service]
+Type=oneshot
+ExecStart=$PWD/scripts/daytime-memory
+EOF
+  cat > "$d/risime-daytime-memory.timer" <<EOF
+[Unit]
+Description=RisiMe daytime memory rule every 30 min
+[Timer]
+OnCalendar=*:05,35
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl --user daemon-reload && systemctl --user enable --now risime-daytime-memory.timer
+  exit 0
+fi
+
+h=$(TZ=Asia/Colombo date +%H)
+if [ "$h" -lt 6 ] || [ "$h" -ge 22 ]; then echo "night window: nothing to do"; exit 0; fi
+
+free_mb() { free -m | awk '/^Mem:/ {print "free " $4 " MB, available " $7 " MB"}'; }
+echo "before: $(free_mb)"
+# Model labs and candidates (not the live route): TTS lab and any eval candidate (omniASR stays: it may serve the live Sinhala route and holds ~20 MB idle).
+for c in risime-tts-lab-tts-lab-1 $(docker ps --format '{{.Names}}' | grep '^risi-eval-' || true); do
+  docker ps --format '{{.Names}}' | grep -qx "$c" || continue
+  if [ -n "$(docker logs --since 15m "$c" 2>&1 | grep -iE 'POST|GET /(synth|tts|transcribe|v1)' | head -1)" ]; then
+    echo "keep $c (used in the last 15 min)"; continue
+  fi
+  docker stop "$c" >/dev/null && echo "stopped $c (idle, daytime)"
+done
+echo "after:  $(free_mb)"
