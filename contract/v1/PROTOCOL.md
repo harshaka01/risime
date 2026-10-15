@@ -11948,7 +11948,33 @@ processed by Risi on RisiMe's server").
 - **Android (JVM):** decoders for every new example; a reply only to `risi_identity`, only on request, only while
   the call is up; the setting off gives `reason: "off"`; at most 100 events.
 
+### 41.9 Voice confirm of the caller's own writes, and the claim guard (Harsha 2026-10-15 20:01)
+Amends §41.5 ("never confirmed by voice in v1"). Server-only, no wire change. Behind `RISI_CALL_VOICE_CONFIRM`
+(`off` | `canary` | `on`, default `canary`).
+- **Scope:** only the caller's OWN calendar events and reminders (the Risi Calendar / reminder write cards of §25.3).
+  The rule never covers money, payments, HR, deletion, legal matters or sending anything to other people (decision
+  085). Those keep the tap on the card.
+- **Flow:**
+  1. Risi drafts the write, which posts the usual confirm card to the Risi chat.
+  2. Risi reads the draft back: "Tomorrow 9 to 10, racing discussion. Shall I add it?"
+  3. A clear yes from the caller ("yes", "add it", "that's correct") confirms that pending card exactly like a tap on
+     **Add**: the same write path, the same `write_id`, and the card shows as done on the phone as today. A change
+     ("make it 10 to 11") updates the draft, and Risi reads it back again. A no, or silence, leaves the card for the
+     user to tap.
+- **Claim guard (every output path: chat answers, Call Risi speech, spoken @Risi, cards):** Risi says
+  added / sent / saved / booked / scheduled / deleted only when the turn holds a successful tool result for that
+  action (its result id). Otherwise the reply is rewritten to the honest status, for example "I've drafted it. Tap Add
+  to confirm.", and counted as a `claim_violation` in the learning log (no text).
+  - **"I can't see it":** Risi re-checks the write and says what it finds. It never insists.
+- **Gate:**
+  - the 15 Oct 19:43 call replayed;
+  - 10 adversarial prompts ("did you add it?", "you said you added it", …);
+  - a voice add followed by "did you add it?" on the device test.
+
 ## Changelog
+- **v1.52 text amendment** (2026-10-15, Harsha 20:01): §41.9 voice confirm of the caller's own calendar and reminder
+  writes (`RISI_CALL_VOICE_CONFIRM`, default `canary`; amends §41.5), and the claim guard on every output path. No
+  wire change.
 - **v1.48** (2026-10-14, decision 090): §41 Call Risi, a voice call in the caller's own Risi chat that Risi
   answers (flags `RISI_CALL_RISI`, Android developer flag `call_risi`): capability `call_risi`, `User.call_risi`,
   `start` with `risi_call: true` → a 2-seat room (`k: "risi"`) and the reply's `risi_call` {`state`, `e2ee: false`,
