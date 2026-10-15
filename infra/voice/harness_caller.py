@@ -25,6 +25,7 @@ from livekit import rtc
 SR = 48000
 FRAME = 480
 LOUD = 300.0  # RMS (int16) of an audible frame of Risi's voice
+GAP_MIN_MS = 100
 
 
 def load(path):
@@ -50,6 +51,11 @@ class Caller:
         self.echo_buf = np.zeros(0, dtype=np.float32)
         self.loud_frames = 0
         self.play_q = collections.deque()
+        # Gaps inside one answer (2026-10-15, gapless TTS): silent runs between two audible frames of
+        # Risi after its answer began, >= GAP_MIN_MS (shorter ones are inside words).
+        self.gaps = None  # a list while an answer is being measured
+        self.answer_on = False
+        self.silent_since = None
 
     async def connect(self, url, token):
         self.room.on("track_subscribed", self.on_track)
@@ -71,12 +77,28 @@ class Caller:
             rms = float(np.sqrt(np.mean(pcm.astype(np.float32) ** 2))) if len(pcm) else 0.0
             now = time.monotonic()
             if rms >= LOUD:
+                if self.gaps is not None and self.answer_on and self.silent_since is not None:
+                    gap = int((now - self.silent_since) * 1000)
+                    if gap >= GAP_MIN_MS:
+                        self.gaps.append(gap)
+                if self.gaps is not None:
+                    self.answer_on = True
+                self.silent_since = None
                 self.last_loud = now
                 self.loud_frames += 1
+            elif self.silent_since is None:
+                self.silent_since = now
                 if self.mark is not None and self.first_loud_after is None:
                     self.first_loud_after = now
             if self.echo is not None:
                 self.echo_buf = np.concatenate([self.echo_buf, pcm.astype(np.float32) * self.echo])[-SR:]
+
+    def gaps_start(self):
+        self.gaps, self.answer_on, self.silent_since = [], False, None
+
+    def gaps_stop(self):
+        g, self.gaps = self.gaps or [], None
+        return g
 
     def echo_frame(self):
         if self.echo is None or len(self.echo_buf) < FRAME:
@@ -138,13 +160,16 @@ async def main():
             c.first_loud_after = None
             await c.play(pcm)
             c.mark = time.monotonic()
+            c.gaps_start()
             first = await c.wait_first()
             lat = None if first is None else int((first - c.mark) * 1000)
             c.mark = None
             spoke_from = c.loud_frames
-            await c.wait_quiet()
+            # 2 s of quiet ends the answer (a pause between Risi's sentences is shorter).
+            await c.wait_quiet(quiet_s=2.0)
             out["turns"].append({"clip": path.rsplit("/", 1)[-1], "first_audio_ms": lat,
-                                 "risi_audio_ms": (c.loud_frames - spoke_from) * 10})
+                                 "risi_audio_ms": (c.loud_frames - spoke_from) * 10,
+                                 "gaps_ms": c.gaps_stop()})
 
     if a.barge:
         _, pcm = clips[0]
