@@ -101,3 +101,8 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
   - Kokoro only as the fallback when GPU memory is short;
   - report call reply-start p50/p95 after the switch.
   - Build it ready (behind the pick settings) right after the hearing hotfix, so a "Root: switch to 2" ships in minutes.
+- **Harsha 2026-10-16 05:19 SLT · translate picker (in the next app build after the hearing hotfix):**
+  - default buttons Sinhala / English / Tamil, with the source language hidden;
+  - "More…" opens a searchable list of all languages;
+  - each user's recent picks at the top;
+  - the same picker for voice-note transcripts, typed messages and the always-translate setting.
