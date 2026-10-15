@@ -172,6 +172,15 @@ client = Enum.map(caller["turns"], & &1["first_audio_ms"])
 
 IO.puts("== Call Risi harness (#{length(caller["turns"])} turns, echo_db=#{inspect(caller["echo_db"])}) ==")
 IO.puts("client first audio after the caller stopped (ms): p50=#{pct.(client, 0.5)} p95=#{pct.(client, 0.95)} all=#{inspect(client)}")
+# Silences inside Risi's answers as the caller heard them (>= 100 ms; a sentence pause is ~150 ms,
+# anything over 300 ms is dead air between pieces).
+gaps = Enum.flat_map(caller["turns"], &(&1["gaps_ms"] || []))
+
+IO.puts(
+  "gaps inside answers (ms): p50=#{pct.(gaps, 0.5)} p95=#{pct.(gaps, 0.95)} max=#{Enum.max(gaps, fn -> nil end)} " <>
+    "n=#{length(gaps)} over_300=#{Enum.count(gaps, &(&1 > 300))}"
+)
+
 for k <- ~w(after_end_ms eot_wait_ms stt_ms first_token_ms first_piece_ms tts_first_ms)a, do: IO.puts("server " <> stage.(k))
 IO.puts("routes: #{inspect(Enum.frequencies_by(turns, & &1.route))} statuses: #{inspect(Enum.frequencies_by(turns, & &1.status))}")
 IO.puts("stt models: #{inspect(Enum.frequencies_by(turns, & &1.stt_model))}")

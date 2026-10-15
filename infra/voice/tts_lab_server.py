@@ -19,8 +19,8 @@ The text to speak is never logged or stored; audio lives in memory.
 
 Memory (GB10 unified memory, shared with risi-l1, whisper and Kokoro): one engine at a time, each in
 its own process (tts_lab_worker.py), so an unload frees everything. A load is refused when host
-MemAvailable minus the engine's estimate would fall below TTS_LAB_MIN_AVAILABLE_MB (default 4096),
-and a load or synthesis is stopped if MemAvailable falls below the floor while it runs. Idle engines
+free memory (MemFree; TTS_LAB_MEM_FIELD) minus the engine's estimate would fall below max(TTS_LAB_MIN_AVAILABLE_MB, TTS_LAB_LOAD_HEADROOM_MB),
+and a load or synthesis is stopped if free memory (MemFree; TTS_LAB_MEM_FIELD) falls below the floor while it runs. Idle engines
 are unloaded after TTS_LAB_IDLE_UNLOAD_S (default 300).
 
 Live first: while the shared speech-guard pause file says paused (written after a slow live voice
@@ -55,6 +55,10 @@ WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_lab_worke
 # IndicF5 runs only when this equals the revision cleared in docs/status/tts-indicf5-code-review.md.
 INDICF5_CLEARED = os.environ.get("TTS_LAB_INDICF5_CLEARED", "")
 MAX_TEXT = 300
+# Call Risi's voice when Harsha picks a lab engine (2026-10-15): that engine is loaded at start and stays
+# resident (no idle unload), and it keeps serving while the speech-guard pause is on, because it IS
+# the live speech then. The memory floor still applies (the voice worker falls back to Kokoro).
+PIN = os.environ.get("TTS_LAB_PIN", "")
 
 PARLER = {"ta": ["Jaya", "Kavitha"], "en": ["Mary", "Thoma"]}
 ORPHEUS = ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe"]
@@ -67,6 +71,22 @@ ENGINES = {
                   "chatterbox/s3gen.safetensors", "chatterbox/tokenizer.json", "chatterbox/conds.pt"],
         "est_mb": 4500, "languages": ["en"],
         "voices": [{"id": "chatterbox:default", "name": "Chatterbox default (en, built-in)",
+                    "languages": ["en"]}],
+    },
+    "chatterbox-turbo": {
+        "files": ["chatterbox-turbo/ve.safetensors", "chatterbox-turbo/t3_turbo_v1.safetensors",
+                  "chatterbox-turbo/s3gen_meanflow.safetensors", "chatterbox-turbo/vocab.json",
+                  "chatterbox-turbo/merges.txt", "chatterbox-turbo/tokenizer_config.json",
+                  "chatterbox-turbo/conds.pt"],
+        "est_mb": 4500, "languages": ["en"],
+        "voices": [{"id": "chatterbox-turbo:default", "name": "Chatterbox-Turbo stock voice (en, built-in)",
+                    "languages": ["en"]}],
+    },
+    "dia2": {
+        "files": ["dia2-1b/model.safetensors", "dia2-1b/config.json", "dia2-1b/tokenizer.json",
+                  "mimi/model.safetensors", "mimi/config.json"],
+        "est_mb": 6000, "languages": ["en"],
+        "voices": [{"id": "dia2:stock", "name": "Dia2 1B stock speaker (en, fixed seed)",
                     "languages": ["en"]}],
     },
     "indic-parler": {
@@ -108,10 +128,17 @@ if os.environ.get("TTS_LAB_SELFTEST") == "1":
                            "voices": [{"id": "selftest:tone", "name": "Tone", "languages": ["en"]}]}
 
 
+# Which /proc/meminfo field the floors use. spark2 runs vm.watermark_scale_factor ~1024 (DGX OS, GB10
+# shared memory), so MemAvailable reads 13-25 GB below MemFree there; MemFree ("free") is the honest one.
+MEM_FIELD = os.environ.get("TTS_LAB_MEM_FIELD", "MemFree")
+# A load also needs this much left over after the engine's estimate (Harsha's night rules: >= 10 GB).
+HEADROOM_MB = int(os.environ.get("TTS_LAB_LOAD_HEADROOM_MB", "10240"))
+
+
 def mem_available_mb():
     with open("/proc/meminfo") as f:
         for line in f:
-            if line.startswith("MemAvailable:"):
+            if line.startswith(MEM_FIELD + ":"):
                 return int(line.split()[1]) // 1024
     return 0
 
@@ -190,16 +217,16 @@ class Pool:
             return 0
         await self.stop()
         avail = mem_available_mb()
-        if avail - ENGINES[eid]["est_mb"] < FLOOR_MB:
-            raise MemoryError(f"{eid} needs ~{ENGINES[eid]['est_mb']} MB, MemAvailable {avail} MB, "
-                              f"floor {FLOOR_MB} MB")
+        if avail - ENGINES[eid]["est_mb"] < max(FLOOR_MB, HEADROOM_MB):
+            raise MemoryError(f"{eid} needs ~{ENGINES[eid]['est_mb']} MB, {MEM_FIELD} {avail} MB, "
+                              f"floor {FLOOR_MB} MB, headroom {HEADROOM_MB} MB")
         t0 = time.monotonic()
         p = await asyncio.create_subprocess_exec(
             sys.executable, "-I", WORKER, eid, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             limit=64 * 1024 * 1024)
         p._engine = eid
         self.name, self.proc = eid, p
-        print(f"tts-lab: loading {eid} (MemAvailable {avail} MB)", flush=True)
+        print(f"tts-lab: loading {eid} ({MEM_FIELD} {avail} MB)", flush=True)
         line = await self._watch(asyncio.wait_for(p.stdout.readline(), LOAD_TIMEOUT_S))
         msg = json.loads(line or b"{}")
         if not msg.get("ready"):
@@ -208,7 +235,7 @@ class Pool:
         self.sr, self.used_at = int(msg["sr"]), time.monotonic()
         ms = int((time.monotonic() - t0) * 1000)
         print(f"tts-lab: loaded {eid} in {ms} ms on {msg.get('device')} "
-              f"(MemAvailable {avail} -> {mem_available_mb()} MB)", flush=True)
+              f"({MEM_FIELD} {avail} -> {mem_available_mb()} MB)", flush=True)
         return ms
 
     async def speak(self, text, voice):
@@ -240,7 +267,7 @@ def wav(pcm, sr):
 
 
 async def health(_request):
-    return web.json_response({"ok": True, "loaded": pool.name})
+    return web.json_response({"ok": True, "loaded": pool.name, "pinned": PIN or None})
 
 
 async def engines(request):
@@ -252,7 +279,8 @@ async def engines(request):
                     "languages": e["languages"], "missing": missing(eid), "est_mb": e["est_mb"],
                     "loaded": pool.name == eid})
     return web.json_response({"engines": out, "mem_available_mb": mem_available_mb(),
-                              "floor_mb": FLOOR_MB, "paused": paused()})
+                              "mem_field": MEM_FIELD, "floor_mb": FLOOR_MB, "headroom_mb": HEADROOM_MB,
+                              "paused": paused()})
 
 
 async def tts(request):
@@ -271,7 +299,9 @@ async def tts(request):
     st = pool.status(eid)
     if st in ("downloading", "review_pending"):
         return err(409, st)
-    if paused():
+    if PIN and eid != PIN:
+        return err(409, "pinned")  # the resident call voice is never swapped out for a console test
+    if paused() and eid != PIN:
         return err(503, "paused")
     if pool.lock.locked():
         return err(429, "busy")
@@ -298,6 +328,9 @@ async def tts(request):
                    "X-Synth-Ms": str(r.get("total_ms", 0))}
         if "stream_first_ms" in r:
             headers["X-Stream-First-Audio-Ms"] = str(r["stream_first_ms"])
+        for k, h in (("cuda_peak_mb", "X-Cuda-Peak-Mb"), ("rss_peak_mb", "X-Rss-Peak-Mb")):
+            if k in r:
+                headers[h] = str(r[k])
         return web.Response(body=wav(pcm, sr), content_type="audio/wav", headers=headers)
 
 
@@ -315,13 +348,27 @@ async def janitor(_app):
             await asyncio.sleep(5)
             if pool.proc is None or pool.lock.locked():
                 continue
-            idle = time.monotonic() - pool.used_at > IDLE_S
-            if idle or paused() or mem_available_mb() < FLOOR_MB:
+            idle = time.monotonic() - pool.used_at > IDLE_S and pool.name != PIN
+            if idle or (paused() and pool.name != PIN) or mem_available_mb() < FLOOR_MB:
                 async with pool.lock:
                     await pool.stop()
+    async def preload():
+        # The pinned engine (if any): loaded at start, retried every 60 s until it is resident.
+        while PIN in ENGINES:
+            if pool.name != PIN and not pool.lock.locked() and pool.status(PIN) == "ready":
+                async with pool.lock:
+                    try:
+                        await pool.load(PIN)
+                    except (MemoryError, RuntimeError, asyncio.TimeoutError, json.JSONDecodeError) as e:
+                        print(f"tts-lab: pinned {PIN} not loaded: {type(e).__name__}", flush=True)
+            await asyncio.sleep(60)
+
     task = asyncio.ensure_future(loop())
+    pin_task = asyncio.ensure_future(preload()) if PIN else None
     yield
     task.cancel()
+    if pin_task:
+        pin_task.cancel()
     await pool.stop()
 
 

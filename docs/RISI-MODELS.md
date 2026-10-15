@@ -5,6 +5,58 @@ Root side track, 2026-10-10. It answers which open model should serve Risi next 
 **Nothing was switched.** Switching is a separate change that needs Harsha's yes.
 Rerun everything with `scripts/risi-eval` (see "How to rerun").
 
+## TTS: Call Risi voice candidates (2026-10-15, Harsha 21:08 SLT)
+Harsha picks Call Risi's voice by ear. Each engine says the same 3 lines: a greeting ("Hi, it's Risi.
+How can I help?"), a calendar answer (the reminder to call Shakya, plus two busy windows) and a "let me
+check" line. **Call Risi's voice was not changed.** His pick ships as a server hotfix (below).
+
+Measured on spark2 (GB10), one engine loaded at a time at night, beside risi-l1, the live speech route
+and Kokoro. Each engine ran 12 times (4 reps × 3 lines); the model load is excluded.
+Script: `infra/voice/tts_voice_pick_bench.py`.
+
+| # | Engine (voice) | First audio p50 / p95 | First full sentence p50 / p95 | RTF | Peak memory | Load |
+|---|---|---|---|---|---|---|
+| 1 | Kokoro 82M (`af_heart`, today's call voice) | **112 / 129 ms** (streamed) | 112 / 129 ms | 0.04 | resident: 2.5 GB GPU (nvidia-smi), 160 MB container RSS | always loaded |
+| 2 | Chatterbox-Turbo 350M (built-in stock voice) | 760 / 1 891 ms (not streamed: first sentence) | 760 / 1 891 ms | 0.29 | 3.4 GB CUDA, 5.2 GB process RSS (host free memory −2.9 GB) | 15.8 s |
+| 3 | Dia2 1B (stock speaker, seed 3) | 2 665 / 2 694 ms (streaming estimate) | 4 713 / 8 587 ms | **1.31** (slower than real time) | 5.8 GB CUDA, 5.4 GB RSS (free −8.5 GB) | 17.5 s |
+| 4 | Orpheus 3B 0.1 ft (`tara`) | *see below* | | | | |
+
+How to read the table:
+- **First audio:** what a caller would wait for after Risi has its text.
+  - Kokoro streams from its resident service.
+  - Chatterbox-Turbo cannot stream, so the number is the whole first sentence. The calendar line is one
+    long sentence, which is why its p95 is high.
+  - For Dia2 and Orpheus, it is the time their first ~300 ms of audio exists inside generation. That
+    is a streaming server's first audio, plus a few ms of decoding.
+- **RTF:** synthesis time ÷ audio length. Below 1 is faster than real time. Dia2 at 1.31 cannot keep
+  up with its own speech, so a live call would stall between sentences.
+- **Peak memory:** each worker's own `torch.cuda.max_memory_reserved` and `ru_maxrss`. GB10 memory is
+  unified, so the two overlap. The host view (the fall in MemFree) moves with the page cache and other
+  jobs, so it is approximate.
+- **Voices:**
+  - Kokoro and Orpheus use named stock voices.
+  - Chatterbox-Turbo uses Resemble's built-in voice (`conds.pt`, reviewed before loading: tensors only,
+    read with `weights_only=True`). It is PerTh-watermarked.
+  - Dia2 has no named voices. Its stock speaker is the model's own speaker for seed 3 on a fixed line,
+    made in memory at load and reused as the prefix of every line. There is no recording of a person.
+    Seed 3 was picked from seeds 2–8 by the numbers: adult female, median F0 224 Hz, 2.4 words/s,
+    4.9 semitones of pitch movement. Harsha judges the sound.
+- **Live budget:** today's live budget for Call Risi is 1.5 s first audio (p50). Only Kokoro (0.11 s)
+  and Chatterbox-Turbo (0.76 s, with long first sentences over budget) are within it. Dia2 is not, and
+  it is also slower than real time.
+
+**Hotfix for Harsha's pick (committed, not deployed):**
+- Kokoro voice: no new code. Set `tts_voice_en` on the Voices page.
+- Lab engine (Chatterbox-Turbo, Dia2 or Orpheus), three settings:
+  - `TTS_LAB_PIN=<engine>` on risime-tts-lab: loaded at start and kept resident, served through the
+    speech pause, never stopped by `scripts/daytime-memory`, other engines refused with 409 `pinned`;
+  - `RISI_CALL_LIVE_ENGINES=<engine>` on the server: `CallRisi.voice/1` then accepts that engine's
+    voice;
+  - `tts_voice_en` = the voice.
+  - The media worker sends a non-Kokoro voice to the lab: it reads the WAV header, resamples from the
+    engine's rate and keeps the gapless pipeline. If the lab refuses or can't be reached, it speaks that
+    sentence with Kokoro `af_heart` instead of going silent.
+
 ## Routing check and language hints (2026-10-13, Harsha's PART 1/2)
 Runs: `scripts/asr-eval detect` / `routing` (`~/risime-eval-data/results/detect-1.jsonl`) and
 `scripts/asr-eval run --models auto [--hint si|ta --hint-mode prior|force]`

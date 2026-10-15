@@ -25,6 +25,8 @@ import sys
 import time
 
 ENGINE = sys.argv[1] if len(sys.argv) > 1 else ""
+# stdout is the protocol channel: anything a library prints goes to stderr instead.
+PROTO, sys.stdout = sys.stdout, sys.stderr
 MODELS = os.environ.get("TTS_LAB_MODELS", "/models")
 ENG_DIR = os.environ.get("TTS_LAB_ENG_DIR", "/opt/eng")
 
@@ -56,6 +58,19 @@ if ENGINE == "indic-parler":
     _tb.SummaryWriter = SummaryWriter
     sys.modules["torch.utils.tensorboard"] = _tb
 
+if ENGINE == "dia2":
+    # sphn (Rust, no aarch64 wheel) only reads prefix WAVs from disk, which the lab never does: an
+    # inert stand-in (the prefix audio is passed in memory).
+    import types
+
+    _sphn = types.ModuleType("sphn")
+
+    def _no_files(*a, **k):
+        raise RuntimeError("sphn is not available in risime-tts-lab")
+
+    _sphn.read_wav = _no_files
+    sys.modules["sphn"] = _sphn
+
 DEVICE = os.environ.get("TTS_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
 # GB10 (sm_121) in the NGC image: cuDNN has no engine for some 1-D convolutions and cuFFT is a stub
 # ("unknown error 50"), the same gaps as risime-tts (Kokoro). cuDNN off; FFT/STFT run on the CPU.
@@ -63,13 +78,16 @@ torch.backends.cudnn.enabled = os.environ.get("TTS_CUDNN", "0") == "1"
 
 
 def _cpu_fft(fn):
-    def wrapped(x, *a, **k):
-        if isinstance(x, torch.Tensor) and x.is_cuda:
-            dev = x.device
-            k = {n: (v.cpu() if isinstance(v, torch.Tensor) else v) for n, v in k.items()}
-            a = tuple(v.cpu() if isinstance(v, torch.Tensor) else v for v in a)
-            return fn(x.cpu(), *a, **k).to(dev)
-        return fn(x, *a, **k)
+    # The input may come positionally or as input=... (Chatterbox-Turbo's S3Gen): any CUDA tensor
+    # argument moves the call to the CPU, and the result goes back to that device.
+    def wrapped(*a, **k):
+        dev = next((v.device for v in list(a) + list(k.values())
+                    if isinstance(v, torch.Tensor) and v.is_cuda), None)
+        if dev is None:
+            return fn(*a, **k)
+        k = {n: (v.cpu() if isinstance(v, torch.Tensor) else v) for n, v in k.items()}
+        a = tuple(v.cpu() if isinstance(v, torch.Tensor) else v for v in a)
+        return fn(*a, **k).to(dev)
     return wrapped
 
 
@@ -117,6 +135,123 @@ class Chatterbox:
     def say(self, text, voice):
         # Default conditionals only (no audio_prompt_path: no cloning). Watermarked by the library.
         return self.m.generate(text)
+
+
+# ------------------------------------------------- Chatterbox-Turbo (MIT, Resemble AI; 2026-10-15)
+class ChatterboxTurbo:
+    """English, the built-in voice (conds.pt) only: Resemble's stock Turbo voice. Turbo = a GPT-2
+    medium T3 (350M) + the meanflow S3Gen decoder (2 flow steps). PerTh watermark on every output.
+    conds.pt was reviewed before the first load (2026-10-15): a zip pickle of tensors and an
+    OrderedDict only (globals: torch._utils._rebuild_tensor_v2, FloatStorage, LongStorage,
+    collections.OrderedDict); chatterbox-tts 0.1.7 reads it with torch.load(weights_only=True)."""
+    dir = os.path.join(MODELS, "chatterbox-turbo")
+
+    def __init__(self):
+        from chatterbox.tts_turbo import ChatterboxTurboTTS
+        self.m = ChatterboxTurboTTS.from_local(self.dir, DEVICE)
+        self.sr = self.m.sr
+
+    def voices(self):
+        return {"chatterbox-turbo:default": None}
+
+    def say(self, text, voice):
+        # Built-in conditionals only (no audio_prompt_path: no cloning). Watermarked by the library.
+        with torch.inference_mode():
+            return self.m.generate(text)
+
+
+# ------------------------------------------------------ Dia2 1B (Apache-2.0, Nari Labs; 2026-10-15)
+# Seed 3 (2026-10-15 scan of seeds 2-8 on DIA2_REF, warm, CUDA graphs): an adult female speaker,
+# median F0 224 Hz, 2.4 words/s (calm), 4.9 semitones of pitch movement (lively, not sing-song),
+# steady level; chosen by those numbers for "warm, friendly, professional, clear" (Harsha listens).
+DIA2_SEED = int(os.environ.get("DIA2_SEED", "3"))
+# Dia2 has no named voices: an unconditioned generation picks a new speaker every time. The stock
+# voice is the model's own speaker for a fixed seed on a fixed line, made once at load (in memory) and
+# then used as the speaker-1 prefix of every request: no recording of a person is involved.
+DIA2_REF = "[S1] Hello, thanks for calling. I'm happy to help you with that today."
+
+
+class Dia2:
+    dir = os.path.join(MODELS, "dia2-1b")
+    mimi_dir = os.path.join(MODELS, "mimi")
+
+    def __init__(self):
+        import dataclasses
+
+        import dia2.engine as de
+        import dia2.runtime.generator as dg
+        from dia2 import Dia2 as D, GenerationConfig, SamplingConfig
+        from dia2.generation import PrefixConfig
+        from dia2.runtime.voice_clone import WhisperWord, build_prefix_plan
+
+        self.m = D.from_local(os.path.join(self.dir, "config.json"),
+                              os.path.join(self.dir, "model.safetensors"),
+                              tokenizer_id=self.dir, mimi_id=self.mimi_dir, device=DEVICE,
+                              dtype=os.environ.get("DIA2_DTYPE", "bfloat16"))
+        self.cfg = GenerationConfig(text=SamplingConfig(temperature=0.6, top_k=50),
+                                    audio=SamplingConfig(temperature=0.8, top_k=50), cfg_scale=2.0,
+                                    use_cuda_graph=os.environ.get("DIA2_CUDA_GRAPH", "1") == "1")
+        # Step times (for the streaming estimate): the loop fills the audio channels once per step.
+        self.steps = {}
+        fill = dg._fill_audio_channels
+
+        def timed_fill(step_tokens, audio_buf, delays, step, bos):
+            self.steps[step] = time.monotonic()
+            return fill(step_tokens, audio_buf, delays, step, bos)
+
+        dg._fill_audio_channels = timed_fill
+        loop = de.run_generation_loop
+
+        def noted_loop(*a, **k):
+            fw, buf = loop(*a, **k)
+            self.first_word = fw
+            return fw, buf
+
+        de.run_generation_loop = noted_loop
+        self.first_word = None
+        # One throwaway generation first (CUDA-graph capture and kernel set-up draw random numbers),
+        # so the seeded reference below is the same speaker as in the seed scan.
+        self.m.generate("[S1] Hello.", config=self.cfg)
+        torch.manual_seed(DIA2_SEED)
+        ref = self.m.generate(DIA2_REF, config=self.cfg)
+        audio = ref.waveform.detach().float().reshape(-1).cpu().numpy()
+        dur = len(audio) / ref.sample_rate
+        ts = [(w.replace("[S1]", "").replace("[S2]", "").strip(), float(s)) for w, s in ref.timestamps]
+        ts = [(w, s) for w, s in ts if w]
+        words = [WhisperWord(w, s, ts[i + 1][1] if i + 1 < len(ts) else dur) for i, (w, s) in enumerate(ts)]
+        if not words:
+            raise RuntimeError("dia2: the stock voice line produced no words")
+        self.ref_s = dur
+
+        def plan(runtime, prefix):
+            if prefix is None:
+                return None
+            return build_prefix_plan(runtime, prefix, transcribe_fn=lambda p, d: words,
+                                     load_audio_fn=lambda p, sr: audio)
+
+        de.build_prefix_plan = plan
+        self.cfg = dataclasses.replace(self.cfg, prefix=PrefixConfig(speaker_1="stock"))
+        self.sr = self.m.sample_rate
+        rt = self.m._ensure_runtime()
+        self.max_delay = max(int(d) for d in rt.audio_delays) if len(rt.audio_delays) else 0
+        self.initial_padding = self.cfg.initial_padding
+        self.stream_first_ms = None
+
+    def voices(self):
+        return {"dia2:stock": None}
+
+    def say(self, text, voice):
+        self.steps, self.first_word = {}, None
+        t0 = time.monotonic()
+        torch.manual_seed(DIA2_SEED)
+        r = self.m.generate("[S1] " + text, config=self.cfg)
+        if self.stream_first_ms is None and self.steps and self.first_word is not None:
+            # A streaming server's first audio: 4 Mimi frames (320 ms) from the first word, once the
+            # delayed codebooks of those frames exist (+ a few ms of Mimi decode, not counted).
+            target = self.first_word + 4 + self.max_delay
+            at = self.steps.get(target, self.steps[max(self.steps)])
+            self.stream_first_ms = int((at - t0) * 1000)
+        return r.waveform
 
 
 # ---------------------------------------------------------- Indic Parler-TTS (Apache-2.0, AI4Bharat)
@@ -248,14 +383,24 @@ class SelfTest:
         return 0.2 * np.sin(2 * np.pi * 440 * t)
 
 
-ENGINES = {"chatterbox": Chatterbox, "indic-parler": IndicParler, "orpheus": Orpheus, "indicf5": IndicF5}
+ENGINES = {"chatterbox": Chatterbox, "chatterbox-turbo": ChatterboxTurbo, "indic-parler": IndicParler,
+           "orpheus": Orpheus, "dia2": Dia2, "indicf5": IndicF5}
 if os.environ.get("TTS_LAB_SELFTEST") == "1":
     ENGINES["selftest"] = SelfTest
 
 
+def mem_peaks():
+    """This process's peaks: CUDA memory reserved by torch (unified memory on GB10) and host RSS."""
+    import resource
+    out = {"rss_peak_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024}
+    if DEVICE == "cuda":
+        out["cuda_peak_mb"] = int(torch.cuda.max_memory_reserved() // (1024 * 1024))
+    return out
+
+
 def send(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
+    PROTO.write(json.dumps(obj) + "\n")
+    PROTO.flush()
 
 
 WARMUP = {"ta": "வணக்கம்.", "en": "Hello."}
@@ -263,6 +408,8 @@ WARMUP = {"ta": "வணக்கம்.", "en": "Hello."}
 # `--check`: import an engine's packages only (no model), for the image build.
 CHECK_IMPORTS = {
     "chatterbox": ["chatterbox.tts", "perth"],
+    "chatterbox-turbo": ["chatterbox.tts_turbo", "perth"],
+    "dia2": ["dia2", "dia2.engine"],
     "indic-parler": ["parler_tts", "dac.model"],
     "orpheus": ["snac", "transformers"],
     "indicf5": [],
@@ -273,8 +420,12 @@ def check():
     import importlib
     for mod in CHECK_IMPORTS[ENGINE]:
         importlib.import_module(mod)
+    if ENGINE.startswith("chatterbox"):
+        # perth hides its own import errors (the watermarker is then None and every load fails).
+        import perth
+        assert perth.PerthImplicitWatermarker is not None, "perth: PerthImplicitWatermarker missing"
     import transformers
-    print(f"{ENGINE}: imports ok (transformers {transformers.__version__})")
+    print(f"{ENGINE}: imports ok (transformers {transformers.__version__})", file=PROTO)
     return 0
 
 
@@ -324,6 +475,7 @@ def main():
                    "pcm": base64.b64encode(pcm.tobytes()).decode()}
             if getattr(eng, "stream_first_ms", None) is not None:
                 out["stream_first_ms"] = eng.stream_first_ms
+            out.update(mem_peaks())
             send(out)
         except Exception as e:  # noqa: BLE001 - only the type is logged, never the text
             print(f"tts-lab-worker {ENGINE}: synthesis failed: {type(e).__name__}", file=sys.stderr)

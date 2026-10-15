@@ -101,7 +101,8 @@ fi
 lk_key="$LIVEKIT_API_KEY"; lk_secret="$LIVEKIT_API_SECRET"
 set -a; . "$root/.env"; set +a
 export LIVEKIT_API_KEY="$lk_key" LIVEKIT_API_SECRET="$lk_secret"   # the throwaway keys, not .env's
-export VOICE_PYTHON="$py" VOICE_WORKER="$root/infra/voice/risi_voice_worker.py" CALLER="$root/infra/voice/harness_caller.py"
+# VOICE_WORKER=<path>: another worker build (e.g. the previous one, for a before/after comparison).
+export VOICE_PYTHON="$py" VOICE_WORKER="${VOICE_WORKER:-$root/infra/voice/risi_voice_worker.py}" CALLER="$root/infra/voice/harness_caller.py"
 export CALLER_WAVS="$clips" BARGE_WAV="$tmp/barge.wav" ROUNDS="$rounds"
 [ -n "$echo_db" ] && export ECHO_DB="$echo_db"
 cd server

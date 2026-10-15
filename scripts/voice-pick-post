@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Harsha's call-voice pick (2026-10-15): posts the voice samples in Harsha's Risi chat, as 4 messages
+# ("1 Kokoro", "2 Chatterbox-Turbo", "3 Dia2", "4 Orpheus"), each with three signed 24-h links to
+# /admin/voice-samples/... behind his admin sign-in. Then it posts the choice question (topic voice-pick;
+# 4 options = lettered lines, because §25.4 allows at most 3 chips; "reply 1, 2, 3 or 4").
+#   scripts/voice-pick-post
+# Needs: a server release with RisiMe.Agent.TTS.VoicePick and its route, and the samples from
+#   python3 -I infra/voice/tts_voice_pick_bench.py --env-file .env    (~/risime-voice-samples, outside Git).
+# An engine without its 3 files is posted as "<n> <name>: waiting for access". Replies: scripts/risi-inbox.
+# Prints one "posted <label> <message id>" line per message, or "refused: <why>".
+set -euo pipefail
+cd "$(dirname "$0")/.."
+out=$(scripts/risi-rpc 'RisiMe.Agent.TTS.VoicePick.cli_post()' 2>&1) || { echo "refused: rpc failed (is risime.service up?)"; exit 1; }
+printf '%s\n' "$out" | grep -E '^(posted|refused)' || { echo "refused: no answer from the node (is VoicePick deployed?)"; exit 1; }

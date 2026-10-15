@@ -38,6 +38,10 @@ echo "before: $(free_mb)"
 # Model labs and candidates (not the live route): TTS lab and any eval candidate (omniASR stays: it may serve the live Sinhala route and holds ~20 MB idle).
 for c in risime-tts-lab-tts-lab-1 $(docker ps --format '{{.Names}}' | grep '^risi-eval-' || true); do
   docker ps --format '{{.Names}}' | grep -qx "$c" || continue
+  # The TTS lab holding Call Risi's picked voice (TTS_LAB_PIN, 2026-10-15) is the live route: never stopped.
+  if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$c" | grep -qE '^TTS_LAB_PIN=.+'; then
+    echo "keep $c (Call Risi's voice is pinned there)"; continue
+  fi
   if [ -n "$(docker logs --since 15m "$c" 2>&1 | grep -iE 'POST|GET /(synth|tts|transcribe|v1)' | head -1)" ]; then
     echo "keep $c (used in the last 15 min)"; continue
   fi

@@ -22,7 +22,7 @@ fails = []
 
 def server(**env):
     e = {**os.environ, "TTS_LAB_SELFTEST": "1", "TTS_LAB_PORT": str(PORT), "TTS_LAB_HOST": "127.0.0.1",
-         "TTS_DEVICE": "cpu", "TTS_API_KEY": "", **{k: str(v) for k, v in env.items()}}
+         "TTS_DEVICE": "cpu", "TTS_API_KEY": "", "TTS_LAB_LOAD_HEADROOM_MB": "0", **{k: str(v) for k, v in env.items()}}
     p = subprocess.Popen([sys.executable, "-I", os.path.join(HERE, "tts_lab_server.py")], env=e)
     for _ in range(100):
         try:
@@ -73,7 +73,8 @@ try:
     s, _, b = call("/v1/engines")
     st = {e["id"]: e["status"] for e in json.loads(b)["engines"]}
     check("statuses", st == {"chatterbox": "ready", "indic-parler": "downloading",
-                             "orpheus": "downloading", "indicf5": "review_pending", "selftest": "ready"})
+                             "orpheus": "downloading", "indicf5": "review_pending", "selftest": "ready",
+                             "chatterbox-turbo": "downloading", "dia2": "downloading"})
     s, h, b = call("/v1/tts", {"text": "One. Two.", "voice": "selftest:tone"})
     check("first request loads (200, X-Load-Ms > 0)", s == 200 and int(h["X-Load-Ms"]) > 0)
     check("WAV, 2 sentences = 0.8 s", b[:4] == b"RIFF" and h["X-Audio-Ms"] == "800")
@@ -119,6 +120,29 @@ try:
     s, _, b = call("/v1/tts", {"text": "Hi.", "voice": "selftest:tone"})
     check("below the MemAvailable floor: 503 no_memory, nothing loaded",
           s == 503 and err(b) == "no_memory" and json.loads(call("/health")[2])["loaded"] is None)
+finally:
+    p.terminate()
+    p.wait()
+
+# Call Risi's picked voice (2026-10-15): TTS_LAB_PIN preloads the engine and keeps it through idle
+# time and the pause; other engines are refused rather than swapping it out.
+p = server(TTS_LAB_MODELS=models, TTS_LAB_PAUSE_FILE=guard, TTS_LAB_IDLE_UNLOAD_S=1,
+           TTS_LAB_MIN_AVAILABLE_MB=0, TTS_LAB_PIN="selftest")
+try:
+    for _ in range(100):
+        if json.loads(call("/health")[2])["loaded"] == "selftest":
+            break
+        time.sleep(0.1)
+    check("pinned: preloaded at start", json.loads(call("/health")[2])["loaded"] == "selftest")
+    time.sleep(7)
+    check("pinned: no idle unload", json.loads(call("/health")[2])["loaded"] == "selftest")
+    with open(guard, "w") as f:
+        f.write(f"until={int(time.time()) + 60} reason=test\n")
+    s, h, _ = call("/v1/tts", {"text": "Hi.", "voice": "selftest:tone"})
+    check("pinned: serves during the pause, resident (X-Load-Ms 0)", s == 200 and h["X-Load-Ms"] == "0")
+    os.remove(guard)
+    s, _, b = call("/v1/tts", {"text": "Hi.", "voice": "chatterbox:default"})
+    check("pinned: another engine is refused (409 pinned)", s == 409 and err(b) == "pinned")
 finally:
     p.terminate()
     p.wait()

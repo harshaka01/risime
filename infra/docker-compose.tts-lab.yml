@@ -15,14 +15,15 @@ services:
     build:
       context: voice
       dockerfile: Dockerfile.tts-lab
-    image: risime/tts-lab:2026-10-14-1
+    image: risime/tts-lab:2026-10-15-1
     restart: unless-stopped
     ports:
       - "127.0.0.1:8231:8231"
     gpus: all
     read_only: true
     tmpfs:
-      - /tmp:size=512m,mode=1777
+      # exec: Triton builds and loads a small CUDA helper there (Dia2's Mimi decoder, 2026-10-15).
+      - /tmp:size=512m,mode=1777,exec
     user: "1000:1000"
     security_opt:
       - no-new-privileges:true
@@ -33,7 +34,18 @@ services:
     mem_limit: 12g
     environment:
       TTS_API_KEY: ${TTS_API_KEY:-}
-      TTS_LAB_MIN_AVAILABLE_MB: ${TTS_LAB_MIN_AVAILABLE_MB:-4096}
+      # Floors on host free memory (MemFree; spark2's MemAvailable reads low by design): a load needs
+      # >= 10 GB left after the engine's estimate; a running engine is stopped under 6 GB.
+      TTS_LAB_MEM_FIELD: ${TTS_LAB_MEM_FIELD:-MemFree}
+      TTS_LAB_MIN_AVAILABLE_MB: ${TTS_LAB_MIN_AVAILABLE_MB:-6144}
+      TTS_LAB_LOAD_HEADROOM_MB: ${TTS_LAB_LOAD_HEADROOM_MB:-10240}
+      # Lab-only override of the speech-guard pause (2026-10-15 voice pick): point it at another file
+      # under /guard (e.g. /guard/tts-lab.pause) so a manual eval pause does not block console tests.
+      # The default keeps the shared pause file.
+      TTS_LAB_PAUSE_FILE: ${TTS_LAB_PAUSE_FILE:-/guard/speech-eval.pause}
+      # Call Risi's voice from the lab (Harsha's pick, 2026-10-15): the engine id (e.g. chatterbox-turbo)
+      # is loaded at start and kept resident; set together with RISI_CALL_LIVE_ENGINES on the server.
+      TTS_LAB_PIN: ${TTS_LAB_PIN:-}
       TTS_LAB_IDLE_UNLOAD_S: ${TTS_LAB_IDLE_UNLOAD_S:-300}
       # Set only to the IndicF5 revision cleared in docs/status/tts-indicf5-code-review.md.
       TTS_LAB_INDICF5_CLEARED: ${TTS_LAB_INDICF5_CLEARED:-}
