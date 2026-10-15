@@ -84,6 +84,9 @@ defmodule RisiMe.Agent.CallRisi.Session do
            cal?: Map.get_lazy(args, :cal?, fn -> cal_capable?(args) end),
            cal_wait: nil,
            barge_ins: 0,
+           # Device test 15 Oct: the caller started speaking before Risi was audible: Risi's
+           # pieces wait (`held`, in order) until the words arrive (or `@listen_ms`).
+           listen: nil,
            ended?: false
          }}
 
@@ -110,6 +113,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   def handle_info({:brain, utt, ev}, %{turn: %{utt: utt}} = st), do: brain(ev, st)
   def handle_info({:brain, _old, _ev}, st), do: {:noreply, st}
 
+  def handle_info(:listen_timeout, st), do: {:noreply, release(st, true)}
   def handle_info(:join_timeout, %{joined?: false} = st), do: finish(st, :timeout)
   def handle_info(:caller_timeout, %{caller?: false} = st), do: finish(st, :timeout)
   def handle_info(:max_length, st), do: finish(st, :max_length)
@@ -158,6 +162,22 @@ defmodule RisiMe.Agent.CallRisi.Session do
     {:noreply, speak(st, @greeting, :greeting) |> put_in([:turn, :brain_done?], true)}
   end
 
+  # Device test 15 Oct ("Do you have anything" … 1 s … "on the 18th?"): Risi had begun to answer
+  # the first words and the worker lost the rest under Risi's voice. When the caller starts
+  # speaking while Risi is not audible yet, Risi stops what is queued and waits for the words.
+  defp media(%{"ev" => "speech_start", "speaking" => false}, %{turn: %{} = t, ended?: false} = st)
+       when st.listen == nil do
+    held =
+      st.pieces
+      |> Enum.filter(fn {_seq, {utt, _, _, _}} -> utt == t.utt end)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map(&elem(&1, 1))
+
+    if held != [], do: Media.impl().command(st.media, %{"cmd" => "stop_speaking"})
+    ref = Process.send_after(self(), :listen_timeout, listen_ms())
+    {:noreply, %{st | pieces: %{}, listen: %{held: held, ref: ref}}}
+  end
+
   defp media(%{"ev" => "caller_left"}, st), do: finish(st, :hangup)
   defp media(%{"ev" => "left", "reason" => r}, st), do: finish(st, left_reason(r))
 
@@ -183,6 +203,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64}, st)
        when is_map(st.turn) and st.turn.brain_done? == false and
               st.turn.route not in [nil, "chat", "capabilities"] do
+    st = release(st, true)
     me = self()
     held = st.turn.root
     wav = b64 |> Base.decode64!() |> wav16k()
@@ -202,6 +223,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   end
 
   defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64} = ev, st) do
+    st = release(st, false)
     now = System.monotonic_time(:millisecond)
     end_ms = now - (ev["eot_wait_ms"] || 0)
     start_ms = end_ms - (ev["speech_ms"] || 0)
@@ -265,6 +287,8 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   defp media(%{"ev" => "said", "seq" => seq}, st),
     do: {:noreply, %{st | pieces: Map.delete(st.pieces, seq)}}
+
+  defp media(%{"ev" => "idle"}, %{listen: %{held: [_ | _]}} = st), do: {:noreply, st}
 
   defp media(%{"ev" => "idle"}, %{turn: %{brain_done?: true} = t} = st) do
     record(t, st, :ok)
@@ -386,15 +410,14 @@ defmodule RisiMe.Agent.CallRisi.Session do
   end
 
   defp speak(st, text, kind, store \\ nil) do
-    seq = st.seq + 1
+    st =
+      case st.listen do
+        %{held: held} = l ->
+          %{st | listen: %{l | held: held ++ [{st.turn.utt, text, kind, store}]}}
 
-    Media.impl().command(st.media, %{
-      "cmd" => "say",
-      "seq" => seq,
-      "utt" => st.turn.utt,
-      "text" => text,
-      "voice" => st.voice
-    })
+        nil ->
+          send_say(st, st.turn.utt, text, kind, store)
+      end
 
     stored =
       case store do
@@ -404,14 +427,40 @@ defmodule RisiMe.Agent.CallRisi.Session do
         _ -> [text | st.turn.stored]
       end
 
-    turn = %{st.turn | spoken: [text | st.turn.spoken], stored: stored}
+    %{st | turn: %{st.turn | spoken: [text | st.turn.spoken], stored: stored}}
+  end
 
-    %{
+  defp send_say(st, utt, text, kind, store) do
+    seq = st.seq + 1
+
+    Media.impl().command(st.media, %{
+      "cmd" => "say",
+      "seq" => seq,
+      "utt" => utt,
+      "text" => text,
+      "voice" => st.voice
+    })
+
+    %{st | seq: seq, pieces: Map.put(st.pieces, seq, {utt, text, kind, store})}
+  end
+
+  defp listen_ms, do: Application.get_env(:risime, :risi_call_listen_ms, 6_000)
+
+  # The caller's words came (or `@listen_ms` passed): the held pieces are said now (`resend?`)
+  # or dropped (a new question replaces the turn).
+  defp release(%{listen: nil} = st, _resend?), do: st
+
+  defp release(%{listen: %{held: held, ref: ref}} = st, resend?) do
+    Process.cancel_timer(ref)
+    st = %{st | listen: nil}
+
+    if resend? and is_map(st.turn) do
+      Enum.reduce(held, st, fn {utt, text, kind, store}, acc ->
+        if utt == acc.turn.utt, do: send_say(acc, utt, text, kind, store), else: acc
+      end)
+    else
       st
-      | seq: seq,
-        pieces: Map.put(st.pieces, seq, {st.turn.utt, text, kind, store}),
-        turn: turn
-    }
+    end
   end
 
   # Risi is checking (a tool turn without its answer yet): the user's speech joins the question.
@@ -595,6 +644,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp cancel_turn(%{turn: nil} = st, _why), do: st
 
   defp cancel_turn(%{turn: t} = st, why) do
+    st = release(st, false)
     if is_pid(t.pid) and Process.alive?(t.pid), do: Process.exit(t.pid, :kill)
 
     if why == :barge_in or t.spoken != [],

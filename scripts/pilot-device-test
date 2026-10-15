@@ -213,7 +213,8 @@ skills_on() {
   done
   [ -n "$xy" ] || return 1
   A shell input tap $xy; sleep 3
-  wait_for 'text="Calendar"' 15 || return 1
+  # The page starts with Alarm (15 Oct); Calendar is further down (skill_state scrolls to it).
+  wait_for 'Every skill is off' 15 || return 1
   dump; shot skills-before
   local name st ok
   for name in "$@"; do

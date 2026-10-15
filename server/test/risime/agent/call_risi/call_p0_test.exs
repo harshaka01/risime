@@ -527,6 +527,40 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
     assert "what's on my calendar tomorrow, slowish no, the entire week and tell me the important things." in texts
   end
 
+  test "device test 15 Oct: the caller goes on before Risi is audible: Risi waits for the words",
+       %{args: args} do
+    pid = start!(args)
+    utter(pid, 1, "en:Do you have anything")
+    # The chat answer to the fragment is queued, not heard yet.
+    assert_receive {:media_cmd, %{"cmd" => "say", "utt" => 1}}, 3_000
+    ev(pid, %{"ev" => "speech_start", "speaking" => false})
+    assert_receive {:media_cmd, %{"cmd" => "stop_speaking"}}, 1_000
+    utter(pid, 2, "en:on the 18th?", 500)
+    assert_receive {:turn_run, %{"text" => "Do you have anything on the 18th?"}}, 3_000
+    u = says(2)
+    assert answer_text(u) =~ "Sunday the 18th: busy from 9 to 10:30 am."
+    heard(pid, u)
+    texts = Enum.map(transcript(pid), & &1["text"])
+    assert "Do you have anything on the 18th?" in texts
+    refute "Do you have anything" in texts
+  end
+
+  test "device test 15 Oct: speech that never becomes words: the held answer is said after a while",
+       %{args: args} do
+    Application.put_env(:risime, :risi_call_listen_ms, 300)
+    on_exit(fn -> Application.delete_env(:risime, :risi_call_listen_ms) end)
+    pid = start!(args)
+    utter(pid, 1, "en:what's on my calendar tomorrow, slowish")
+    assert_receive {:media_cmd, %{"cmd" => "say", "utt" => 1, "text" => filler}}, 3_000
+    assert filler in Fillers.all()
+    ev(pid, %{"ev" => "speech_start", "speaking" => false})
+    assert_receive {:media_cmd, %{"cmd" => "stop_speaking"}}, 1_000
+    # The filler again after the wait, then the answer.
+    u = says(1)
+    assert hd(u)["text"] == filler
+    assert answer_text(u) =~ "Tomorrow: busy from 10 to 11 am"
+  end
+
   test "thinking aloud is ignored; an unclear short statement gets 'Was that for me?'", %{
     args: args
   } do
