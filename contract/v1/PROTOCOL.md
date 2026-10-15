@@ -10591,7 +10591,7 @@ calls need ≤ 2 s). **Additive.** Server flag **`RISI_LIVE_FAST`** (`off` | `ca
   - **Sinhala and Tamil** chunks are only detected, then **joined** per speaker: the speaker's next chunk that follows
     without a pause joins them whatever its own detection says; they are transcribed together (one Ogg/Opus stream
     without the overlaps, the service's `model=auto` route of §36.5/§36.11) and posted as **one** `call_transcript`
-    when they reach **8 s** of audio, **≥ 4 s** ending at a phone pause cut (a chunk shorter than 4 s), a pause of
+    when they reach **8 s** of audio, **≥ 4 s** ending at a phone pause cut (a chunk shorter than 3 s), a pause of
     **≥ 600 ms** after ≥ 4 s, another language or the same speaker's English, **6 s** after the first one arrived, or
     the end of the session. Waiting audio stays in memory only and is dropped untranscribed on stop with `discard`;
   - **overlap:** when a line's audio starts before the end of the same speaker's previous line, the server drops the
