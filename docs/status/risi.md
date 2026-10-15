@@ -50,6 +50,15 @@ stored), the write went `void`; the model then made a Risi Calendar card: 14:15:
   `set_reminder`); a phone card's yes is told "Your phone adds this one itself, so tap Add". For root: a voice
   yes for the phone's own calendar needs an app/contract change (the phone accepting a server-attested voice
   confirm) — not done here. Card readback of every summary kind fixed ("00 to 17:00" on srv11).
+- **Live:** srv11 (15:16Z), srv12 (15:47Z). Device (redroid, test account, srv12): chat pass 10/10 + reminder card
+  (on srv11, run 20261015T152108Z); calls 3+4 at 15:48Z: the 18th "busy all day … also 2 to 3 pm"; the 2 am–10 pm
+  window answered; the RISD card then the racing correction read back ("Shall I add it to your Risi Calendar?");
+  "That's correct" → "Added to your Risi Calendar: Discuss about racing, Sunday the 18th, 9 to 10 am" (row
+  `done`, via confirm); "I can't see that you have added something" → "Yes, it's added …"; call 4 "Call with the
+  bank, tomorrow, 4 to 5 pm" added by voice, "Did you add it?" → yes (row `done`). 0 claim_violation logged.
+- **Not fixed:** the write turn's model still drops an end time ("from 10 to 12" → 10–11 am, as on Harsha's
+  card) and, without a day, took the 18th (the earlier topic); the read-back now exposes both so the caller can
+  correct. The voice yes can't run the phone's own `calendar_add` (needs an app/contract change).
 - Tests: `test/risime/agent/call_risi/call_3_test.exs` (the replay, call 4 voice confirm, units),
   `test/risime/agent/claim_guard_test.exs` (10 adversarial prompts); question set 52/52 with
   `harsha-2026-10-15-call-3`. Device: `pilot-device-test` seeds an all-day "Family day" on the 18th and turns on the
