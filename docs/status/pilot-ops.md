@@ -38,3 +38,4 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
 | 2026-10-14 ~02:10 | RISI_VOICE_TRANSCRIBE | canary | root (Harsha asked, P1) |
 | 2026-10-14 ~02:10 | RISI_ACTION_ITEMS | canary | root (Harsha asked); stays canary until Harsha says |
 | 2026-10-14 03:52 (09:22 SLT) | RISI_VOICE_TRANSCRIBE | **on** (everyone) | Harsha |
+| 2026-10-15 00:52 (06:22 SLT) | RISI_CALL_RISI | canary (Harsha only) | root (Harsha 15 Oct P0-2: device test, his account) |
