@@ -278,9 +278,30 @@ defmodule RisiMe.Agent.ScheduleIntent do
   # P0 2026-10-15: "on the 18th" / "the 18th" = this month's 18th when it is today or later, else
   # next month's (recorded in docs/status/risi.md). After every other day form, so "the 2nd meeting
   # tomorrow" stays tomorrow.
+  # Speech-to-text writes days in words ("the Sixteenth", "twenty-first"): 1–31.
+  @ord_units ~w(first second third fourth fifth sixth seventh eighth ninth)
+  @ord_teens ~w(tenth eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth)
+  @ord_words Enum.sort_by(
+               Enum.with_index(@ord_units, 1) ++
+                 Enum.with_index(@ord_teens, 10) ++
+                 [{"twentieth", 20}, {"thirtieth", 30}, {"thirty first", 31}] ++
+                 for({u, i} <- Enum.with_index(@ord_units, 1), do: {"twenty " <> u, 20 + i}),
+               &(-String.length(elem(&1, 0)))
+             )
+
+  defp ordinal_words(t) do
+    t2 = String.replace(String.downcase(t), "-", " ")
+
+    Enum.find_value(@ord_words, fn {w, n} ->
+      if Regex.match?(~r/\b(?:the\s+)?#{w}\b(?!\s+(?:time|thing|one|of\s+all))/u, t2) and
+           Regex.match?(~r/\bthe\s+#{w}\b|\bon\s+the\s+#{w}\b|^\W*#{w}\W*$/u, t2),
+         do: [w, Integer.to_string(n)]
+    end)
+  end
+
   defp ordinal(t, today) do
     m =
-      Regex.run(~r/\b(\d{1,2})(?:st|nd|rd|th)\b/u, t) ||
+      Regex.run(~r/\b(\d{1,2})(?:st|nd|rd|th)\b/u, t) || ordinal_words(t) ||
         Regex.run(~r/\bon\s+the\s+(\d{1,2})\b(?!\s*(?:am|pm|a\.m|p\.m|:|o'?clock))/u, t)
 
     case m do

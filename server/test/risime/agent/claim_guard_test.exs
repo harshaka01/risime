@@ -61,6 +61,14 @@ defmodule RisiMe.Agent.ClaimGuardTest do
     {"delete that event", "I've deleted the event."}
   ]
 
+  test "the honest line isn't repeated by the model's own 'please tap Add' (device test 15 Oct)" do
+    rid = Ecto.UUID.generate()
+    results(rid, ["pending"])
+    said = "I've updated the event. Please tap [Add] on the card to confirm."
+    {safe, :violation} = ClaimGuard.guard(said, rid, "turn")
+    assert safe == "I've drafted it. Tap Add to confirm."
+  end
+
   test "10 adversarial prompts: a claim without a done result is rewritten and logged" do
     rid = Ecto.UUID.generate()
     results(rid, ["pending"])

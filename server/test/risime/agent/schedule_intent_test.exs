@@ -67,4 +67,13 @@ defmodule RisiMe.Agent.ScheduleIntentTest do
     assert ScheduleIntent.classify("feel free to summarise this", @today) == :none
     assert ScheduleIntent.classify("schedule a message to Kumu at 6", @today) == :none
   end
+
+  test "days in words from speech-to-text (Harsha's call, 15 Oct)" do
+    today = ~D[2026-10-15]
+    assert ScheduleIntent.day_named?("The Sixteenth", today)
+    assert ScheduleIntent.day_named?("anything on the twenty-first?", today)
+    assert ScheduleIntent.range("The Sixteenth", today).from == ~D[2026-10-16]
+    assert ScheduleIntent.range("on the twenty first", today).from == ~D[2026-10-21]
+    refute ScheduleIntent.day_named?("the first thing I need", today)
+  end
 end

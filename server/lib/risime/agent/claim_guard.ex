@@ -176,9 +176,19 @@ defmodule RisiMe.Agent.ClaimGuard do
           |> String.split(~r/(?<=[.!?…])\s+/u, trim: true)
           |> Enum.map_reduce(said?, fn s, said? ->
             cond do
-              not claim_sentence?(s) -> {s, said?}
-              said? -> {nil, true}
-              true -> {line, true}
+              # The honest line already asks for the tap: the model's own "please tap Add" goes.
+              s != line and String.contains?(line, "Tap Add") and
+                  Regex.match?(~r/\btap\b.*\b(?:add|confirm)\b/iu, s) ->
+                {nil, said?}
+
+              not claim_sentence?(s) ->
+                {s, said?}
+
+              said? ->
+                {nil, true}
+
+              true ->
+                {line, true}
             end
           end)
 
