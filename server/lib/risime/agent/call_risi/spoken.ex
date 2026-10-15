@@ -76,12 +76,19 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
 
           extra = length(events) - @max_items
 
+          day_lines =
+            if f[:items_only] == true,
+              do: items_days(days, Map.new(Enum.zip(busy_days, sentences)), f.today),
+              else: [
+                Enum.reject(sentences, &is_nil/1),
+                if(free_days != [] and length(days) > 1,
+                  do: ["Nothing on " <> join(Enum.map(free_days, &day_label(&1, f.today))) <> "."],
+                  else: []
+                )
+              ]
+
           [
-            Enum.reject(sentences, &is_nil/1),
-            if(free_days != [] and length(days) > 1,
-              do: ["Nothing on " <> join(Enum.map(free_days, &day_label(&1, f.today))) <> "."],
-              else: []
-            ),
+            day_lines,
             if(extra > 0, do: ["The full list is in your Risi chat."], else: [])
           ]
           |> List.flatten()
@@ -90,6 +97,20 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
 
     unread = Enum.join(f.unread || [], " ")
     {String.trim(text <> " " <> unread), missing?}
+  end
+
+  # Device test 15 Oct (call 2): Risi's own items, day by day in order; a run of days without any
+  # says "No promises or reminders today." (never "nothing scheduled": the phone may have events).
+  defp items_days(days, said, today) do
+    days
+    |> Enum.chunk_by(&Map.has_key?(said, &1))
+    |> Enum.flat_map(fn [d | _] = run ->
+      if Map.has_key?(said, d),
+        do: run |> Enum.map(&said[&1]) |> Enum.reject(&is_nil/1),
+        else: [
+          "No promises or reminders " <> join(Enum.map(run, &day_label(&1, today))) <> "."
+        ]
+    end)
   end
 
   @own ~w(promise follow_up reminder scheduled_message)
@@ -240,8 +261,29 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
   calendar. No lists, no markdown, no emoji. English.
   """
 
+  @compose_items """
+  You are Risi, speaking on a live phone call. Rephrase the ITEMS below as a natural spoken answer \
+  to the user's question, in one to four short sentences. The ITEMS are only the promises, \
+  reminders and follow-ups you keep for the user, NOT their whole calendar: a day without any has \
+  "no promises or reminders"; never say a day is free, clear or has nothing scheduled or nothing on \
+  the calendar. Use ONLY what the ITEMS say: never add, guess, merge or drop an item, and keep every \
+  time exactly as written. Say "you", never "I". No lists, no markdown, no emoji. English.
+  """
+
   @doc "The messages for risi-l1 to phrase `rendered` (the deterministic rendering) for `question`."
-  def compose_messages(rendered, question) do
+  def compose_messages(rendered, question, items_only? \\ false)
+
+  def compose_messages(rendered, question, true) do
+    [
+      %{"role" => "system", "content" => @compose_items},
+      %{
+        "role" => "user",
+        "content" => "Question: #{String.slice(question || "", 0, 300)}\nITEMS: #{rendered}"
+      }
+    ]
+  end
+
+  def compose_messages(rendered, question, false) do
     [
       %{"role" => "system", "content" => @compose},
       %{
@@ -250,6 +292,8 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
       }
     ]
   end
+
+  @free ~r/\b(?:nothing\s+(?:scheduled|planned|on)|free|clear|no\s+(?:events|plans|appointments|meetings))\b/iu
 
   @refuse ~r/\b(?:can(?:'|no)?t|cannot|unable to|don'?t have access|no access)\b.{0,30}\b(?:see|access|read|check|get)\b/iu
 
@@ -270,6 +314,8 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
     cond do
       said == "" -> nil
       Regex.match?(@refuse, said) -> nil
+      # Risi's own items only: a day without any is never "free" (the phone may have events).
+      Regex.match?(~r/\b[Nn]o promises\b/u, rendered) and Regex.match?(@free, said) -> nil
       # The calendar is the user's: "I am busy", "I can get the calendar" are wrong.
       not Regex.match?(~r/\bI\b/u, rendered) and Regex.match?(~r/\bI\b/u, said) -> nil
       Regex.match?(~r/\b(?:From|Checked|Not checked):/u, said) -> nil

@@ -135,7 +135,9 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
     cond do
       text == "" -> {:noreply, st}
-      match?(%{turn: %{utt: ^held}}, st) and holding?(st) -> held_fragment(st, utt, text)
+      # The question being checked, or its restart with merged words (device test 15 Oct: a
+      # second fragment after a restart must merge too, never replace the question).
+      match?(%{turn: %{root: ^held, brain_done?: false}}, st) -> held_fragment(st, utt, text)
       # The answer came meanwhile: the words are a new question.
       true -> {:noreply, start_text_turn(cancel_turn(st, :replaced), utt, text, true)}
     end
@@ -182,7 +184,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
        when is_map(st.turn) and st.turn.brain_done? == false and
               st.turn.route not in [nil, "chat", "capabilities"] do
     me = self()
-    held = st.turn.utt
+    held = st.turn.root
     wav = b64 |> Base.decode64!() |> wav16k()
 
     Task.start(fn ->
@@ -204,20 +206,34 @@ defmodule RisiMe.Agent.CallRisi.Session do
     end_ms = now - (ev["eot_wait_ms"] || 0)
     start_ms = end_ms - (ev["speech_ms"] || 0)
 
-    {prefix, st} =
-      case take_unanswered(st) do
-        {"", st} -> take_fragment(st, start_ms)
-        {p, st} -> {p, %{st | last_user: nil}}
+    pcm = Base.decode64!(b64)
+
+    {prefix, pcm, st} =
+      case stt_pending(st) do
+        # Device test 15 Oct: the next words came before the last utterance was transcribed:
+        # both are transcribed together (the first part never vanishes).
+        %{} = t ->
+          {t.prefix, t.pcm <> :binary.copy(<<0, 0>>, 4_000) <> pcm, st}
+
+        nil ->
+          case take_unanswered(st) do
+            {"", st} ->
+              {p, st} = take_fragment(st, start_ms)
+              {p, pcm, st}
+
+            {p, st} ->
+              {p, pcm, %{st | last_user: nil}}
+          end
       end
 
     st = cancel_turn(st, :replaced)
-    wav = b64 |> Base.decode64!() |> wav16k()
+    wav = wav16k(pcm)
     ctx = brain_ctx(st, utt)
     {:ok, pid} = Task.start_link(fn -> Brain.run(ctx, wav, prefix) end)
 
     turn =
       new_turn(utt, pid, st)
-      |> Map.merge(%{eot_wait_ms: ev["eot_wait_ms"], end_ms: end_ms})
+      |> Map.merge(%{eot_wait_ms: ev["eot_wait_ms"], end_ms: end_ms, pcm: pcm, prefix: prefix})
 
     {:noreply, %{st | turn: turn}}
   end
@@ -273,7 +289,15 @@ defmodule RisiMe.Agent.CallRisi.Session do
   ## Brain events
 
   defp brain({:stt, %{} = r}, st) do
-    t = %{st.turn | stt_ms: r.ms, lang: r.lang, text: r.text, stt_model: r.model}
+    # A text turn's words may have grown meanwhile (a fragment merged before this event).
+    text =
+      if is_binary(st.turn.text) and String.starts_with?(st.turn.text, r.text),
+        do: st.turn.text,
+        else: r.text
+
+    # The audio leaves memory with the transcription.
+    t = %{st.turn | stt_ms: r.ms, lang: r.lang, text: text, stt_model: r.model, pcm: nil}
+    r = %{r | text: text}
 
     st =
       if r.text != "",
@@ -336,7 +360,11 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp new_turn(utt, pid, _st) do
     %{
       utt: utt,
+      # The utterance of the question this turn answers (a restart with merged words keeps it).
+      root: utt,
       pid: pid,
+      pcm: nil,
+      prefix: "",
       t0: System.monotonic_time(:millisecond),
       eot_wait_ms: nil,
       stt_ms: nil,
@@ -393,6 +421,9 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   defp holding?(_st), do: false
 
+  # "and tell me the important things": a fragment that goes on with the question.
+  @and_then ~r/^\W*(?:and|also|plus|then|so|with)\b/iu
+
   @stop ~r/^\W*(?:risi\W+)?(?:stop|cancel(?:\s+that)?|never\s*mind|forget\s+it)\b/iu
 
   # A fragment said while holding: "Risi, stop" stops; one that changes the request (another
@@ -401,17 +432,26 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp held_fragment(st, utt, text) do
     t = st.turn
     merged = String.trim((t.text || "") <> " " <> text)
+    decided = Map.get(t, :decided)
+    frag = Brain.decide(text, decide_ctx(st, t))
+
+    # "Give me the entire week" … "and tell me the important things": a fragment that is no
+    # calendar read of its own, said while one is checked, whose words together still read as
+    # one, continues the question: it joins it (the range stays the one being checked).
+    joins? =
+      changed?(frag, decided) and elem(frag, 0) != "calendar_read" and
+        match?({"calendar_read", _}, decided) and
+        (Regex.match?(@and_then, text) or
+           match?({"calendar_read", _}, Brain.decide(merged, decide_ctx(st, t))))
 
     cond do
       Regex.match?(@stop, text) ->
         {:noreply, add_line(cancel_turn(st, :barge_in), :user, text, nil, utt)}
 
-      changed?(Brain.decide(text, decide_ctx(st, t)), Map.get(t, :decided)) ->
+      changed?(frag, decided) and not joins? ->
         lines = drop_first(st.lines, &(&1["who"] == "user" and &1["text"] == t.text))
         st = cancel_turn(%{st | lines: lines}, :replaced)
-
-        decision = Brain.decide(text, decide_ctx(st, t))
-        {:noreply, start_text_turn(st, utt, merged, false, decision)}
+        {:noreply, restart(st, t, utt, merged, frag)}
 
       true ->
         lines =
@@ -461,8 +501,26 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp start_text_turn(st, utt, text, filler?, decision \\ nil) do
     ctx = brain_ctx(st, utt) |> Map.merge(%{filler?: filler?, decision: decision})
     {:ok, pid} = Task.start_link(fn -> Brain.run_text(ctx, text) end)
-    %{st | turn: new_turn(utt, pid, st)}
+    %{st | turn: %{new_turn(utt, pid, st) | text: text}}
   end
+
+  # The held question restarted with the merged words: it keeps its root (later fragments merge).
+  defp restart(st, held, utt, merged, decision) do
+    st = start_text_turn(st, utt, merged, false, decision)
+    {route, _} = decision
+
+    turn =
+      Map.merge(st.turn, %{root: held.root, route: route, decided: decision})
+
+    %{st | turn: turn}
+  end
+
+  # The current turn's utterance is still being transcribed (no words, nothing said yet).
+  defp stt_pending(%{turn: %{utt: u, text: nil, spoken: [], pcm: pcm, pid: pid} = t})
+       when u > 0 and is_binary(pcm) and is_pid(pid),
+       do: if(Process.alive?(pid), do: t)
+
+  defp stt_pending(_st), do: nil
 
   # A failed device lookup (even an exit from the pool) means "don't ask": times only.
   defp cal_capable?(args) do

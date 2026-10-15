@@ -34,8 +34,18 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
     @impl true
     def compare(_, _), do: {:error, :failed}
     @impl true
+    # "en:words"; "~" first = a slow transcription (500 ms); two utterances transcribed together
+    # are joined by the session's 250 ms of silence.
     def transcribe(<<_hdr::binary-size(44), script::binary>>, _opts) do
-      [lang, text] = String.split(script, ":", parts: 2)
+      parts =
+        for part <- String.split(script, :binary.copy(<<0, 0>>, 4_000)) do
+          [lang, text] = String.split(part, ":", parts: 2)
+          if String.starts_with?(text, "~"), do: Process.sleep(500)
+          {lang, String.trim_leading(text, "~")}
+        end
+
+      [{lang, _} | _] = parts
+      text = parts |> Enum.map(&elem(&1, 1)) |> Enum.join(" ")
       {:ok, %{text: text, language: lang, model: "fake-asr", elapsed_ms: 10, speech: text != ""}}
     end
   end
@@ -47,17 +57,30 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
       test = :persistent_term.get({__MODULE__, :test})
       send(test, {:llm, messages})
 
-      if sys =~ "Rephrase the CALENDAR" do
+      if sys =~ ~r/Rephrase the (?:CALENDAR|ITEMS)/ do
         cal =
           messages
           |> List.last()
           |> Map.get("content")
-          |> String.split("CALENDAR: ")
+          |> String.split(~r/(?:CALENDAR|ITEMS): /)
           |> List.last()
 
         case :persistent_term.get({__MODULE__, :phrase}, :echo) do
-          :echo -> on_delta.("Okay. " <> cal)
-          :unsafe -> on_delta.("I can't see your calendar right now, sorry.")
+          :echo ->
+            on_delta.("Okay. " <> cal)
+
+          :unsafe ->
+            on_delta.("I can't see your calendar right now, sorry.")
+
+          # The pilot's risi-l1 on call 2 (15 Oct, 11:14Z): an empty day became "nothing scheduled".
+          :free ->
+            on_delta.(
+              String.replace(
+                cal,
+                "No promises or reminders today.",
+                "You have nothing scheduled for today."
+              )
+            )
         end
       else
         on_delta.("Sure, which day do you mean?")
@@ -433,6 +456,77 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
     refute a =~ "calendar…"
   end
 
+  test "device test 15 Oct: the next words before the last were transcribed: both answered", %{
+    args: args
+  } do
+    Application.put_env(:risime, :risi_call_merge_ms, -100_000)
+    pid = start!(args)
+    utter(pid, 1, "en:what's on my calendar today")
+    heard(pid, says(1))
+    # The first part is still at the speech service when the second arrives.
+    utter(pid, 2, "en:~Give me the entire week")
+    Process.sleep(100)
+    utter(pid, 3, "en:and tell me the important things.")
+
+    assert_receive {:turn_run,
+                    %{
+                      "text" => "Give me the entire week and tell me the important things.",
+                      "__schedule" => %{from: ~D[2026-10-15], to: ~D[2026-10-19]}
+                    }},
+                   3_000
+
+    u = says(3)
+    a = answer_text(u)
+    assert a =~ "Today: busy from 2 to 3 pm."
+    assert a =~ "Sunday the 18th: busy from 9 to 10:30 am."
+    heard(pid, u)
+    texts = Enum.map(transcript(pid), & &1["text"])
+    assert "Give me the entire week and tell me the important things." in texts
+    refute "and tell me the important things." in texts
+  end
+
+  test "device test 15 Oct: a fragment while the week is checked joins it (never a new question)",
+       %{args: args} do
+    Application.put_env(:risime, :risi_call_merge_ms, -100_000)
+    pid = start!(args)
+    utter(pid, 1, "en:what's on my calendar today")
+    heard(pid, says(1))
+    utter(pid, 2, "en:Give me the entire week, slowish")
+    assert_receive {:turn_run, %{"__schedule" => %{from: ~D[2026-10-15], to: ~D[2026-10-19]}}}
+    Process.sleep(100)
+    utter(pid, 3, "en:and tell me the important things.")
+    u = says(2)
+    a = answer_text(u)
+    assert a =~ "Saturday the 17th: busy from 11 am to 12 noon."
+    refute_received {:turn_run, %{"text" => "and tell me the important things."}}
+    refute_received {:media_cmd, %{"cmd" => "say", "utt" => 3}}
+    heard(pid, u)
+    texts = Enum.map(transcript(pid), & &1["text"])
+    assert "Give me the entire week, slowish and tell me the important things." in texts
+  end
+
+  test "device test 15 Oct: a second fragment after a restart merges into the restarted question",
+       %{args: args} do
+    Application.put_env(:risime, :risi_call_merge_ms, -100_000)
+    pid = start!(args)
+    utter(pid, 1, "en:what's on my calendar tomorrow, slowish")
+    assert_receive {:turn_run, %{"__schedule" => %{from: ~D[2026-10-16]}}}
+    Process.sleep(100)
+    utter(pid, 2, "en:no, the entire week")
+
+    assert_receive {:turn_run, %{"__schedule" => %{from: ~D[2026-10-15], to: ~D[2026-10-19]}}},
+                   3_000
+
+    utter(pid, 3, "en:and tell me the important things.")
+    u = says(2)
+    assert answer_text(u) =~ "Sunday the 18th: busy from 9 to 10:30 am."
+    refute_received {:turn_run, %{"text" => "and tell me the important things."}}
+    heard(pid, u)
+    texts = Enum.map(transcript(pid), & &1["text"])
+
+    assert "what's on my calendar tomorrow, slowish no, the entire week and tell me the important things." in texts
+  end
+
   test "thinking aloud is ignored; an unclear short statement gets 'Was that for me?'", %{
     args: args
   } do
@@ -456,6 +550,9 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
     assert_received {:turn_run, %{"__schedule" => %{from: ~D[2026-10-15], to: ~D[2026-10-17]}}}
     a2 = answer_text(u2)
     assert a2 =~ "Tomorrow: a reminder, Call Ruwan, at 5 pm."
+    # Today has a phone event but no promise: never "nothing scheduled" (device test 15 Oct).
+    assert a2 =~ "No promises or reminders today."
+    refute a2 =~ ~r/nothing (?:scheduled|on your calendar)/i
     refute a2 =~ "busy"
     refute a2 =~ ~r/access/i
     heard(pid, u2)
@@ -471,6 +568,18 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
 
     assert answer_text(says(4)) =~
              "You have no promises, reminders or follow-ups Saturday the 17th."
+  end
+
+  test "promises on a call: a model phrasing that calls an empty day free is not used", %{
+    args: args
+  } do
+    :persistent_term.put({LLM, :phrase}, :free)
+    pid = start!(args)
+    utter(pid, 1, "en:Did I promise anything today or tomorrow?")
+    a = answer_text(says(1))
+    assert a =~ "No promises or reminders today."
+    assert a =~ "Tomorrow: a reminder, Call Ruwan, at 5 pm."
+    refute a =~ ~r/nothing scheduled/i
   end
 
   test "the chat route never claims it has no access to the user's own things" do

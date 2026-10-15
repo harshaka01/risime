@@ -1823,7 +1823,8 @@ defmodule RisiMe.Agent.Turn do
   defp promises_text(ctx) do
     case ctx.items |> Map.values() |> Enum.sort_by(& &1.ref) do
       [] ->
-        "You have no open promises in my list."
+        "You have no open promises in my list." <>
+          keeping_text(ctx, ~w(reminder follow_up scheduled_message))
 
       items ->
         lines =
@@ -1834,8 +1835,26 @@ defmodule RisiMe.Agent.Turn do
             "- #{who}: #{i.text}#{with_}#{due}"
           end
 
-        "Your open promises:\n" <> Enum.join(lines, "\n")
+        "Your open promises:\n" <>
+          Enum.join(lines, "\n") <> keeping_text(ctx, ~w(reminder scheduled_message))
     end
+  end
+
+  # Device test 15 Oct (Q7, Q10): "what did I promise?" also lists what Risi keeps for the user
+  # from now on (reminders, follow-ups, scheduled messages), never only "no open promises".
+  defp keeping_text(ctx, kinds) do
+    now = Map.get(ctx, :now) || Clock.now()
+
+    case RisiItems.list(ctx.asker, from: now, kinds: kinds, undated: false) do
+      {:ok, [_ | _] = items} ->
+        lines = items |> Enum.take(10) |> Enum.map(&("- " <> RisiItems.line(&1, ctx.tz)))
+        "\n\nReminders I'm keeping for you:\n" <> Enum.join(lines, "\n")
+
+      _ ->
+        ""
+    end
+  rescue
+    _ -> ""
   end
 
   defp memory_args(m, ctx) do

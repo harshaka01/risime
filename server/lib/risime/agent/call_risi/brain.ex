@@ -506,7 +506,15 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
     text =
       if facts.ok?,
-        do: phrase(ctx, rendered, question, Spoken.titles(facts, titles), log),
+        do:
+          phrase(
+            ctx,
+            rendered,
+            question,
+            Spoken.titles(facts, titles),
+            log,
+            Map.get(facts, :items_only) == true
+          ),
         else: rendered
 
     note =
@@ -545,7 +553,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   end
 
   # risi-l1 phrases the rendering; its text is used only when `Spoken.checked/3` passes.
-  defp phrase(ctx, rendered, question, titles, log_meta) do
+  defp phrase(ctx, rendered, question, titles, log_meta, items_only?) do
     buf = {__MODULE__, :phrase}
     Process.put(buf, "")
 
@@ -558,7 +566,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     ]
 
     said =
-      case LLMStream.run(Spoken.compose_messages(rendered, question), opts, fn d ->
+      case LLMStream.run(Spoken.compose_messages(rendered, question, items_only?), opts, fn d ->
              Process.put(buf, Process.get(buf) <> d)
            end) do
         {:ok, _} -> Process.get(buf)

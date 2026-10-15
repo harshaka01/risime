@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Harsha's two Call Risi calls (15 Oct) against the LIVE pilot as the pilot TEST account (+94770000995), after
+# scripts/pilot-device-test --only setup --keep (the redroid phone stays signed in, with its calendar and skills).
+# redroid has no microphone that can be fed, so a headless caller (infra/voice/harness_caller.py, synthetic Kokoro
+# voice am_michael, labelled synthetic) speaks Harsha's utterances. It starts the call through the pilot's REST
+# (`POST /calls/rooms` start + risi_call, §41.2) with its own dev-OTP session for the test number and
+# `X-Device-Id` = the PHONE's device, so Risi's turn device (calendar_check and the other client tools, §25.4) is
+# the redroid phone, as on Harsha's real call. The phone is not in the LiveKit room, so §41.8 meeting titles are
+# not answered (Risi speaks times only). Signalling goes to the pilot LiveKit on 127.0.0.1:7880 (no hairpin).
+# Like Harsha, the caller speaks the next clip only after Risi's ANSWER has finished (a new final "call risi
+# turn:" line in the pilot log, then 2.5 s of Risi silence; 25 s cap), never right after the holding line.
+#
+#   PDT_SETUP=<setup dir> scripts/pilot-call-test
+#
+# Writes <setup dir>/calls/: call1.json, call2.json (per-turn timings), the risi_call_transcript card from the phone
+# (callN-card.png/.xml/.txt) and the pilot's log lines of the call. Nothing secret is printed (OTP, token).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"
+SETUP="${PDT_SETUP:?PDT_SETUP=<the pilot-device-test setup dir>}"
+OUT="$SETUP/calls"; mkdir -p "$OUT"
+PHONE="+94770000995"; EMAIL="pilot-device-test@example.com"; API="http://127.0.0.1:4000/api/v1"
+PY="${VOICE_PYTHON:-$HOME/risime-voice/venv/bin/python}"
+SERIAL="127.0.0.1:${PDT_PORT:-5771}"; ADB="$("$REPO/scripts/android-target" adb)/adb"; A() { "$ADB" -s "$SERIAL" "$@"; }
+PILOT_LOG="$HOME/risime-logs/server.log"
+WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf -- "${WORK:?}"' EXIT
+die() { echo "PCT FAIL $*" | tee -a "$OUT/result"; exit 1; }
+curl -sf --max-time 3 http://127.0.0.1:8230/health >/dev/null || die "risime-tts is not up"
+A shell true >/dev/null 2>&1 || die "the phone ($SERIAL) isn't connected: run pilot-device-test --only setup --keep first"
+
+# ---------------------------------------------------------------- the clips (synthetic voice)
+say() { curl -sf --max-time 30 -o "$WORK/$1.wav" -H 'Content-Type: application/json' \
+  -d "{\"text\": \"$2\", \"voice\": \"kokoro:am_michael\"}" "http://127.0.0.1:8230/v1/tts?format=wav" || die "tts $1"; }
+say c1a "What can you do?"
+say c1b "Check my calendar for today and tomorrow?"
+say c1c1 "Do you have anything"
+say c1c2 "on the eighteenth?"
+say c1d "Why can't you get the calendar information?"
+say c1e "Give me the entire week and tell me the important things."
+say c2a "Let me see. I need to listen to it."
+say c2b "Did I promise anything today or tomorrow?"
+say c2c "You should have access, you add the notes and calendar."
+"$PY" -I -c 'import sys, wave
+out, a, b = sys.argv[1:4]
+ws = [wave.open(p, "rb") for p in (a, b)]; p = ws[0].getparams()
+o = wave.open(out, "wb"); o.setparams(p)
+o.writeframes(ws[0].readframes(ws[0].getnframes()))
+o.writeframes(b"\0" * (p.sampwidth * p.nchannels * p.framerate))  # the 1 s pause
+o.writeframes(ws[1].readframes(ws[1].getnframes())); o.close()' "$WORK/c1c.wav" "$WORK/c1c1.wav" "$WORK/c1c2.wav" || die "c1c clip"
+
+# ---------------------------------------------------------------- a session for the test number (dev OTP, never printed)
+before="$(grep -ac "\[DEV OTP\] $PHONE:" "$PILOT_LOG" || true)"
+code="$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d "{\"phone\":\"$PHONE\",\"email\":\"$EMAIL\"}" "$API/auth/request")"
+[ "$code" = 200 ] || die "auth/request answered $code (rate limit: 3 per 15 min per phone)"
+otp=""; for _ in $(seq 1 30); do
+  [ "$(grep -ac "\[DEV OTP\] $PHONE:" "$PILOT_LOG" || true)" -gt "$before" ] && { otp="$(grep -a "\[DEV OTP\] $PHONE:" "$PILOT_LOG" | tail -1 | grep -oE "\[DEV OTP\] \\$PHONE: [0-9]{6}" | grep -oE '[0-9]{6}$')"; break; }; sleep 1; done
+[ -n "$otp" ] || die "no OTP in the pilot log"
+curl -sf -H 'content-type: application/json' -d "{\"phone\":\"$PHONE\",\"code\":\"$otp\",\"device_name\":\"pilot-call-test (headless)\"}" "$API/auth/verify" > "$WORK/verify.json" || die "auth/verify"
+unset otp
+TOKEN="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$WORK/verify.json")"
+H=(-H "authorization: Bearer $TOKEN")
+# The phone's device (the newest android device of the account) and its Risi chat.
+DEVICE="$(timeout 60 scripts/risi-rpc 'import Ecto.Query
+u = RisiMe.Repo.get_by!(RisiMe.Accounts.User, phone: "+94770000995")
+d = RisiMe.Repo.one(from d in RisiMe.Devices.Device, where: d.user_id == ^u.id and "call_risi" in d.capabilities, order_by: [desc: d.last_seen_at], limit: 1, select: d.device_id)
+IO.puts("dev=" <> to_string(d))' 2>/dev/null | sed -n 's/^dev=//p')"
+[ -n "$DEVICE" ] || die "couldn't find the phone's device"
+CONV="$(timeout 60 scripts/risi-rpc 'u = RisiMe.Repo.get_by!(RisiMe.Accounts.User, phone: "+94770000995")
+IO.puts("conv=" <> to_string(RisiMe.RisiChat.active_id(u.id)))' 2>/dev/null | sed -n 's/^conv=//p')"
+[ -n "$CONV" ] || die "no active Risi chat for the test account"
+echo "==> phone device ${DEVICE:0:8}…, Risi chat ${CONV:0:12}…"
+
+card() {  # <n>: the risi_call_transcript card on the phone's Risi chat
+  local n="$1" i
+  A shell am start -W -n ai.risicloud.risime.debug/ai.risicloud.risime.MainActivity >/dev/null 2>&1 || true
+  for i in $(seq 1 30); do
+    A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
+    A exec-out cat /sdcard/ui.xml > "$OUT/call$n-card.xml" 2>/dev/null || true
+    grep -qE 'Call with Risi|You: ' "$OUT/call$n-card.xml" && break
+    sleep 2
+  done
+  A exec-out screencap -p > "$OUT/call$n-card.png" 2>/dev/null || true
+  python3 -I - "$OUT/call$n-card.xml" > "$OUT/call$n-card.txt" <<'PY'
+import sys, xml.etree.ElementTree as ET
+try: nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError: nodes = []
+for n in nodes:
+    t = (n.get('text') or '').strip()
+    if t: print(t)
+PY
+}
+
+call() {  # <n> <clips...>
+  local n="$1"; shift
+  local mark; mark="$(wc -l < "$PILOT_LOG")"
+  local cid; cid="$(python3 -I -c 'import uuid; print(uuid.uuid4())')"
+  curl -s "${H[@]}" -H "x-device-id: $DEVICE" -H 'content-type: application/json' -o "$WORK/room$n.json" -w '%{http_code}' \
+    -d "{\"conversation_id\":\"$CONV\",\"call_id\":\"$cid\",\"media\":\"audio\",\"action\":\"start\",\"risi_call\":true}" \
+    "$API/calls/rooms" > "$WORK/room$n.code"
+  [ "$(cat "$WORK/room$n.code")" = 200 ] || die "call $n: start answered $(cat "$WORK/room$n.code") $(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("error"))' "$WORK/room$n.json" 2>/dev/null)"
+  local lk; lk="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$WORK/room$n.json")"
+  python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print("    room reply: url", d["url"], "risi_call", json.dumps(d.get("risi_call")))' "$WORK/room$n.json"
+  local t0; t0="$(date +%s)"
+  local wavs=(); for c in "$@"; do wavs+=("$WORK/$c.wav"); done
+  timeout 300 "$PY" -I "$REPO/infra/voice/harness_caller.py" --url ws://127.0.0.1:7880 --token "$lk" \
+    --wait-answer --turn-log "$PILOT_LOG" "${wavs[@]}" > "$OUT/call$n.json" 2> "$OUT/call$n.err" \
+    || echo "    caller exit $? ($(tail -2 "$OUT/call$n.err" | tr '\n' ' '))"
+  echo "    call $n: $(( $(date +%s) - t0 )) s; caller: $(cat "$OUT/call$n.json")"
+  sleep 15   # the caller has left; Risi posts the transcript card
+  tail -n +"$((mark + 1))" "$PILOT_LOG" | grep -aE "$cid|call_risi|Call Risi|voice_call|calendar_check" | cut -c1-600 > "$OUT/call$n-server.log" || true
+  card "$n"
+  echo "    call $n card (phone screen):"; sed 's/^/    | /' "$OUT/call$n-card.txt"
+}
+call 1 c1a c1b c1c c1d c1e
+call 2 c2a c2b c2c
+curl -s -o /dev/null "${H[@]}" -X POST "$API/auth/logout" || true
+echo "PCT DONE (out $OUT)"

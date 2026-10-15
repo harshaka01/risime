@@ -8,12 +8,15 @@ Risi's audio keeps coming) and an echo mode (Risi's audio is fed back into the c
 --echo-db, like a phone on speaker without echo cancellation). Prints one JSON object on stdout.
 
   python3 -I harness_caller.py --url ws://127.0.0.1:17896 --token T [--echo-db -6] [--barge WAV] a.wav b.wav
+  --wait-answer [--turn-log server.log]: behave like a person (pilot-call-test): after each clip wait
+  until Risi's answer has finished (not just its holding line), then speak the next clip.
 """
 
 import argparse
 import asyncio
 import collections
 import json
+import re
 import sys
 import time
 import wave
@@ -109,6 +112,45 @@ class Caller:
             await asyncio.sleep(0.05)
         return False
 
+    async def wait_answer(self, turn_log=None, quiet_s=2.5, cap_s=25.0):
+        """Like a person on the phone: wait until Risi's ANSWER has finished, not just its holding
+        line. With `turn_log` (the server's log), the answer is done when a new "call risi turn:"
+        line with a final status appears (a turn is recorded when its answer was spoken; replaced
+        and barged turns are not answers); then >= quiet_s of Risi silence. Without it: Risi's
+        audio, then quiet_s of silence, and while all Risi said since is short (< 3 s, a holding
+        line) more audio is awaited. Capped at cap_s from the end of the clip."""
+        t0 = time.monotonic()
+        heard_from = self.loud_frames
+        pos = getattr(self, "log_pos", None) if turn_log else None
+        done = False
+        while time.monotonic() - t0 < cap_s:
+            if turn_log and pos is not None and not done:
+                try:
+                    with open(turn_log, "rb") as f:
+                        f.seek(pos)
+                        chunk = f.read()
+                    for m in re.finditer(rb"call risi turn:[^\n]*?status=(\w+)", chunk):
+                        if m.group(1) not in (b"replaced", b"barged"):
+                            done = True
+                except OSError:
+                    turn_log = None
+            quiet = self.last_loud > 0 and time.monotonic() - max(self.last_loud, t0) >= quiet_s
+            if turn_log and pos is not None:
+                if done and quiet:
+                    return True
+            elif quiet and self.loud_frames > heard_from and (self.loud_frames - heard_from) * 10 >= 3000:
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    def mark_log(self, turn_log):
+        try:
+            with open(turn_log, "rb") as f:
+                f.seek(0, 2)
+                self.log_pos = f.tell()
+        except (OSError, TypeError):
+            self.log_pos = None
+
     async def wait_first(self, timeout=15.0):
         t0 = time.monotonic()
         while self.first_loud_after is None and time.monotonic() - t0 < timeout:
@@ -123,6 +165,10 @@ async def main():
     ap.add_argument("--echo-db", type=float, default=None)
     ap.add_argument("--barge", default=None)
     ap.add_argument("--rounds", type=int, default=1)
+    ap.add_argument("--wait-answer", action="store_true",
+                    help="after each clip wait until Risi's answer has finished (2.5 s quiet, 25 s cap)")
+    ap.add_argument("--turn-log", default=None,
+                    help="the server log: with --wait-answer, a new final 'call risi turn:' line ends the answer")
     ap.add_argument("wavs", nargs="+")
     a = ap.parse_args()
 
@@ -136,15 +182,24 @@ async def main():
     for _ in range(a.rounds):
         for path, pcm in clips:
             c.first_loud_after = None
+            if a.wait_answer and a.turn_log:
+                c.mark_log(a.turn_log)
             await c.play(pcm)
             c.mark = time.monotonic()
-            first = await c.wait_first()
+            spoke_from = c.loud_frames
+            if a.wait_answer:
+                answered = await c.wait_answer(a.turn_log)
+                first = c.first_loud_after
+            else:
+                first = await c.wait_first()
+                answered = None
             lat = None if first is None else int((first - c.mark) * 1000)
             c.mark = None
-            spoke_from = c.loud_frames
-            await c.wait_quiet()
+            if not a.wait_answer:
+                await c.wait_quiet()
             out["turns"].append({"clip": path.rsplit("/", 1)[-1], "first_audio_ms": lat,
-                                 "risi_audio_ms": (c.loud_frames - spoke_from) * 10})
+                                 "risi_audio_ms": (c.loud_frames - spoke_from) * 10,
+                                 "answered": answered})
 
     if a.barge:
         _, pcm = clips[0]

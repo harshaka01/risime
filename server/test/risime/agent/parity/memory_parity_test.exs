@@ -222,6 +222,39 @@ defmodule RisiMe.Agent.Parity.MemoryTest do
     refute body2 =~ "only just started"
   end
 
+  test "device test 15 Oct (Q7, Q10): no promises still lists the reminders Risi keeps", ctx do
+    fake_llm!(fn _, _ -> flunk("no model call") end)
+    {:ok, key} = RisiMe.Agent.Seal.data()
+    id = Ecto.UUID.generate()
+    now = DateTime.utc_now()
+    due = ~U[2026-10-16 04:30:00.000000Z]
+
+    RisiMe.Repo.insert!(%RisiMe.Agent.Reminders{
+      reminder_id: id,
+      owner_id: ctx.harsha.user.id,
+      conversation_id: ctx.hrc,
+      request_conversation_id: ctx.hrc,
+      due_at: due,
+      text: RisiMe.Agent.Seal.seal(key, "risi_reminders:" <> id, "Call Shakya"),
+      participants: [ctx.harsha.user.id],
+      state: "pending",
+      inserted_at: now,
+      updated_at: now
+    })
+
+    RisiMe.Agent.RisiItems.record_reminder(ctx.harsha.user.id, id, due, ctx.hrc)
+
+    for q <- [
+          "what did I promise?",
+          "We see but have I promised you should be able to read what I promised and let me know"
+        ] do
+      {body, _} = ask!(ctx, q)
+      assert body =~ "You have no open promises in my list."
+      assert body =~ "Reminders I'm keeping for you:"
+      assert body =~ "Fri 16 Oct, 10:00 · Reminder: Call Shakya"
+    end
+  end
+
   test "nothing about that (memory exists): 'I don't have anything about that…', no model call",
        ctx do
     remember!(ctx.og, ctx.shenika.user, "Quote sent", at("2026-10-07"))
