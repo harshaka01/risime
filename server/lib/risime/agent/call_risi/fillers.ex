@@ -40,6 +40,11 @@ defmodule RisiMe.Agent.CallRisi.Fillers do
   @doc "Said once when a tool takes over 4 s (P0 2026-10-15)."
   def still, do: @still
 
+  @adding "Okay, adding it…"
+
+  @doc "Said before a voice yes confirms the caller's card (§41.9); the result comes after."
+  def adding, do: @adding
+
   @doc "Every filler line (tests: none of them states a result)."
-  def all, do: [@still | for({_l, t} <- @lines, {_r, ls} <- t, l <- ls, do: l)]
+  def all, do: [@still, @adding | for({_l, t} <- @lines, {_r, ls} <- t, l <- ls, do: l)]
 end

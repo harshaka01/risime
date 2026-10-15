@@ -99,7 +99,7 @@ defmodule RisiMe.Agent.CallRisi.VoiceFactsTest do
     assert text =~ "Today: busy from 2 to 3 pm."
 
     assert text =~
-             "Tomorrow: Dentist from 10 to 11 am and Interview with Shenika from 2 to 3 pm on your Risi Calendar."
+             "Tomorrow: Dentist from 10 to 11 am and on your Risi Calendar, interview with Shenika, from 2 to 3 pm."
   end
 
   test "a failed phone read: what failed, one sentence", ctx do

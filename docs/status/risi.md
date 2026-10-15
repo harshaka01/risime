@@ -2,6 +2,50 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## P0 2026-10-15 (evening): Harsha's 3rd Call Risi call (14:13–14:17Z, srv10) + the claim guard
+
+**What happened (his call):** the all-day Risi Calendar item ("Free up calendar on 18th Oct whole day", stored
+00:00–01:00 since 11 Oct) and the same block on the phone were spoken as "midnight to 1 am" twice; "anything from
+2 am until 10 pm" went to the chat route ("just ask me directly"); the correction "From 9 to 10, discuss racing"
+went to the chat route ("I can add that for you"); "That's correct" got "Was that for me?"; then the chat route
+said "I have added the racing discussion" and "but I have added the entry" — **nothing was added.**
+**The writes (risi_pending_writes, read-only):** each write turn first tried the phone `calendar_add` as an
+Allowed write (14:15:31, 14:15:49): the phone answered the tool call within ~70 ms with a non-ok status (not
+stored), the write went `void`; the model then made a Risi Calendar card: 14:15:35 "Appointment · Fri 16 Oct,
+9–10 AM" (superseded at 14:15:47 by the next request) and 14:15:51 "Blocked out 10-12 · Fri 16 Oct, 9–10 AM"
+(wrong title and time: he said 10 to 12) — still `pending`, never tapped. So: no event was added anywhere.
+
+**Fixed (server only):**
+- `RisiMe.Agent.ClaimGuard` (shared): "added / sent / saved / booked / scheduled / deleted …" only when the
+  request holds a `done` write (its write_id = the result id); else the honest status ("I've drafted it. Tap
+  Add to confirm.", "That didn't go through…"), logged `claim_violation` (warning with the path, telemetry
+  `[:risime, :risi, :claim_violation]`, a `risi_agent_runs` row agent `claim_guard`; no text). Called on the §25
+  turn's answer before `Audience.deliver` (Risi chat, Official @Risi, spoken "Risi, …", answer cards, the call's
+  voice sink), Call Risi's chat route (an offer "I can add that" counts there), the call's tool answers and the
+  model's rephrase of a spoken answer.
+- `CallRisi.WriteTruth`: the call keeps its last write turn (request id); "that's correct / yes / add it" →
+  the card's real state; "I can't see it / did you add it?" → re-reads the row and says what it finds (never
+  insists); corrections ("from 9 to 10, discuss racing", "to … discuss about") go to the write turn ("Change
+  the event I just asked you to add: …", the draft is patched and the old card superseded), also while held.
+  The card is spoken from its summary ("I haven't added it yet. I've put a card in your Risi chat: Discuss
+  racing, tomorrow, 9 to 10 am. Tap Add …"; `Writes` tells the call the card it made).
+- §41.9 voice confirm (`CallRisi.VoiceConfirm`, flag `RISI_CALL_VOICE_CONFIRM`, default `canary`): with it,
+  the card is read back with "Shall I add it to your Risi Calendar?" and a clear yes runs `Writes.act/4`
+  `confirm_write` (same path as the Add tap, same write_id, ActionGuard), only the caller's own personal
+  calendar/reminder card in the call's Risi chat; "Added to your Risi Calendar: …" only after the row is `done`.
+- Spoken: all day for an item from midnight whose title says whole/all/full day or a block ≥ 23 h; a phone block
+  at the same time as Risi's own item is said once; Risi Calendar titles lose date words ("on your Risi Calendar,
+  free up calendar, all day"; "send SSH access for iPhone stuff, from 6 to 7 pm").
+- Windows: "from 2 am until 10 pm", "between 9 and 5", "after lunch", "in the morning", "after 6 pm" → a calendar
+  read of the topic's day (or the named day), only items in the window plus all-day ones.
+- "Was that for me?" only when Risi's last line was no question/offer and the words are no reply.
+- "The 16th?" on his call: the phone WAS read (card footer "From: your phone calendars · Risi"); a phone that
+  doesn't answer is said first (test added).
+- Tests: `test/risime/agent/call_risi/call_3_test.exs` (the replay, call 4 voice confirm, units),
+  `test/risime/agent/claim_guard_test.exs` (10 adversarial prompts); question set 52/52 with
+  `harsha-2026-10-15-call-3`. Device: `pilot-device-test` seeds an all-day "Family day" on the 18th and turns on the
+  Call Risi developer flag; `PCT_CALLS="3 4" scripts/pilot-call-test` (call 3 = his words, call 4 = add by voice).
+
 ## P0 2026-10-15: Harsha's Call Risi call (07:11–07:13Z) fixed
 
 **State:** green (agent + contract suites; question set 50/50 with the fake model). Server only.

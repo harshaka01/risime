@@ -10,7 +10,8 @@
 # Like Harsha, the caller speaks the next clip only after Risi's ANSWER has finished (a new final "call risi
 # turn:" line in the pilot log, then 2.5 s of Risi silence; 45 s cap), never right after the holding line.
 #
-#   PDT_SETUP=<setup dir> scripts/pilot-call-test
+#   PDT_SETUP=<setup dir> [PCT_CALLS="3 4"] scripts/pilot-call-test
+#   (call 3 = Harsha's 3rd call, 15 Oct 14:13Z; call 4 = an appointment added by voice, §41.9)
 #
 # Writes <setup dir>/calls/: call1.json, call2.json (per-turn timings), the risi_call_transcript card from the phone
 # (callN-card.png/.xml/.txt) and the pilot's log lines of the call. Nothing secret is printed (OTP, token).
@@ -42,10 +43,24 @@ say c1e "Give me the entire week and tell me the important things."
 say c2a "Let me see. I need to listen to it."
 say c2b "Did I promise anything today or tomorrow?"
 say c2c "You should have access, you add the notes and calendar."
+# Harsha's 3rd call (15 Oct 14:13Z, srv10), his words.
+say c3a "Do you have anything on the 18th of October?"
+say c3b "Yeah, but do I have anything from, say, 2 a.m. until, until maybe like, you know, 10 p.m.?"
+say c3c "So what's on my calendar on the 18th of October?"
+say c3d "The 16th?"
+say c3e "Yeah, just add an entry on my calendar and block it out from 10 to 12. Discuss about RISD."
+say c3f "I don't know. From 9 to 10. Discuss about racing."
+say c3g "That's correct."
+say c3h "Yeah, yeah, that's for you, just to add that particular entry."
+say c3i "Rishi, I can't see that you have added something."
+# Call 4 (§41.9): an appointment added by voice, then the check.
+say c4a "Can you add an appointment tomorrow from 4 to 5 p.m. for a call with the bank?"
+say c4b "Yes, add it."
+say c4c "Did you add it?"
 # Like Harsha's speech (15 Oct): Kokoro pads each clip (~0.4 s lead, ~0.5 s tail) and makes a comma a ~0.9 s pause,
 # so "1 s" between the parts of c1c was really ~1.9 s and "access, you add…" became two utterances. Trim the
 # padding to 50 ms and pauses inside a clip to 250 ms (c1c's 1 s pause is added after).
-for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c; do
+for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c; do
   "$PY" -I -c 'import sys, wave, numpy as np
 p = sys.argv[1]
 w = wave.open(p, "rb"); prm = w.getparams(); x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16); w.close()
@@ -132,7 +147,12 @@ call() {  # <n> <clips...>
   card "$n"
   echo "    call $n card (phone screen):"; sed 's/^/    | /' "$OUT/call$n-card.txt"
 }
-call 1 c1a c1b c1c c1d c1e
-call 2 c2a c2b c2c
+CALLS="${PCT_CALLS:-1 2 3 4}"
+for n in $CALLS; do case "$n" in
+  1) call 1 c1a c1b c1c c1d c1e ;;
+  2) call 2 c2a c2b c2c ;;
+  3) call 3 c3a c3b c3c c3d c3e c3f c3g c3h c3i ;;
+  4) call 4 c4a c4b c4c ;;
+esac; done
 curl -s -o /dev/null "${H[@]}" -X POST "$API/auth/logout" || true
 echo "PCT DONE (out $OUT)"

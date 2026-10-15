@@ -102,6 +102,28 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
       ]
     end
 
+    # A case's own items (`extra_events`, local times): Harsha's 3rd call has a Risi Calendar item
+    # "… whole day" stored as 00:00–01:00 and the same block on the phone.
+    def extra do
+      for x <- :persistent_term.get({__MODULE__, :extra}, []) do
+        s = NaiveDateTime.from_iso8601!(x["start"])
+        e = ev(x["kind"], x["title"], s, x["mins"])
+
+        utc = fn n ->
+          n |> NaiveDateTime.add(-19_800) |> NaiveDateTime.to_iso8601() |> Kernel.<>("Z")
+        end
+
+        %{e | start_utc: utc.(s), end_utc: e.end && utc.(e.end)}
+      end
+    end
+
+    def state(rid) do
+      case :persistent_term.get({__MODULE__, :write, rid}, nil) do
+        nil -> nil
+        s -> %{state: s, confirmed?: false, tool: "risi_calendar_add"}
+      end
+    end
+
     def run(_conv, env, request_id, user) do
       lock = {{:risi_turn, user}, self()}
 
@@ -130,7 +152,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
       case intent do
         {:schedule_read, r} ->
           evs =
-            for e <- events(),
+            for e <- events() ++ extra(),
                 d = NaiveDateTime.to_date(e.start),
                 Date.compare(d, r.from) != :lt and Date.compare(d, r.to) == :lt,
                 do: e
@@ -167,7 +189,25 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
           :ok
 
         _ ->
-          # A write: its card waits in the Risi chat (no answer text).
+          # A write: its card waits in the Risi chat (no answer text). A case with `cards`: the
+          # confirm card's summary and the turn's answer, as the real turn sends them.
+          if :persistent_term.get({__MODULE__, :cards}, false) do
+            title = if text =~ ~r/racing/i, do: "Discuss racing", else: "Appointment"
+
+            :persistent_term.put({__MODULE__, :write, rid}, "pending")
+
+            send(
+              pid,
+              {:risi_voice_card, rid, "Add to your Risi Calendar: #{title} · Fri 16 Oct, 9–10 AM"}
+            )
+
+            send(
+              pid,
+              {:risi_voice_answer, rid,
+               "Tap Add on the card to put it in your Risi Calendar, or Cancel."}
+            )
+          end
+
           :ok
       end
     end
@@ -186,13 +226,15 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
       :risi_call_runs,
       :risi_now,
       :risi_agent_flags,
-      :risi_llm
+      :risi_llm,
+      :risi_call_write_state
     ]
 
     prev = for k <- keys, do: {k, Application.get_env(:risime, k)}
     Application.put_env(:risime, :risi_call_media, Media)
     Application.put_env(:risime, :risi_speech, Speech)
     Application.put_env(:risime, :risi_call_turn, Turn)
+    Application.put_env(:risime, :risi_call_write_state, &Turn.state/1)
     # The session checks the switch every 10 s: on for the whole test.
     Application.put_env(:risime, :risi_agent_flags, %{
       "RISI_CALL_RISI" => "on",
@@ -240,6 +282,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
     assert length(cases) >= 50
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call-2"))
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call"))
+    assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call-3"))
 
     results = for c <- cases, do: {c["id"], run_case(c)}
     failed = for {id, errs} <- results, errs != [], do: {id, errs}
@@ -265,6 +308,8 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
 
   defp run_case(c) do
     me = self()
+    :persistent_term.put({Turn, :extra}, c["extra_events"] || [])
+    :persistent_term.put({Turn, :cards}, c["cards"] == true)
 
     args = %{
       conv: "grp:risi-chat",
@@ -352,6 +397,11 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
           nil
       end,
       if(exp["text"] && (run == nil or run["text"] != exp["text"]),
+        do: "#{tag}: text #{inspect(run && run["text"])}"
+      ),
+      if(
+        exp["text_starts"] &&
+          (run == nil or not String.starts_with?(run["text"], exp["text_starts"])),
         do: "#{tag}: text #{inspect(run && run["text"])}"
       ),
       for(

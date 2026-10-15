@@ -33,22 +33,35 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   result up.
   """
 
-  alias RisiMe.Agent.CallRisi.{Fillers, LLMStream, PhoneCalendar, Sentences, Spoken}
+  alias RisiMe.Agent.CallRisi.{
+    Fillers,
+    LLMStream,
+    PhoneCalendar,
+    Sentences,
+    Spoken,
+    VoiceConfirm,
+    WriteTruth
+  }
+
   alias RisiMe.Agent.{Clock, ScheduleIntent}
 
   # The 25 s tool budget (tests shorten it: `config :risime, :risi_call_tool_wait_ms`).
   defp tool_wait_ms, do: Application.get_env(:risime, :risi_call_tool_wait_ms, 25_000)
   defp still_ms, do: Application.get_env(:risime, :risi_call_still_ms, 4_000)
   @retry_ms 700
+  @write_routes ~w(calendar_write reminder)
 
   @system """
   You are Risi, the user's assistant, speaking on a live phone call. Speak naturally, like a person on \
   the phone: one to three short sentences, plain words, no lists, no markdown, no emoji, no headings. \
   Answer in English (the call voice speaks English only for now). Chat freely and answer general \
   questions from what you know. Never invent the user's own names, amounts, dates or results, and never \
-  say you checked, saved, sent or scheduled anything: in this reply you have no tools. If the user wants \
-  something from their own calendar, reminders or promises, ask them to say it directly, for example \
-  "what's on my calendar tomorrow": you can read those when asked. Never say you can't see or access \
+  say you checked, added, saved, sent, booked, set or scheduled anything, or that you will or can do it \
+  now: in this reply you have no tools and nothing gets added. If the user wants something from their \
+  own calendar, reminders or promises, ask them to say it directly, for example "what's on my calendar \
+  tomorrow": you can read those when asked. If they want something added, ask them to say it with the \
+  day and time, for example "add a meeting tomorrow from 9 to 10": you then put a card in their Risi \
+  chat for them to confirm. Never say you can't see or access \
   their calendar, promises, reminders or notes: they are yours to keep. If you didn't understand, \
   ask them to say it again.
   """
@@ -116,8 +129,14 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     report(ctx, {:decided, {route, range}})
 
     cond do
+      # Harsha's 3rd call: "That's correct" / "I can't see that you added it" after a write turn:
+      # the truth from the card's own row, never the model.
+      route == "write_status" ->
+        write_status(ctx, range || :confirm)
+        report(ctx, {:done, %{status: :ok, request_id: nil}})
+
       # Thinking aloud ("Let me see. I need to listen to it.") is not a request, whatever the words.
-      route in ~w(chat planner message_write summary_chat) and addressed(text) == :ignore ->
+      route in ~w(chat planner message_write summary_chat) and addressed(text, ctx) == :ignore ->
         report(ctx, {:done, %{status: :ignored, request_id: nil}})
 
       route == "capabilities" ->
@@ -125,10 +144,10 @@ defmodule RisiMe.Agent.CallRisi.Brain do
         report(ctx, {:done, %{status: :ok, request_id: nil}})
 
       Fillers.tool_route?(route) and Map.get(ctx, :tools?, true) ->
-        tool_turn(ctx, text, lang, route, range)
+        tool_turn(ctx, write_text(text, route, range), lang, route, range)
 
       true ->
-        case addressed(text) do
+        case addressed(text, ctx) do
           :ignore ->
             report(ctx, {:done, %{status: :ignored, request_id: nil}})
 
@@ -164,6 +183,83 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     end
   end
 
+  # "That's correct", "not in the menu", "yeah, that's for you": a reply to Risi.
+  @reply ~r/^\W*(?:not|no|that'?s|that\s+is|it'?s|it\s+is|correct|exactly|right)\b|\bfor\s+you\b/iu
+
+  # Risi's last line asked something or offered something.
+  @offered ~r/\?\s*$|\b(?:tap\s+(?:add|send|schedule)|or\s+cancel|would\s+you\s+like|do\s+you\s+want|shall\s+i|should\s+i|let\s+me\s+know|is\s+that\s+(?:right|correct|ok(?:ay)?))\b/iu
+
+  @doc """
+  `addressed/1` in the call's context (Harsha's 3rd call: "That's correct" after Risi's offer got
+  "Was that for me?"): "Was that for me?" only for a short statement that is no reply, when Risi's
+  last line was no question or offer.
+  """
+  def addressed(text, ctx) do
+    case addressed(text) do
+      :ask ->
+        if Regex.match?(@reply, text) or WriteTruth.confirmation?(text) or
+             Regex.match?(@offered, last_risi(ctx)),
+           do: :yes,
+           else: :ask
+
+      other ->
+        other
+    end
+  end
+
+  defp last_risi(ctx) do
+    (Map.get(ctx, :history) || [])
+    |> Enum.reverse()
+    |> Enum.find_value("", fn
+      %{"role" => "assistant", "content" => c} when is_binary(c) -> c
+      _ -> nil
+    end)
+  end
+
+  # §41.9: a clear yes confirms the caller's own pending card like tapping Add (flag
+  # RISI_CALL_VOICE_CONFIRM); Risi says "Added" only from the write's own done row.
+  defp write_status(ctx, :confirm) do
+    write = Map.get(ctx, :write)
+
+    with %{request_id: rid} <- write,
+         true <- VoiceConfirm.enabled?(ctx.user_id),
+         %{state: "pending"} <- WriteTruth.state(rid) do
+      say(ctx, Fillers.adding(), :filler)
+
+      case VoiceConfirm.confirm(rid, ctx) do
+        {:done, _wid} ->
+          if RisiMe.Agent.ClaimGuard.done?(rid),
+            do: say_text(ctx, WriteTruth.added_line(write[:summary], today(ctx))),
+            else: say_text(ctx, WriteTruth.status_line(write, :complaint))
+
+        {:failed, _} ->
+          say_text(
+            ctx,
+            "That didn't go through, so it isn't added. Tap Add on the card in your Risi chat to try again."
+          )
+
+        {:not_allowed, _} ->
+          say_text(ctx, WriteTruth.status_line(write, :confirm))
+      end
+    else
+      _ -> say_text(ctx, WriteTruth.status_line(write, :confirm))
+    end
+  end
+
+  # "I can't see it": re-checks the write's row and says what it finds; never insists.
+  defp write_status(ctx, why),
+    do: say_text(ctx, WriteTruth.status_line(Map.get(ctx, :write), why))
+
+  # A correction of the card being made goes to the write turn as a change of it (the turn's
+  # action draft patches the pending draft; the old card is superseded).
+  defp write_text(text, route, :correction) when route in ~w(calendar_write reminder) do
+    # The words name a write ("add"), so the turn never reads them as a schedule question.
+    noun = if route == "reminder", do: "reminder", else: "event"
+    "Change the #{noun} I just asked you to add: " <> text
+  end
+
+  defp write_text(text, _route, _range), do: text
+
   ## Routing (with the call's topic)
 
   @caps_re ~r/\bwhat\s+(?:else\s+)?(?:can|could|do)\s+you\s+(?:do|help)\b|\bwhat\s+are\s+you\s+able\b|\bhow\s+can\s+you\s+help\b|\bwhat\s+(?:are\s+)?your\s+(?:features|capabilities|skills|abilities)\b|\bwhat\s+can\s+i\s+ask\b|\bwhat\s+do\s+you\s+do\b|\bwhat\s+are\s+you\s+capable\b/iu
@@ -172,6 +268,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
   # Risi's OWN data (Harsha's 2nd call: "Did I promise anything today or tomorrow?" got "I don't
   # have access to your personal commitments"): always a tool turn, never the chat route.
+  @write_words ~r/\b(?:add\w*|entry|event|appointment|meeting|card|reminder|booked|saved|scheduled|put\s+it)\b/iu
+
   @own_items ~r/\b(?:promis\w*|commitments?|committed|reminders?|follow[- ]?ups?|owe|pending|to-?dos?|tasks?)\b/iu
 
   @doc """
@@ -193,10 +291,31 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       end
 
     own? = Regex.match?(@own_items, text) and route in ~w(chat planner calendar_read ledger_items)
+    window = Spoken.window(text)
+    write = Map.get(ctx, :write)
+    write_last? = match?(%{last?: true}, write)
+    reads? = route == "calendar_read" and ScheduleIntent.schedule_words?(text)
 
     cond do
       Regex.match?(@caps_re, text) and route in ~w(chat planner) ->
         {"capabilities", nil}
+
+      # Harsha's 3rd call (15 Oct 14:16Z): "Rishi, I can't see that you have added something."
+      WriteTruth.complaint?(text) and not reads? and
+          (write_last? or Regex.match?(@write_words, text)) ->
+        {"write_status", :complaint}
+
+      # "That's correct" / "Yeah, that's for you, just add that entry" after the write turn.
+      write_last? and WriteTruth.confirmation?(text) and not WriteTruth.correction?(text) and
+          route in ~w(chat planner calendar_write reminder) ->
+        {"write_status", :confirm}
+
+      # "I don't know. From 9 to 10. discuss about racing": changes the card being made.
+      write_last? and WriteTruth.correction?(text) and not reads? and
+          route in ~w(chat planner calendar_write reminder calendar_read) ->
+        if route == write.route,
+          do: {route, nil},
+          else: {write.route, :correction}
 
       # "Did I promise anything today or tomorrow?": Risi's items in that range (the read lists
       # them with the phone's times; the voice speaks only Risi's items).
@@ -209,24 +328,30 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       route == "calendar_read" ->
         r = ScheduleIntent.range(text, today)
 
-        if r.now? and cal_topic? and Regex.match?(@complaint_re, text),
-          do: {"calendar_read", topic.range},
-          else: {"calendar_read", r}
+        if r.now? and cal_topic? and (Regex.match?(@complaint_re, text) or window != nil),
+          do: {"calendar_read", with_window(topic.range, window)},
+          else: {"calendar_read", with_window(r, window)}
 
       # "You should have access, you add the notes and calendar" (a complaint, not a write).
       cal_topic? and route == "calendar_write" and Regex.match?(@complaint_re, text) and
           not ScheduleIntent.day_named?(text, today) ->
         {"calendar_read", topic.range}
 
-      cal_topic? and route in ~w(chat planner message_write) and follow_up?(text, today) ->
+      # "Do I have anything from 2 am until 10 pm?" after a calendar answer: that window of the
+      # topic's day (Harsha's 3rd call; was "just ask me directly").
+      cal_topic? and route in ~w(chat planner message_write) and
+          (follow_up?(text, today) or window != nil) ->
         if ScheduleIntent.day_named?(text, today),
-          do: {"calendar_read", ScheduleIntent.range(text, today)},
-          else: {"calendar_read", topic.range}
+          do: {"calendar_read", with_window(ScheduleIntent.range(text, today), window)},
+          else: {"calendar_read", with_window(topic.range, window)}
 
       true ->
         {route, nil}
     end
   end
+
+  defp with_window(range, nil), do: Map.delete(range, :window)
+  defp with_window(range, w), do: Map.put(range, :window, w)
 
   defp follow_up?(text, today) do
     words = length(String.split(text))
@@ -280,6 +405,27 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       else: piece
   end
 
+  @doc false
+  # P0 (Harsha's 3rd call): the chat route has no tools, so a piece that claims or promises a
+  # write is false: the first is replaced by the truth (the call's last card, from its row) and
+  # the rest of that answer is dropped.
+  def guard(ctx, piece) do
+    claimed = {__MODULE__, :claimed}
+
+    cond do
+      Process.get(claimed) ->
+        nil
+
+      WriteTruth.claim?(piece) ->
+        Process.put(claimed, true)
+        RisiMe.Agent.ClaimGuard.violation("call_chat")
+        WriteTruth.status_line(Map.get(ctx, :write), :claim)
+
+      true ->
+        no_access_guard(piece)
+    end
+  end
+
   ## The chat route: risi-l1 streamed, cut into pieces as it comes.
 
   defp chat_turn(ctx, text) do
@@ -289,11 +435,12 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
     key = {__MODULE__, :buf}
     Process.put(key, {"", true})
+    Process.delete({__MODULE__, :claimed})
 
     on_delta = fn delta ->
       {buf, first?} = Process.get(key)
       {pieces, rest} = Sentences.feed(buf, delta, first?)
-      Enum.each(pieces, &say(ctx, no_access_guard(&1), :answer))
+      Enum.each(pieces, &say(ctx, guard(ctx, &1), :answer))
       Process.put(key, {rest, first? and pieces == []})
     end
 
@@ -304,7 +451,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       {:ok, r} ->
         report(ctx, {:first_token, r.first_token_ms || System.monotonic_time(:millisecond) - t0})
         {buf, _} = Process.get(key)
-        Enum.each(Sentences.flush(buf), &say(ctx, no_access_guard(&1), :answer))
+        Enum.each(Sentences.flush(buf), &say(ctx, guard(ctx, &1), :answer))
         report(ctx, {:done, %{status: :ok, request_id: nil}})
 
       {:error, _} ->
@@ -337,23 +484,37 @@ defmodule RisiMe.Agent.CallRisi.Brain do
         "__device" => ctx.device_id,
         "__ts" => DateTime.utc_now() |> DateTime.to_iso8601()
       }
-      |> then(fn e -> if range, do: Map.put(e, "__schedule", range), else: e end)
+      |> then(fn e ->
+        if is_map(range), do: Map.put(e, "__schedule", Map.delete(range, :window)), else: e
+      end)
       |> then(fn e ->
         if route == "ledger_items", do: Map.put(e, "__intent", "risi_items"), else: e
       end)
 
-    if route == "calendar_read" and range,
-      do: report(ctx, {:topic, %{route: route, range: range}})
+    if route == "calendar_read" and is_map(range),
+      do: report(ctx, {:topic, %{route: route, range: Map.delete(range, :window)}})
+
+    # Harsha's 3rd call: the call's write (its card's truth is read by this request id).
+    write = if route in @write_routes, do: %{request_id: request_id, route: route, last?: true}
+    report(ctx, {:write, write})
 
     # §41.8: the phone's titles for this one answer, asked at once (in parallel with the turn).
-    cal = if route == "calendar_read" and range, do: cal_request(ctx, range)
+    cal = if route == "calendar_read" and is_map(range), do: cal_request(ctx, range)
 
     # Linked: when the session kills this task (barge-in, a new question) the §25 turn dies too
     # and its per-user lock (§25.6) is released. Trapping exits keeps a crash of the turn honest.
     Process.flag(:trap_exit, true)
     deadline = System.monotonic_time(:millisecond) + tool_wait_ms()
     inner = start_inner(ctx, env, request_id)
-    ctx = Map.merge(ctx, %{cal: cal, items_only: is_map(range) and range[:items_only] == true})
+
+    ctx =
+      Map.merge(ctx, %{
+        cal: cal,
+        items_only: is_map(range) and range[:items_only] == true,
+        window: if(is_map(range), do: range[:window]),
+        this_write: write
+      })
+
     # One short "Still checking…" when the tool takes over 4 s.
     Process.send_after(self(), {:still_checking, request_id}, still_ms())
 
@@ -446,6 +607,13 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       {:risi_voice_facts, ^rid, f} ->
         wait_answer(w, route, question, f)
 
+      # Harsha's 3rd call: the confirm card this turn made (its summary is spoken, never "added").
+      {:risi_voice_card, ^rid, summary} ->
+        if this = Map.get(ctx, :this_write),
+          do: report(ctx, {:write, Map.put(this, :summary, summary)})
+
+        wait_answer(w, route, question, {:card, summary})
+
       {:risi_voice_answer, ^rid, answer} when is_binary(answer) ->
         speak_answer(ctx, answer, facts, question)
         report(ctx, {:done, %{status: :ok, request_id: rid}})
@@ -462,7 +630,11 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
       {:risi_voice_turn_end, ^rid, _} ->
         # The turn ended without an answer text (a card or a question went to the chat).
-        say(ctx, "I've put that in your Risi chat.", :answer)
+        case facts do
+          {:card, summary} -> say_text(ctx, card_line(ctx, summary))
+          _ -> say(ctx, "I've put that in your Risi chat.", :answer)
+        end
+
         report(ctx, {:done, %{status: :ok, request_id: rid}})
 
       {:EXIT, ^session, reason} ->
@@ -493,10 +665,18 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
   ## The spoken answer
 
+  defp speak_answer(ctx, _answer, {:card, summary}, _question) do
+    say_text(ctx, card_line(ctx, summary))
+  end
+
   defp speak_answer(ctx, _answer, %{ok?: _} = facts, question) do
     # "Did I promise anything today or tomorrow?": only Risi's own items of the read.
     facts =
       if Map.get(ctx, :items_only) and facts.ok?, do: Spoken.items_only(facts), else: facts
+
+    # "Anything from 2 am until 10 pm?": only that window of the day.
+    facts =
+      if facts.ok? and Map.get(ctx, :window), do: Map.put(facts, :window, ctx.window), else: facts
 
     # §41.8: the phone's titles live only in this process, for this one answer.
     cal = if facts.ok?, do: cal_events(Map.get(ctx, :cal)), else: {:error, "off"}
@@ -537,10 +717,26 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
   defp speak_answer(ctx, answer, _facts, _question) do
     case Spoken.speakable(answer) do
-      "" -> say(ctx, "I've put that in your Risi chat.", :answer)
-      text -> say_text(ctx, short(text))
+      "" ->
+        say(ctx, "I've put that in your Risi chat.", :answer)
+
+      text ->
+        # The claim guard (the turn guarded its answer already; the call checks again with the
+        # write's own status line).
+        case Map.get(ctx, :this_write) do
+          %{request_id: rid} = this ->
+            honest = WriteTruth.status_line(this, :claim)
+            {safe, _} = RisiMe.Agent.ClaimGuard.guard(text, rid, "call_answer", honest: honest)
+            say_text(ctx, short(safe))
+
+          _ ->
+            say_text(ctx, short(text))
+        end
     end
   end
+
+  defp card_line(ctx, summary),
+    do: WriteTruth.card_line(summary, today(ctx), VoiceConfirm.enabled?(ctx.user_id))
 
   # A long card answer: the first three sentences, then where the rest is.
   defp short(text) do

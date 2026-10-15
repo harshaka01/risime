@@ -62,7 +62,10 @@ defmodule RisiMe.Agents.Flags do
     # P0-1b 2026-10-15 (proposal 2026-10-15-live-call-latency): live Official-call lines in about
     # 2 s (VAD-cut 2-4 s chunks, the fast English model, live GPU priority); canary = a call
     # with a RISI_DEV_USERS participant.
-    "RISI_LIVE_FAST" => :risi_live_fast
+    "RISI_LIVE_FAST" => :risi_live_fast,
+    # Contract §41.9 (Harsha 2026-10-15): on a call, a clear "yes" confirms the caller's own
+    # pending calendar/reminder card like tapping Add; canary = RISI_DEV_USERS.
+    "RISI_CALL_VOICE_CONFIRM" => :risi_call_voice_confirm
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
@@ -78,7 +81,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_VOICE_LANG_ID" => "on",
     "RISI_VOICE_TRANSLATE" => "canary",
     "RISI_PRIVATE_TRANSCRIBE" => "off",
-    "RISI_LIVE_FAST" => "off"
+    "RISI_LIVE_FAST" => "off",
+    "RISI_CALL_VOICE_CONFIRM" => "canary"
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000

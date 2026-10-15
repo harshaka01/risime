@@ -165,16 +165,56 @@ ev = [(at(t, 17, 30), 30, "Rise standup with Shakya"), (at(t, 19), 60, "Dinner w
       (at(mid, 9), 120, "Site visit in Kandy"), (at(e18, 14), 60, "Board meeting prep")]
 for s, mins, title in ev:
     e = s + d.timedelta(minutes=mins)
-    print(f"{int(s.timestamp()*1000)}\t{int(e.timestamp()*1000)}\t{title}\t{s:%a %d %b %H:%M}-{e:%H:%M}")
+    print(f"{int(s.timestamp()*1000)}\t{int(e.timestamp()*1000)}\t{title}\t{s:%a %d %b %H:%M}-{e:%H:%M}\t0")
+# Harsha's 3rd call (15 Oct): an all-day phone event on the 18th (Android: UTC midnight to midnight, allDay=1).
+u = d.datetime(e18.year, e18.month, e18.day, tzinfo=d.timezone.utc)
+print(f"{int(u.timestamp()*1000)}\t{int((u + d.timedelta(days=1)).timestamp()*1000)}\tFamily day\t{e18:%a %d %b} all day\t1")
 PY
-  while IFS=$'\t' read -r s e title human; do
+  while IFS=$'\t' read -r s e title human allday; do
+    local tz=Asia/Colombo; [ "$allday" = 1 ] && tz=UTC
     A shell content insert --uri content://com.android.calendar/events --bind calendar_id:i:"$cid" \
-      --bind title:s:"'$title'" --bind dtstart:l:"$s" --bind dtend:l:"$e" --bind eventTimezone:s:Asia/Colombo \
-      --bind availability:i:0 >/dev/null </dev/null || return 1
+      --bind title:s:"'$title'" --bind dtstart:l:"$s" --bind dtend:l:"$e" --bind eventTimezone:s:"$tz" \
+      --bind allDay:i:"${allday:-0}" --bind availability:i:0 >/dev/null </dev/null || return 1
     echo "    event: $human  $title"
   done < "$OUT/calendar.tsv"
   local n; n="$(A shell content query --uri content://com.android.calendar/events --projection _id:title --where "calendar_id=$cid" | grep -c 'Row:' || true)"
   [ "$n" = "$(wc -l < "$OUT/calendar.tsv")" ]
+}
+
+# ---------------------------------------------------------------- the Call Risi developer flag
+# Settings → seven taps on "App version" → Developer → "Call Risi (voice call with Risi)" on, so the device
+# advertises `call_risi` (decision 090); read back on the server.
+call_risi_on() {
+  back_to_list || return 1
+  tap "More options" || tap "Menu" || return 1; sleep 1
+  tap "Settings" || return 1; sleep 2
+  local xy="" st=""
+  for _ in $(seq 1 30); do
+    xy="$(node_xy 'App version')"
+    if [ -n "$xy" ] && [ "${xy##* }" -gt 200 ] && [ "${xy##* }" -lt 1000 ]; then break; fi
+    A shell input swipe 360 900 360 500 300; sleep 1; xy=""
+  done
+  [ -n "$xy" ] || return 1
+  A shell "for i in 1 2 3 4 5 6 7; do input tap $xy; done"; sleep 2
+  for _ in $(seq 1 20); do
+    st="$(skill_state "Call Risi (voice call with Risi)")"
+    if [ -z "$st" ] || [ "${st##* }" = 0 ]; then A shell input swipe 360 900 360 600 400; sleep 1; continue; fi
+    read -r checked x y _ <<<"$st"
+    [ "$checked" = true ] && break
+    A shell input tap "$x" "$y"; sleep 3
+  done
+  dump; shot dev-call-risi
+  st="$(skill_state "Call Risi (voice call with Risi)")"
+  back_to_list
+  [ "${st%% *}" = true ] || return 1
+  local caps=""
+  for _ in $(seq 1 20); do
+    caps="$(timeout 60 scripts/risi-rpc 'import Ecto.Query
+u = RisiMe.Repo.get_by!(RisiMe.Accounts.User, phone: "+94770000995")
+IO.puts("n=" <> to_string(RisiMe.Repo.aggregate(from(d in RisiMe.Devices.Device, where: d.user_id == ^u.id and "call_risi" in d.capabilities), :count)))' 2>/dev/null | sed -n 's/^n=//p')"
+    [ "${caps:-0}" -gt 0 ] && return 0; sleep 3
+  done
+  return 1
 }
 
 # ---------------------------------------------------------------- Risi chat and skills
@@ -283,6 +323,7 @@ if [ "$ONLY" != chat ]; then
   seed_calendar || die "phone calendar: couldn't insert the local calendar and events"
   pass "phone calendar: $(wc -l < "$OUT/calendar.tsv") events in a local calendar"
   skills_on Calendar Reminders || fail "Risi skills screen didn't open"
+  if call_risi_on; then pass "developer flag Call Risi on (the server sees call_risi)"; else fail "developer flag Call Risi couldn't be switched on"; fi
 fi
 [ "$ONLY" = setup ] && { KEEP=1; echo "==> setup done (device kept; next: --only chat with PDT_SETUP=$OUT)"; exit 0; }
 [ "$ONLY" = chat ] && { cp "${PDT_SETUP:?PDT_SETUP=<the setup run dir>}/calendar.tsv" "$OUT/"; "$ADB" connect "$SERIAL" >/dev/null 2>&1 || true; }

@@ -110,6 +110,7 @@ defmodule RisiMe.Agent.Writes do
       {:ok, %{message_id: mid}} ->
         w |> Ecto.Changeset.change(card_message_id: mid) |> Repo.update!()
         Progress.send(ctx.asker, ctx.request_id, ctx.conv, "waiting_confirm")
+        voice_card(ctx.request_id, card.summary)
 
         {:ok, %{"status" => "waiting_confirm", "write_id" => wid},
          %{personal: target != ctx.conv}}
@@ -118,6 +119,18 @@ defmodule RisiMe.Agent.Writes do
         Logger.warning("Risi confirm card not sent: #{inspect(reason)}")
         Repo.delete(w)
         {:error, "failed"}
+    end
+  end
+
+  # Call Risi (Harsha's 3rd call, 15 Oct): a turn run by a call tells the call what card it made,
+  # so Risi says what waits for the tap and never that it was added.
+  defp voice_card(request_id, summary) do
+    case Process.get(:risi_voice_sink) do
+      {pid, _call_id} when is_pid(pid) and is_binary(summary) ->
+        send(pid, {:risi_voice_card, request_id, summary})
+
+      _ ->
+        :ok
     end
   end
 

@@ -37,10 +37,13 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
 
   def render(%{ok?: true} = f, opts) do
     titles = Keyword.get(opts, :titles)
-    events = Enum.map(f.events, &with_title(&1, titles))
+    window = f[:window]
+    events = f.events |> Enum.map(&with_title(&1, titles)) |> normalise() |> in_window(window)
     missing? = Enum.any?(events, &(&1.kind == "busy" and blank?(&1.title)))
     days = days(f.from, f.to)
     by_day = Enum.group_by(events, &day_of/1)
+    # Harsha's 3rd call: "anything from 2 am until 10 pm?" — the day is said with its window.
+    label = fn d -> day_label(d, f.today) <> window_phrase(window) end
 
     {busy_days, free_days} = Enum.split_with(days, &Map.has_key?(by_day, &1))
     # Device test 15 Oct: the phone's calendar didn't answer: its days are not "free", only
@@ -51,10 +54,10 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
     text =
       cond do
         busy_days == [] and items_only? ->
-          "You have no promises, reminders or follow-ups #{range_phrase(f.from, f.to, f.today)}."
+          "You have no promises, reminders or follow-ups #{range_phrase(f.from, f.to, f.today)}#{window_phrase(window)}."
 
         busy_days == [] ->
-          "You have nothing on your calendar #{range_phrase(f.from, f.to, f.today)}."
+          "You have nothing on your calendar #{range_phrase(f.from, f.to, f.today)}#{window_phrase(window)}."
 
         true ->
           {sentences, _left} =
@@ -71,7 +74,7 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
                   true ->
                     tail = if more > 0, do: ", and #{more} more", else: ""
 
-                    cap(day_label(d, f.today)) <>
+                    cap(label.(d)) <>
                       ": " <> join(Enum.map(said, &phrase/1)) <> tail <> "."
                 end
 
@@ -82,11 +85,11 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
 
           day_lines =
             if items_only?,
-              do: items_days(days, Map.new(Enum.zip(busy_days, sentences)), f.today),
+              do: items_days(days, Map.new(Enum.zip(busy_days, sentences)), label),
               else: [
                 Enum.reject(sentences, &is_nil/1),
                 if(free_days != [] and length(days) > 1,
-                  do: ["Nothing on " <> join(Enum.map(free_days, &day_label(&1, f.today))) <> "."],
+                  do: ["Nothing on " <> join(Enum.map(free_days, label)) <> "."],
                   else: []
                 )
               ]
@@ -111,15 +114,274 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
 
   # Device test 15 Oct (call 2): Risi's own items, day by day in order; a run of days without any
   # says "No promises or reminders today." (never "nothing scheduled": the phone may have events).
-  defp items_days(days, said, today) do
+  defp items_days(days, said, label) do
     days
     |> Enum.chunk_by(&Map.has_key?(said, &1))
     |> Enum.flat_map(fn [d | _] = run ->
       if Map.has_key?(said, d),
         do: run |> Enum.map(&said[&1]) |> Enum.reject(&is_nil/1),
-        else: [
-          "No promises or reminders " <> join(Enum.map(run, &day_label(&1, today))) <> "."
-        ]
+        else: ["No promises or reminders " <> join(Enum.map(run, label)) <> "."]
+    end)
+  end
+
+  ## All-day items, duplicates, natural titles, the time window (Harsha's 3rd call, 15 Oct 14:13Z)
+
+  @doc """
+  The events as they are spoken: an item that is all day ("Free up calendar on 18th Oct whole
+  day" stored as 00:00–01:00, or a block of 23 h or more from midnight) is `all_day`; a phone busy
+  block at the same time as one of Risi's own items is that item (the Risi Calendar shows on the
+  phone too), so it is said once; Risi's own titles are said naturally ("free up calendar", not
+  "Free up calendar on 18th Oct whole day").
+  """
+  def normalise(events) do
+    events = Enum.map(events, &(&1 |> all_day() |> natural()))
+
+    own =
+      for e <- events, e.kind != "busy", s = e.start_utc, is_binary(s), into: MapSet.new() do
+        {unix(s), unix(e.end_utc)}
+      end
+
+    Enum.reject(events, fn e ->
+      e.kind == "busy" and blank?(e.title) and
+        MapSet.member?(own, {unix(e.start_utc), unix(e.end_utc)})
+    end)
+  end
+
+  defp unix(s) when is_binary(s) do
+    case DateTime.from_iso8601(s) do
+      {:ok, d, _} -> DateTime.to_unix(d)
+      _ -> s
+    end
+  end
+
+  defp unix(s), do: s
+
+  defp all_day(%{all_day: true} = e), do: e
+
+  defp all_day(%{start: %NaiveDateTime{hour: 0, minute: 0} = s} = e) do
+    long? =
+      case e[:end] do
+        %NaiveDateTime{} = x -> NaiveDateTime.diff(x, s) >= 23 * 3600
+        _ -> false
+      end
+
+    if long? or (e.kind != "busy" and RisiMe.Agent.DayPart.all_day?(e.title || "")),
+      do: %{e | all_day: true},
+      else: e
+  end
+
+  defp all_day(e), do: e
+
+  # Risi's own titles lose their date words; a Risi Calendar title follows "on your Risi
+  # Calendar," so it starts lower case ("free up calendar"). Others keep their case ("Call Ruwan").
+  defp natural(%{kind: "risi_calendar_event", title: t} = e) when is_binary(t) and t != "",
+    do: %{e | title: natural_title(t)}
+
+  defp natural(%{kind: k, title: t} = e) when k != "busy" and is_binary(t) and t != "",
+    do: %{e | title: strip_title(t)}
+
+  defp natural(e), do: e
+
+  @month "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+  @wday "(?:mon|tues?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(?:day)?"
+  @title_noise [
+    Regex.compile!(
+      "\\s*\\b(?:on\\s+|for\\s+|by\\s+)?(?:the\\s+)?\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?#{@month}\\b\\.?",
+      "iu"
+    ),
+    Regex.compile!(
+      "\\s*\\b(?:on\\s+|for\\s+|by\\s+)?#{@month}\\s+\\d{1,2}(?:st|nd|rd|th)?\\b",
+      "iu"
+    ),
+    Regex.compile!("\\s*\\b(?:on\\s+|by\\s+|this\\s+|next\\s+)#{@wday}\\b", "iu"),
+    ~r/\s*\b(?:the\s+)?(?:whole|entire|full|all)[\s-]+day(?:\s+long)?\b/iu,
+    ~r/\s*\b(?:by|at|before|from|until|till)\s+\d{1,2}(?::\d\d)?\s*(?:a\.?\s?m\.?|p\.?\s?m\.?)(?=\W|$)/iu,
+    ~r/\s*\b(?:today|tomorrow|tonight)\b/iu
+  ]
+
+  @doc ~S|"Free up calendar on 18th Oct whole day" → "free up calendar".|
+  def natural_title(title) when is_binary(title) do
+    case strip(title) do
+      "" -> String.trim(title)
+      t -> lower_first(t)
+    end
+  end
+
+  @doc false
+  def strip_title(title) do
+    case strip(title) do
+      "" -> String.trim(title)
+      t -> t
+    end
+  end
+
+  defp strip(title) do
+    @title_noise
+    |> Enum.reduce(title, &Regex.replace(&1, &2, ""))
+    |> String.replace(~r/\s{2,}/u, " ")
+    |> String.trim()
+    |> String.replace(~r/[\s,;:.\-–]+$/u, "")
+    |> String.replace(~r/\s+\b(?:on|for|by|at|from|of|the)$/iu, "")
+    |> String.trim()
+  end
+
+  # "Free up calendar" → "free up calendar"; "SSH access" and "iPhone" stay.
+  defp lower_first(<<c::utf8, d::utf8, rest::binary>> = t) do
+    up = String.upcase(<<c::utf8>>) == <<c::utf8>> and String.downcase(<<c::utf8>>) != <<c::utf8>>
+    d_lower = String.downcase(<<d::utf8>>) == <<d::utf8>>
+
+    if up and d_lower,
+      do: String.downcase(<<c::utf8>>) <> <<d::utf8>> <> rest,
+      else: t
+  end
+
+  defp lower_first(t), do: t
+
+  @doc """
+  The time window of a calendar question ("from 2 am until 10 pm", "between 9 and 5", "after
+  lunch", "in the morning", "after 6 pm", "before noon"): `{from :: Time, to :: Time | nil
+  (end of day), phrase}`, or nil.
+  """
+  def window(text) when is_binary(text) do
+    t = String.downcase(text)
+    times = times(t)
+
+    cond do
+      length(times) >= 2 and Regex.match?(~r/\b(?:from|between|since)\b/u, t) and
+          Regex.match?(~r/\b(?:to|until|till|til|and|through|up\s+to)\b|[–-]/u, t) ->
+        [{a, a_m?}, {b, b_m?} | _] = times
+        {a, b} = settle(a, a_m?, b, b_m?)
+        if Time.compare(a, b) == :lt, do: {a, b, "between #{hm(a)} and #{hm(b)}"}
+
+      length(times) == 1 and Regex.match?(~r/\b(?:after|from|since|later\s+than)\b/u, t) ->
+        [{a, m?}] = times
+        a = if m?, do: a, else: guess(a)
+        {a, nil, "after #{hm(a)}"}
+
+      length(times) == 1 and Regex.match?(~r/\b(?:before|until|till|by|up\s+to)\b/u, t) ->
+        [{b, m?}] = times
+        b = if m?, do: b, else: guess(b)
+        {~T[00:00:00], b, "before #{hm(b)}"}
+
+      Regex.match?(~r/\bafter\s+lunch\b/u, t) ->
+        {~T[13:00:00], nil, "after lunch"}
+
+      Regex.match?(~r/\bbefore\s+lunch\b/u, t) ->
+        {~T[00:00:00], ~T[12:00:00], "before lunch"}
+
+      Regex.match?(~r/\b(?:at|around|over)\s+lunch(?:time)?\b/u, t) ->
+        {~T[12:00:00], ~T[14:00:00], "around lunch"}
+
+      Regex.match?(~r/\b(?:in\s+the|this|tomorrow|that)\s+morning\b|\bmorning\b/u, t) ->
+        {~T[00:00:00], ~T[12:00:00], "in the morning"}
+
+      Regex.match?(~r/\bafternoon\b/u, t) ->
+        {~T[12:00:00], ~T[17:00:00], "in the afternoon"}
+
+      Regex.match?(~r/\bevening\b/u, t) ->
+        {~T[17:00:00], nil, "in the evening"}
+
+      Regex.match?(~r/\b(?:tonight|at\s+night)\b/u, t) ->
+        {~T[18:00:00], nil, "tonight"}
+
+      true ->
+        nil
+    end
+  end
+
+  def window(_), do: nil
+
+  @not_times Regex.compile!(
+               "\\b\\d{1,2}(?:st|nd|rd|th)\\b|\\b\\d{3,}\\b|\\b\\d{1,2}\\s+(?:of\\s+)?#{@month}\\b|\\b#{@month}\\s+\\d{1,2}\\b",
+               "u"
+             )
+
+  @time_re ~r/\b(\d{1,2})(?::(\d\d))?\s*(a\.?\s?m\.?|p\.?\s?m\.?|o'?clock)?(?=\W|$)|\b(noon|midday|midnight)\b/u
+
+  # The times said, in order: `{Time, meridiem_known?}` (a day's ordinal "18th" is no time).
+  defp times(t) do
+    t = Regex.replace(@not_times, t, " ")
+
+    for m <- Regex.scan(@time_re, t), x = time_of(m), do: x
+  end
+
+  defp time_of([_, "", "", "", w]) when w in ["noon", "midday"], do: {~T[12:00:00], true}
+  defp time_of([_, "", "", "", "midnight"]), do: {~T[00:00:00], true}
+
+  defp time_of([_, h | rest]) do
+    {mm, mer} =
+      case rest do
+        [m, mer | _] -> {m, mer}
+        [m] -> {m, ""}
+        [] -> {"", ""}
+      end
+
+    h = String.to_integer(h)
+    m = if mm in [nil, ""], do: 0, else: String.to_integer(mm)
+    pm? = String.starts_with?(mer, "p")
+    am? = String.starts_with?(mer, "a")
+
+    cond do
+      h > 23 or m > 59 -> nil
+      pm? and h < 12 -> {Time.new!(h + 12, m, 0), true}
+      am? and h == 12 -> {Time.new!(0, m, 0), true}
+      am? or pm? -> {Time.new!(h, m, 0), true}
+      true -> {Time.new!(h, m, 0), h > 12}
+    end
+  end
+
+  # "between 9 and 5": the second is after the first.
+  defp settle(a, true, b, true), do: {a, b}
+  defp settle(a, false, b, true), do: {fit_before(a, b), b}
+  defp settle(a, true, b, false), do: {a, fit_after(b, a)}
+  defp settle(a, false, b, false), do: (a = guess(a)) && {a, fit_after(b, a)}
+
+  defp fit_after(b, a) do
+    if Time.compare(b, a) != :gt and b.hour < 12,
+      do: Time.add(b, 12 * 3600),
+      else: b
+  end
+
+  defp fit_before(a, b) do
+    if a.hour < 12 and Time.compare(Time.add(a, 12 * 3600), b) == :lt and b.hour >= 12 and
+         a.hour < 7,
+       do: Time.add(a, 12 * 3600),
+       else: a
+  end
+
+  # A bare hour: 1–6 is afternoon, 7–11 morning.
+  defp guess(%Time{hour: h} = t) when h >= 1 and h <= 6, do: Time.add(t, 12 * 3600)
+  defp guess(t), do: t
+
+  defp hm(%Time{} = t), do: clock(NaiveDateTime.new!(~D[2000-01-01], t))
+
+  defp window_phrase(nil), do: ""
+  defp window_phrase({_, _, phrase}), do: " " <> phrase
+
+  # Keeps all-day items and those that overlap the window on their own day.
+  defp in_window(events, nil), do: events
+
+  defp in_window(events, {from, to, _}) do
+    Enum.filter(events, fn
+      %{all_day: true} ->
+        true
+
+      %{start: %NaiveDateTime{} = s} = e ->
+        day = NaiveDateTime.to_date(s)
+        w_from = NaiveDateTime.new!(day, from)
+
+        w_to =
+          if to,
+            do: NaiveDateTime.new!(day, to),
+            else: NaiveDateTime.new!(Date.add(day, 1), ~T[00:00:00])
+
+        stop = e[:end] || s
+
+        NaiveDateTime.compare(s, w_to) == :lt and
+          (NaiveDateTime.compare(stop, w_from) == :gt or NaiveDateTime.compare(s, w_from) != :lt)
+
+      _ ->
+        true
     end)
   end
 
@@ -180,12 +442,13 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
         {"promise", t} when t != nil -> "your promise, #{t},"
         {"follow_up", t} when t != nil -> "a follow-up, #{t},"
         {"scheduled_message", _} -> "a scheduled message"
+        {"risi_calendar_event", t} when t != nil -> "on your Risi Calendar, #{t},"
+        {"risi_calendar_event", nil} -> "on your Risi Calendar, an event,"
         {_, t} when t != nil -> t
         _ -> "something"
       end
 
-    tail = if kind == "risi_calendar_event", do: " on your Risi Calendar", else: ""
-    (base <> " " <> when_) |> String.trim() |> String.trim_trailing(",") |> Kernel.<>(tail)
+    (base <> " " <> when_) |> String.trim() |> String.trim_trailing(",")
   end
 
   defp when_phrase(%{all_day: true}), do: "all day"
@@ -330,6 +593,11 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
       Regex.match?(@refuse, said) ->
         nil
 
+      # Harsha's 3rd call: never a write claim in a read's phrasing.
+      RisiMe.Agent.ClaimGuard.claim?(said) and not RisiMe.Agent.ClaimGuard.claim?(rendered) ->
+        RisiMe.Agent.ClaimGuard.violation("call_rephrase")
+        nil
+
       # Pilot call 15 Oct, 13:10Z: "You have access and should add the notes in Calendar." The
       # model echoed the user's complaint: only the calendar, never a comment on the question.
       Regex.match?(@comment, said) and not Regex.match?(@comment, rendered) ->
@@ -374,8 +642,9 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
   def checked(_said, _rendered, _titles), do: nil
 
   @doc "The titles `render/2` speaks for `facts` (for `checked/3`)."
-  def titles(%{ok?: true, events: evs}, titles) do
-    for e <- evs, t = with_title(e, titles).title, is_binary(t), t != "", do: Sentences.clean(t)
+  def titles(%{ok?: true, events: evs} = f, titles) do
+    evs = evs |> Enum.map(&with_title(&1, titles)) |> normalise() |> in_window(f[:window])
+    for e <- evs, t = e.title, is_binary(t), t != "", do: Sentences.clean(t)
   end
 
   def titles(_facts, _titles), do: []

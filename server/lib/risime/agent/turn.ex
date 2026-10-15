@@ -1606,9 +1606,15 @@ defmodule RisiMe.Agent.Turn do
         do: Map.put(answer_risi, "footer", CalendarV2.footer(List.last(checks), first_read?)),
         else: answer_risi
 
+    # Harsha 2026-10-15 (claim guard): no "added / sent / saved …" without a done result.
+    {answer, answer_risi} =
+      RisiMe.Agent.ClaimGuard.turn(answer, answer_risi, ctx, schedule? or prebuilt?(st))
+
     answer_risi = voice_sink(answer, answer_risi, fn -> voice_facts(schedule?, checks, ctx) end)
     Audience.deliver(ctx, answer, answer_risi, st.personal)
   end
+
+  defp prebuilt?(st), do: Map.get(st, :prebuilt) not in [nil, false]
 
   # Decision 090 (Call Risi): a turn run by a call's Voice agent hands the answer text to the call
   # (to be spoken) and marks the card with the call's `call_id`. Without the call's process key

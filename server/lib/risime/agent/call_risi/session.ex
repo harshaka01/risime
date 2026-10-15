@@ -77,6 +77,9 @@ defmodule RisiMe.Agent.CallRisi.Session do
            # P0 2026-10-15: the call's last tool topic (a follow-up inherits it), the
            # once-per-call lines said, and the last user utterance (fragments merge).
            topic: nil,
+           # Harsha's 3rd call: the call's last write turn `%{request_id, route, last?}` (its
+           # card's truth is read from its row; `last?` while no other tool turn came after).
+           write: nil,
            once: MapSet.new(),
            last_user: nil,
            # v1.52 §41.8: the caller's phone can send its meeting titles for a voice answer;
@@ -202,7 +205,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   # (`{:side_stt, …}`): no new turn, no cancel (unless it changes the request or says "stop").
   defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64}, st)
        when is_map(st.turn) and st.turn.brain_done? == false and
-              st.turn.route not in [nil, "chat", "capabilities"] do
+              st.turn.route not in [nil, "chat", "capabilities", "write_status"] do
     st = release(st, true)
     me = self()
     held = st.turn.root
@@ -340,6 +343,13 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp brain({:topic, topic}, st), do: {:noreply, %{st | topic: topic}}
   defp brain({:once, key}, st), do: {:noreply, %{st | once: MapSet.put(st.once, key)}}
 
+  defp brain({:write, %{} = w}, st), do: {:noreply, %{st | write: w}}
+
+  defp brain({:write, nil}, %{write: %{} = w} = st),
+    do: {:noreply, %{st | write: %{w | last?: false}}}
+
+  defp brain({:write, nil}, st), do: {:noreply, st}
+
   # §41.8: the brain's titles request goes to the worker (published to the caller only).
   defp brain({:cal_req, %{"cmd" => "cal_req", "id" => id} = cmd}, st) do
     Media.impl().command(st.media, cmd)
@@ -465,7 +475,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   # Risi is checking (a tool turn without its answer yet): the user's speech joins the question.
   defp holding?(%{turn: %{brain_done?: false, route: r, pid: pid}})
-       when is_pid(pid) and r not in [nil, "chat", "capabilities"],
+       when is_pid(pid) and r not in [nil, "chat", "capabilities", "write_status"],
        do: true
 
   defp holding?(_st), do: false
@@ -493,9 +503,20 @@ defmodule RisiMe.Agent.CallRisi.Session do
         (Regex.match?(@and_then, text) or
            match?({"calendar_read", _}, Brain.decide(merged, decide_ctx(st, t))))
 
+    # Harsha's 3rd call ("… from 10 to" / "discuss about RISD"): a detail said while a write is
+    # being made changes the request: it restarts with the merged words.
+    write_detail? =
+      match?({r, _} when r in ~w(calendar_write reminder), decided) and
+        CallRisi.WriteTruth.correction?(text)
+
     cond do
       Regex.match?(@stop, text) ->
         {:noreply, add_line(cancel_turn(st, :barge_in), :user, text, nil, utt)}
+
+      write_detail? ->
+        lines = drop_first(st.lines, &(&1["who"] == "user" and &1["text"] == t.text))
+        st = cancel_turn(%{st | lines: lines}, :replaced)
+        {:noreply, restart(st, t, utt, merged, decided)}
 
       changed?(frag, decided) and not joins? ->
         lines = drop_first(st.lines, &(&1["who"] == "user" and &1["text"] == t.text))
@@ -521,7 +542,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
         _ -> st.topic
       end
 
-    %{user_id: st.args.user_id, topic: topic}
+    %{user_id: st.args.user_id, topic: topic, write: st.write}
   end
 
   # A fragment changes the request when it is a tool request of its own that differs.
@@ -540,6 +561,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
       filler_n: st.filler_n,
       tools?: Map.get(st.args, :tools?, true),
       topic: st.topic,
+      write: st.write,
       once: st.once,
       cal?: st.cal?,
       caps: Map.get(st.args, :caps)
