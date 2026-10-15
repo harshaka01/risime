@@ -59,3 +59,5 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
   allowlist row (the row's command is above). `RISI_DEV_USERS` in `.env` was NOT changed and the server was NOT restarted
   (the edit was blocked by a permission check). To do it by hand: append `,0c0e548c-6572-4b53-8fb8-981442301c28` to the
   `RISI_DEV_USERS=` line in `.env`, then `systemctl --user restart risime.service`. Undo: remove that id, then restart.
+
+- 2026-10-15 ~18:00 UTC (root): `~/risime-voice/KEEP` created, so every deploy (fast lane and nightly) keeps the running Call Risi worker (the harness-tested echo-guard copy). The gapless + barge-in worker (c2e38f46) ships only after Harsha tries barge-in on a real phone. Undo: `rm ~/risime-voice/KEEP`; the next deploy then copies the worker. TTS lab container `risime-tts-lab-tts-lab-1` runs image `risime/tts-lab:2026-10-15-1` with the lab-only pause override; daytime-memory stops it when idle.
