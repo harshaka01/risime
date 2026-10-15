@@ -166,6 +166,16 @@ defmodule RisiMe.Agent.RootInboxTest do
     assert RootInbox.fetch_new() == []
   end
 
+  test "a tap answers the open question whose option it is, not just the newest (15 Oct)", ctx do
+    {:ok, _} = RootInbox.post("calls-try", "Calls: try now", ["Works", "Problems"])
+    {:ok, _} = RootInbox.post("voice-pick", "Which voice? Reply 1, 2, 3 or 4.", [])
+    _ = posts()
+    :ok = ask!(ctx.rc, ctx.harsha.user, ctx.dev, "Root: Problems")
+    _ = posts()
+    [a] = RootInbox.fetch_new()
+    assert a.topic == "calls-try" and a.answer == "Problems" and a.answer_kind == "tap"
+  end
+
   test "a short text reply while a question is open is recorded", ctx do
     {:ok, _} = RootInbox.post("phone", "Did the call ring on your phone?", [])
     _ = posts()

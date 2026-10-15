@@ -206,11 +206,20 @@ defmodule RisiMe.Agent.RootInbox do
           is_nil(q.superseded_at)
   end
 
-  defp newest_open(user) do
-    Repo.one(
+  # The question a reply answers: the newest open one whose options it names word for word
+  # (15 Oct: "Problems" for the calls try-now landed on the newer voice pick), else the newest.
+  defp target(user, text) do
+    qs = open_qs(user, 10)
+    Enum.find(qs, &by_text?(&1, text)) || List.first(qs)
+  end
+
+  defp by_text?(%{options: options}, text), do: Enum.any?(options, &(norm(&1) == norm(text)))
+
+  defp open_qs(user, n) do
+    Repo.all(
       from q in open_q(user),
         order_by: [desc: q.posted_at],
-        limit: 1,
+        limit: ^n,
         select: %{
           id: type(q.id, :binary_id),
           topic: q.topic,
@@ -249,13 +258,13 @@ defmodule RisiMe.Agent.RootInbox do
   defp classify(user, text) do
     case Regex.run(~r/^root\s*:\s*(.*)$/isu, text) do
       [_, rest] ->
-        q = newest_open(user)
         rest = String.trim(rest)
+        q = target(user, rest)
         {answer, kind} = resolve(q, rest)
         {:reply, q, answer, if(kind == :option and rest == answer, do: "tap", else: "text")}
 
       nil ->
-        with %{} = q <- newest_open(user),
+        with %{} = q <- target(user, text),
              true <- recent?(q),
              true <- reply_like?(q, text) do
           {answer, _} = resolve(q, text)
