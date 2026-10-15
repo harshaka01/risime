@@ -185,6 +185,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
       :risi_call_turn,
       :risi_call_runs,
       :risi_now,
+      :risi_agent_flags,
       :risi_llm
     ]
 
@@ -192,6 +193,12 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
     Application.put_env(:risime, :risi_call_media, Media)
     Application.put_env(:risime, :risi_speech, Speech)
     Application.put_env(:risime, :risi_call_turn, Turn)
+    # The session checks the switch every 10 s: on for the whole test.
+    Application.put_env(:risime, :risi_agent_flags, %{
+      "RISI_CALL_RISI" => "on",
+      "RISI_AGENTS" => "on"
+    })
+
     Application.put_env(:risime, :risi_call_runs, Runs)
     Application.put_env(:risime, :risi_now, "2026-10-15T07:11:00Z")
 
@@ -301,7 +308,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
         case t["expect"] do
           nil ->
             # The first part of a split question: the caller goes on talking (nothing heard).
-            _ = says(utt, [], 1_500)
+            # (its pieces stay unacknowledged; the next turn starts after its `after_ms`)
             {[], utt}
 
           exp ->
@@ -374,7 +381,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
       {:media_cmd, %{"cmd" => "say", "utt" => ^utt} = c} ->
         acc = acc ++ [c]
         answered? = Enum.any?(acc, &(&1["text"] not in Fillers.all()))
-        says(utt, acc, if(answered?, do: 600, else: wait))
+        says(utt, acc, if(answered?, do: if(@live, do: 3_000, else: 600), else: wait))
     after
       wait -> acc
     end

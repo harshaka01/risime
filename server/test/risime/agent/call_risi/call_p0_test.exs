@@ -191,7 +191,8 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
       :risi_call_runs,
       :risi_call_merge_ms,
       :risi_call_tool_wait_ms,
-      :risi_now
+      :risi_now,
+      :risi_agent_flags
     ]
 
     prev = for k <- keys, do: {k, Application.get_env(:risime, k)}
@@ -199,6 +200,12 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
     Application.put_env(:risime, :risi_speech, Speech)
     Application.put_env(:risime, :risi_call_llm, LLM)
     Application.put_env(:risime, :risi_call_turn, Turn)
+    # The session checks the switch every 10 s: on for the whole test.
+    Application.put_env(:risime, :risi_agent_flags, %{
+      "RISI_CALL_RISI" => "on",
+      "RISI_AGENTS" => "on"
+    })
+
     Application.put_env(:risime, :risi_call_runs, Runs)
     # Harsha's call: Thu 15 Oct 2026, 12:41 in Colombo.
     Application.put_env(:risime, :risi_now, "2026-10-15T07:11:00Z")

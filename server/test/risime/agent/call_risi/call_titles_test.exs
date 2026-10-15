@@ -105,13 +105,19 @@ defmodule RisiMe.Agent.CallRisi.CallTitlesTest do
 
   setup do
     keys =
-      ~w(risi_call_media risi_speech risi_call_llm risi_call_turn risi_call_runs risi_now risi_learning_log)a
+      ~w(risi_call_media risi_speech risi_call_llm risi_call_turn risi_call_runs risi_now risi_learning_log risi_agent_flags)a
 
     prev = for k <- keys, do: {k, Application.get_env(:risime, k)}
     Application.put_env(:risime, :risi_call_media, Media)
     Application.put_env(:risime, :risi_speech, Speech)
     Application.put_env(:risime, :risi_call_llm, LLM)
     Application.put_env(:risime, :risi_call_turn, Turn)
+    # The session checks the switch every 10 s: on for the whole test.
+    Application.put_env(:risime, :risi_agent_flags, %{
+      "RISI_CALL_RISI" => "on",
+      "RISI_AGENTS" => "on"
+    })
+
     Application.put_env(:risime, :risi_call_runs, Runs)
     Application.put_env(:risime, :risi_learning_log, Log)
     Application.put_env(:risime, :risi_now, "2026-10-15T07:11:00Z")
