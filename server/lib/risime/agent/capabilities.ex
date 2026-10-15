@@ -109,6 +109,15 @@ defmodule RisiMe.Agent.Capabilities do
     ~r/\b(not|no)\b[^.!?\n]{0,30}\b(mentioned|found|included|contained|information|details?)\b[^.!?\n]{0,20}\b(in|from)\s+the\s+(transcript|context|conversation|chat)/i
   ]
 
+  @question ~r/^\W*(?:(?:hi|hey|hello|ok(?:ay)?|so|risi)\W+)*(?:what\s+(?:else\s+)?(?:can|could|do)\s+you\s+(?:do|help(?:\s+(?:me\s+)?with)?)|what\s+are\s+you\s+(?:able|capable)\b|how\s+can\s+you\s+help|what\s+(?:are\s+)?your\s+(?:features|capabilities|skills|abilities)|what\s+can\s+i\s+ask(?:\s+you)?|what\s+do\s+you\s+do)\W*(?:for\s+me\W*)?$/iu
+
+  @doc """
+  Device test 15 Oct (Q8): a plain "what can you do?" (nothing else asked) is answered from the
+  `capabilities` tool, never left to the model (it answered with a calendar card once).
+  """
+  def question?(text) when is_binary(text), do: Regex.match?(@question, String.trim(text))
+  def question?(_), do: false
+
   @doc "True when an answer uses the forbidden \"the transcript does not contain\" phrasing."
   def forbidden?(text) when is_binary(text), do: Enum.any?(@forbidden, &Regex.match?(&1, text))
   def forbidden?(_), do: false

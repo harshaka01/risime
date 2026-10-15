@@ -273,6 +273,7 @@ defmodule RisiMe.Agent.Turn do
         schedule -> forced_read(st, ctx)
         intent == :risi_items -> forced_items(st, ctx)
         memory -> forced_memory(st, ctx)
+        ctx.in_risi_chat? and Capabilities.question?(question) -> forced_capabilities(st, ctx)
         true -> loop(st, ctx)
       end
 
@@ -1743,6 +1744,21 @@ defmodule RisiMe.Agent.Turn do
         "tool" => "calendar_check",
         "args" => args
       })
+    end
+  end
+
+  # Device test 15 Oct (Q8): "what can you do?" reads the capabilities tool first, then the model
+  # answers from its result (never a calendar read).
+  defp forced_capabilities(st, ctx) do
+    names = ctx |> Tools.allowed() |> Enum.map(& &1.name)
+    ctx = Map.put(ctx, :allowed_names, names)
+
+    if "capabilities" in names do
+      out = %{"tool" => "capabilities", "args" => %{}}
+      {st, _status, _result, _meta} = exec_step(st, ctx, "capabilities", %{}, out)
+      loop(st, ctx)
+    else
+      loop(st, ctx)
     end
   end
 

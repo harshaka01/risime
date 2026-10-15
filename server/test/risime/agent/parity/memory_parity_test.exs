@@ -255,6 +255,25 @@ defmodule RisiMe.Agent.Parity.MemoryTest do
     end
   end
 
+  test "device test 15 Oct (Q8): 'What can you do?' in the Risi chat reads capabilities first",
+       ctx do
+    fake_llm!(fn "risi_next_action", body ->
+      result =
+        body["messages"]
+        |> List.last()
+        |> Map.get("content")
+
+      if result =~ "\"now\"",
+        do: final("Here is what I can do for you right now.", []),
+        else: %{"tool" => "risi_calendar_check", "args" => %{}}
+    end)
+
+    {body, a} = ask!(ctx, "What can you do?")
+    assert body == "Here is what I can do for you right now."
+    assert [%{"tool" => "capabilities", "status" => "ok"} | _] = a["steps"]
+    refute Enum.any?(a["steps"], &(&1["tool"] =~ "calendar"))
+  end
+
   test "nothing about that (memory exists): 'I don't have anything about that…', no model call",
        ctx do
     remember!(ctx.og, ctx.shenika.user, "Quote sent", at("2026-10-07"))

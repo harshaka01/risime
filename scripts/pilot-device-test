@@ -205,7 +205,8 @@ skills_on() {
   tap "Settings" || return 1; sleep 2
   # The button must be well inside the screen (at the bottom edge a tap lands on the navigation bar).
   local xy
-  for _ in $(seq 1 12); do
+  # Settings grew (15 Oct): "Risi skills" is ~11 swipes down.
+  for _ in $(seq 1 24); do
     xy="$(node_xy 'Risi skills')"
     if [ -n "$xy" ] && [ "${xy##* }" -gt 200 ] && [ "${xy##* }" -lt 1000 ]; then break; fi
     A shell input swipe 360 900 360 600 300; sleep 1; xy=""
@@ -294,7 +295,9 @@ T="$OUT/transcript.md"
 echo "==> setup: a reminder"
 a="$(ask "Remind me tomorrow at 10 to call Shakya" q00)"
 # Confirm the reminder card (a write is never done without the user's tap).
-sleep 2; if tap "^Add"; then sleep 4; shot q00-confirmed; pass "reminder confirmed on the card"; else fail "no Add on the reminder card"; fi
+# The card may sit above the answer bubble (off screen): scroll up to it.
+sleep 2; for _ in 1 2 3 4; do [ -n "$(node_xy '^Add')" ] && break; A shell input swipe 360 500 360 900 300; sleep 1; done
+if tap "^Add"; then sleep 4; shot q00-confirmed; pass "reminder confirmed on the card"; else fail "no Add on the reminder card"; fi
 { echo "## Q0 (setup) Remind me tomorrow at 10 to call Shakya"; echo; echo '```'; echo "$a"; echo '```'; echo; } >> "$T"
 for i in "${!QUESTIONS[@]}"; do
   n=$((i + 1)); q="${QUESTIONS[$i]}"; tag="$(printf 'q%02d' "$n")"
