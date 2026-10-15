@@ -135,6 +135,16 @@ defmodule RisiMe.Agent.CallRisi.Brain do
         write_status(ctx, range || :confirm)
         report(ctx, {:done, %{status: :ok, request_id: nil}})
 
+      # Root 15 Oct: a write on a call that names no day asks "Which day?" (never the day of an
+      # earlier read of the call).
+      route == "calendar_write" and
+          (range == :ask_day_more or
+             (range == nil and not ScheduleIntent.day_named?(text, today(ctx)))) ->
+        pending = if range == :ask_day_more, do: ctx.write_ask <> " " <> text, else: text
+        report(ctx, {:write_ask, pending})
+        say(ctx, "Which day should I put it on?", :answer)
+        report(ctx, {:done, %{status: :ok, request_id: nil}})
+
       # Thinking aloud ("Let me see. I need to listen to it.") is not a request, whatever the words.
       route in ~w(chat planner message_write summary_chat) and addressed(text, ctx) == :ignore ->
         report(ctx, {:done, %{status: :ignored, request_id: nil}})
@@ -258,6 +268,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     "Change the #{noun} I just asked you to add: " <> text
   end
 
+  defp write_text(text, "calendar_write", {:day_for, pending}), do: pending <> " " <> text
   defp write_text(text, _route, _range), do: text
 
   ## Routing (with the call's topic)
@@ -296,9 +307,19 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     write_last? = match?(%{last?: true}, write)
     reads? = route == "calendar_read" and ScheduleIntent.schedule_words?(text)
 
+    ask = Map.get(ctx, :write_ask)
+
     cond do
       Regex.match?(@caps_re, text) and route in ~w(chat planner) ->
         {"capabilities", nil}
+
+      # The answer to "Which day should I put it on?".
+      is_binary(ask) and ScheduleIntent.day_named?(text, today) and not reads? ->
+        {"calendar_write", {:day_for, ask}}
+
+      # Still no day, more details: asked again with all the words.
+      is_binary(ask) and WriteTruth.correction?(text) and not reads? ->
+        {"calendar_write", :ask_day_more}
 
       # Harsha's 3rd call (15 Oct 14:16Z): "Rishi, I can't see that you have added something."
       WriteTruth.complaint?(text) and not reads? and
@@ -313,8 +334,9 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       # "I don't know. From 9 to 10. discuss about racing": changes the card being made.
       write_last? and WriteTruth.correction?(text) and not reads? and
           route in ~w(chat planner calendar_write reminder calendar_read) ->
+        # (a full write request of its own goes as said; the card's draft keeps its day)
         if route == write.route,
-          do: {route, nil},
+          do: {route, :as_said},
           else: {write.route, :correction}
 
       # "Did I promise anything today or tomorrow?": Risi's items in that range (the read lists

@@ -976,6 +976,9 @@ defmodule RisiMe.Agent.Turn do
 
     t0 = System.monotonic_time(:millisecond)
 
+    # Harsha's 3rd call: "block it out from 10 to 12" is 10–12, from the user's own words.
+    args = RisiMe.Agent.TimeRange.apply(name, args, ctx)
+
     question =
       if auth == :ok and name in @named_writes and not Map.get(ctx, :names_ok, false),
         do: name_question(ctx, name, args, st.draft)
@@ -1146,6 +1149,8 @@ defmodule RisiMe.Agent.Turn do
   defp act_final(st, ctx, answer, out) do
     new = ActionDraft.normalise(out["draft"], ctx.now, ctx.tz)
     {draft, changed} = ActionDraft.merge(st.draft, new, proposed?(st, ctx))
+    # Harsha's 3rd call: the user's own range and day over the model's slots.
+    draft = if new != %{}, do: RisiMe.Agent.TimeRange.apply_draft(draft, ctx), else: draft
     # v1.35 §34.2: a final.draft patches the draft (its old card was superseded).
     st = %{st | draft: draft, draft_changed: st.draft_changed or changed or new != %{}}
 

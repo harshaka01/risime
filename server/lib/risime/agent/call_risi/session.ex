@@ -80,6 +80,8 @@ defmodule RisiMe.Agent.CallRisi.Session do
            # Harsha's 3rd call: the call's last write turn `%{request_id, route, last?}` (its
            # card's truth is read from its row; `last?` while no other tool turn came after).
            write: nil,
+           # Root 15 Oct: a write said without a day waits for "Which day?" (its words).
+           write_ask: nil,
            once: MapSet.new(),
            last_user: nil,
            # v1.52 §41.8: the caller's phone can send its meeting titles for a voice answer;
@@ -343,12 +345,14 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp brain({:topic, topic}, st), do: {:noreply, %{st | topic: topic}}
   defp brain({:once, key}, st), do: {:noreply, %{st | once: MapSet.put(st.once, key)}}
 
-  defp brain({:write, %{} = w}, st), do: {:noreply, %{st | write: w}}
+  defp brain({:write_ask, text}, st), do: {:noreply, %{st | write_ask: text}}
+
+  defp brain({:write, %{} = w}, st), do: {:noreply, %{st | write: w, write_ask: nil}}
 
   defp brain({:write, nil}, %{write: %{} = w} = st),
-    do: {:noreply, %{st | write: %{w | last?: false}}}
+    do: {:noreply, %{st | write: %{w | last?: false}, write_ask: nil}}
 
-  defp brain({:write, nil}, st), do: {:noreply, st}
+  defp brain({:write, nil}, st), do: {:noreply, %{st | write_ask: nil}}
 
   # §41.8: the brain's titles request goes to the worker (published to the caller only).
   defp brain({:cal_req, %{"cmd" => "cal_req", "id" => id} = cmd}, st) do
@@ -542,7 +546,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
         _ -> st.topic
       end
 
-    %{user_id: st.args.user_id, topic: topic, write: st.write}
+    %{user_id: st.args.user_id, topic: topic, write: st.write, write_ask: st.write_ask}
   end
 
   # A fragment changes the request when it is a tool request of its own that differs.
@@ -562,6 +566,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
       tools?: Map.get(st.args, :tools?, true),
       topic: st.topic,
       write: st.write,
+      write_ask: st.write_ask,
       once: st.once,
       cal?: st.cal?,
       caps: Map.get(st.args, :caps)

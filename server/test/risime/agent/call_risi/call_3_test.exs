@@ -148,10 +148,18 @@ defmodule RisiMe.Agent.CallRisi.Call3Test do
         )
       else
         # A write: a confirm card (pending until the test taps Add), then the turn's answer.
-        summary =
-          if text =~ ~r/racing/i,
-            do: "Add to your Risi Calendar: Discuss racing · Fri 16 Oct, 9–10 AM",
-            else: "Add to your Risi Calendar: Discuss RISD · Fri 16 Oct, 10 AM–12 PM"
+        # The times come from the user's own words (RisiMe.Agent.TimeRange, as in the real turn).
+        r = RisiMe.Agent.TimeRange.parse(text)
+        f = fn t -> t |> Calendar.strftime("%-I:%M") |> String.replace(":00", "") end
+        m = fn t -> Calendar.strftime(t, "%p") end
+
+        span =
+          if m.(r.start) == m.(r.end),
+            do: "#{f.(r.start)}–#{f.(r.end)} #{m.(r.end)}",
+            else: "#{f.(r.start)} #{m.(r.start)}–#{f.(r.end)} #{m.(r.end)}"
+
+        title = if text =~ ~r/racing/i, do: "Discuss racing", else: "Discuss RISD"
+        summary = "Add to your Risi Calendar: #{title} · Fri 16 Oct, #{span}"
 
         :persistent_term.put({__MODULE__, :write, rid}, "pending")
         :persistent_term.put({__MODULE__, :last_write}, rid)
@@ -349,13 +357,13 @@ defmodule RisiMe.Agent.CallRisi.Call3Test do
       turn(
         pid,
         5,
-        "Yeah, just add an entry on my calendar and block it out from 10 to 12. discuss about RISD."
+        "Yeah, can you add an appointment tomorrow? Just add an entry on my calendar and block it out from 10 to 12. discuss about RISD."
       )
 
-    assert %{"text" => "Yeah, just add an entry" <> _} = last_run()
+    assert %{"text" => "Yeah, can you add an appointment tomorrow?" <> _} = last_run()
 
     assert a5 =~
-             "I haven't added it yet. I've put a card in your Risi chat: Discuss RISD, tomorrow"
+             "I haven't added it yet. I've put a card in your Risi chat: Discuss RISD, tomorrow, 10 am to 12 pm."
 
     assert a5 =~ "Tap Add"
     refute a5 =~ @write_claim
@@ -481,6 +489,57 @@ defmodule RisiMe.Agent.CallRisi.Call3Test do
     assert a1 =~ ~r/^(?:Okay\. )?I couldn't reach your phone calendar/
     refute a1 =~ ~r/nothing (?:on|scheduled)|free/i
     assert a1 =~ "send SSH access for iPhone stuff"
+  end
+
+  test "a write on a call without a day asks 'Which day?' (never the day of the call's earlier read)",
+       %{args: args} do
+    pid = start!(args)
+    _ = turn(pid, 1, "Do you have anything on the 18th of October?")
+    _ = last_run()
+
+    a2 =
+      turn(
+        pid,
+        2,
+        "Just add an entry on my calendar and block it out from 10 to 12. Discuss about RISD."
+      )
+
+    assert a2 == "Which day should I put it on?"
+    assert last_run() == nil
+    a3 = turn(pid, 3, "Tomorrow")
+
+    assert %{
+             "text" =>
+               "Just add an entry on my calendar and block it out from 10 to 12. Discuss about RISD. Tomorrow"
+           } = last_run()
+
+    assert a3 =~ "Discuss RISD, tomorrow, 10 am to 12 pm"
+  end
+
+  describe "TimeRange (the user's own words)" do
+    alias RisiMe.Agent.TimeRange
+
+    test "ranges" do
+      for {said, s, e} <- [
+            {"block it out from 10 to 12", ~T[10:00:00], ~T[12:00:00]},
+            {"10–12", ~T[10:00:00], ~T[12:00:00]},
+            {"9 to 10 am", ~T[09:00:00], ~T[10:00:00]},
+            {"between 3 and 4:30", ~T[15:00:00], ~T[16:30:00]},
+            {"11 to 1 pm", ~T[11:00:00], ~T[13:00:00]},
+            {"from 10 am to 12", ~T[10:00:00], ~T[12:00:00]},
+            {"from 4 to 5 p.m. for a call with the bank", ~T[16:00:00], ~T[17:00:00]},
+            {"I don't know. From 9 to 10. Discuss about racing", ~T[09:00:00], ~T[10:00:00]},
+            {"at 3 for two hours", ~T[15:00:00], ~T[17:00:00]},
+            {"from 2 a.m. until 10 p.m.", ~T[02:00:00], ~T[22:00:00]},
+            {"on the 18th from 6 to 7", ~T[18:00:00], ~T[19:00:00]}
+          ] do
+        assert %{start: ^s, end: ^e} = TimeRange.parse(said), said
+      end
+
+      assert %{start: nil, duration_min: 30} = TimeRange.parse("for half an hour")
+      assert TimeRange.parse("add lunch on the 18th of October") == nil
+      assert TimeRange.parse("Can you add an appointment tomorrow from 10 to") == nil
+    end
   end
 
   describe "WriteTruth" do

@@ -59,6 +59,11 @@ stored), the write went `void`; the model then made a Risi Calendar card: 14:15:
 - **Not fixed:** the write turn's model still drops an end time ("from 10 to 12" → 10–11 am, as on Harsha's
   card) and, without a day, took the 18th (the earlier topic); the read-back now exposes both so the caller can
   correct. The voice yes can't run the phone's own `calendar_add` (needs an app/contract change).
+- **srv13 (root 15 Oct):** `RisiMe.Agent.TimeRange` — the range in the user's own words ("from 10 to 12", "10–12",
+  "9 to 10 am", "between 3 and 4:30", "at 3 for two hours"; am/pm from the other side, else working hours 7–19)
+  sets the `calendar_add`/`risi_calendar_add` start/end before the tool runs and the action draft's slots (the day
+  too when the words name one); a Call Risi write without a day asks "Which day should I put it on?" and never
+  takes the day of an earlier read. Tests: `test/risime/agent/time_range_test.exs`, call_3_test.
 - Tests: `test/risime/agent/call_risi/call_3_test.exs` (the replay, call 4 voice confirm, units),
   `test/risime/agent/claim_guard_test.exs` (10 adversarial prompts); question set 52/52 with
   `harsha-2026-10-15-call-3`. Device: `pilot-device-test` seeds an all-day "Family day" on the 18th and turns on the
