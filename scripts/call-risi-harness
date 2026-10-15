@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Call Risi end-to-end latency harness (decision 090):
-#   scripts/call-risi-harness [--echo -6] [--rounds N] [--pilot-like]
+#   [HARSHA=1] scripts/call-risi-harness [--echo -6] [--rounds N] [--pilot-like]   (HARSHA=1: his 15 Oct call script)
 # 1. Starts a THROWAWAY LiveKit (the pilot's image, loopback only: signalling 127.0.0.1:$LK_PORT, media
 #    UDP 41900-41999 on 127.0.0.1, throwaway keys; the live LiveKit is never touched).
 # 2. Makes synthetic caller clips with risime-tts (voice am_michael; labelled synthetic, not real speech).
@@ -79,6 +79,24 @@ say q4 "Tell me one interesting fact about elephants."
 say q5 "Thanks, that's all for now."
 say barge "Wait, stop. Just tell me the time zone of Sri Lanka."
 clips="$tmp/q1.wav,$tmp/q2.wav,$tmp/q3.wav,$tmp/q4.wav,$tmp/q5.wav"
+if [ "${HARSHA:-0}" = 1 ]; then
+  # P0 2026-10-15: Harsha's call, in his words (synthetic voice); U3 is two fragments with a 1 s pause.
+  say h1 "What can you do?"
+  say h2 "Check my calendar for today and tomorrow?"
+  say h3a "Do you have anything"
+  say h3b "on the eighteenth?"
+  say h4 "Why can't you get the calendar information?"
+  say h5 "Give me the entire week, tell me the important ones."
+  "$py" -I -c 'import sys, wave
+out, a, b = sys.argv[1:4]
+ws = [wave.open(p, "rb") for p in (a, b)]
+p = ws[0].getparams()
+o = wave.open(out, "wb"); o.setparams(p)
+o.writeframes(ws[0].readframes(ws[0].getnframes()))
+o.writeframes(b"\0" * (p.sampwidth * p.nchannels * p.framerate))  # 1 s pause
+o.writeframes(ws[1].readframes(ws[1].getnframes())); o.close()' "$tmp/h3.wav" "$tmp/h3a.wav" "$tmp/h3b.wav" || fail "h3 clip"
+  clips="$tmp/h1.wav,$tmp/h2.wav,$tmp/h3.wav,$tmp/h4.wav,$tmp/h5.wav"
+fi
 
 lk_key="$LIVEKIT_API_KEY"; lk_secret="$LIVEKIT_API_SECRET"
 set -a; . "$root/.env"; set +a

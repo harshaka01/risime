@@ -14,10 +14,44 @@ defmodule HarnessRuns do
 end
 
 defmodule HarnessTurn do
-  def run(_conv, _env, request_id, _user) do
+  # A calendar question (the brain passes its range as env "__schedule") gets synthetic facts, like
+  # RisiMe.Agent.RisiItems.voice_facts/4 (P0 2026-10-15): busy 10:00–11:00 every day of the range,
+  # 14:00–15:00 on the first day, a Risi reminder "Call Ruwan" at 17:00 on the second day. The
+  # answer text is the v2 card's (head line + footer), which must never be spoken.
+  def run(_conv, env, request_id, _user) do
     {pid, _} = Process.get(:risi_voice_sink)
     Process.sleep(String.to_integer(System.get_env("HARNESS_TOOL_MS", "1200")))
-    send(pid, {:risi_voice_answer, request_id, "Tomorrow you have a team meeting at ten, and nothing after lunch."})
+
+    case env["__schedule"] do
+      %{from: from, to: to} ->
+        days = for i <- 0..(max(Date.diff(to, from), 1) - 1), do: Date.add(from, i)
+
+        ev = fn kind, title, d, {h, m}, mins ->
+          s = NaiveDateTime.new!(d, Time.new!(h, m, 0))
+          e = if mins, do: NaiveDateTime.add(s, mins * 60)
+
+          %{kind: kind, title: title, start: s, end: e, all_day: false,
+            start_utc: NaiveDateTime.to_iso8601(s) <> "Z", end_utc: e && NaiveDateTime.to_iso8601(e) <> "Z", tags: [kind]}
+        end
+
+        evs =
+          days
+          |> Enum.with_index()
+          |> Enum.flat_map(fn {d, i} ->
+            [ev.("busy", nil, d, {10, 0}, 60)] ++
+              if(i == 0, do: [ev.("busy", nil, d, {14, 0}, 60)], else: []) ++
+              if(i == 1, do: [ev.("reminder", "Call Ruwan", d, {17, 0}, nil)], else: [])
+          end)
+          |> Enum.sort_by(&NaiveDateTime.to_iso8601(&1.start))
+
+        facts = %{ok?: true, today: Date.utc_today(), from: from, to: to, events: evs, unread: []}
+        send(pid, {:risi_voice_facts, request_id, facts})
+        send(pid, {:risi_voice_answer, request_id, Calendar.strftime(from, "%a %-d %b") <> ":\n\nFrom: your phone calendars · Risi"})
+
+      _ ->
+        send(pid, {:risi_voice_answer, request_id, "Tomorrow you have a team meeting at ten, and nothing after lunch."})
+    end
+
     :ok
   end
 end
@@ -94,6 +128,9 @@ me = self()
     room: room,
     metrics_to: me,
     tools?: true,
+    # No database here: the call tools "what can you do?" lists, and no §41.8 titles device.
+    caps: ~w(risi_calendar_check risi_items set_reminder memory_search),
+    cal?: false,
     post: fn _conv, _body, risi -> send(me, {:transcript, risi}) end
   })
 
