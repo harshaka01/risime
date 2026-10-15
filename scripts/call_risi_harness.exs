@@ -92,6 +92,22 @@ Application.put_env(:risime, :risi_call_risi_config,
 )
 
 autos = for l <- ~w(si ta en mixed), k <- ["speech_route_", "tts_voice_"], into: %{}, do: {k <> l, "auto"}
+
+# HARNESS_TTS_VOICE_EN=<engine:voice> (2026-10-15 voice pick): Risi's English voice for this run; a lab
+# engine's voice is also made live (RISI_CALL_LIVE_ENGINES), so the worker uses the TTS lab
+# (RISI_TTS_LAB_URL) and its Kokoro fallback.
+autos =
+  case System.get_env("HARNESS_TTS_VOICE_EN") do
+    v when is_binary(v) and v != "" ->
+      [engine | _] = String.split(v, ":", parts: 2)
+      cfg = Application.get_env(:risime, :risi_call_risi_config, [])
+      Application.put_env(:risime, :risi_call_risi_config, Keyword.put(cfg, :live_engines, [engine]))
+      Map.put(autos, "tts_voice_en", v)
+
+    _ ->
+      autos
+  end
+
 Application.put_env(:risime, :admin_settings, autos)
 Application.put_env(:risime, :risi_agent_flags, %{"RISI_CALL_RISI" => "on", "RISI_AGENTS" => "on"})
 Application.put_env(:risime, :risi_call_runs, HarnessRuns)
