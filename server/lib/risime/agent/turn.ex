@@ -1785,6 +1785,12 @@ defmodule RisiMe.Agent.Turn do
         status != "ok" ->
           memory_rule(st, ctx, Lang.t(:unavailable, ctx.lang))
 
+        # P0 2026-10-15 (device test): "what did I promise?" with nothing in chat memory still
+        # answers from the Ledger (the asker's open promises are Risi's own data), never "I've
+        # only just started remembering".
+        meta.memory.found == 0 and ScheduleIntent.promise?(ctx.question) ->
+          memory_rule(Map.put(st, :memory_meta, meta.memory), ctx, promises_text(ctx))
+
         meta.memory.found == 0 ->
           st = Map.put(st, :memory_meta, meta.memory)
 
@@ -1801,6 +1807,24 @@ defmodule RisiMe.Agent.Turn do
     else
       # No Risi chat (personal tools): the normal loop.
       loop(st, ctx)
+    end
+  end
+
+  defp promises_text(ctx) do
+    case ctx.items |> Map.values() |> Enum.sort_by(& &1.ref) do
+      [] ->
+        "You have no open promises in my list."
+
+      items ->
+        lines =
+          for i <- items do
+            who = if i.owner == "you", do: "You", else: i.owner
+            with_ = if i.with != [], do: " (with #{Enum.join(i.with, ", ")})", else: ""
+            due = if i.due_text, do: " · due #{i.due_text}", else: ""
+            "- #{who}: #{i.text}#{with_}#{due}"
+          end
+
+        "Your open promises:\n" <> Enum.join(lines, "\n")
     end
   end
 

@@ -52,6 +52,10 @@ defmodule RisiMe.Agent.ScheduleIntent do
 
   @promise ~r/\bpromis(?:e|ed|es)\b|\bcommit(?:ted|ments?)\b|පොරොන්දු|வாக்குறுதி/iu
 
+  @doc "True when `text` is about promises or commitments (P0 2026-10-15)."
+  def promise?(text) when is_binary(text), do: Regex.match?(@promise, text)
+  def promise?(_), do: false
+
   @doc "Classifies `text` (see the module doc); `today` is the asker's local date."
   def classify(text, %Date{} = today) when is_binary(text) do
     t = String.trim(text)

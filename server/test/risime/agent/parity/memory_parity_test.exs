@@ -187,6 +187,41 @@ defmodule RisiMe.Agent.Parity.MemoryTest do
     assert llm_requests() == []
   end
 
+  test "P0 15 Oct: 'what did I promise?' with no chat memory answers from the Ledger", ctx do
+    fake_llm!(fn _, _ -> flunk("no model call") end)
+    {body, _} = ask!(ctx, "what did I promise?")
+    assert body == "You have no open promises in my list."
+
+    {:ok, c} =
+      RisiMe.Agent.Commitment.seal(%RisiMe.Agent.Commitment{
+        id: Ecto.UUID.generate(),
+        conversation_id: ctx.ou,
+        chat_id: ctx.ou,
+        state: "confirmed",
+        item_state: "confirmed",
+        text: "Send the price list",
+        owner_id: ctx.harsha.user.id,
+        counterpart_ids: [ctx.upali.user.id],
+        due: ~U[2026-10-10 08:30:00.000000Z],
+        due_kind: "datetime",
+        all_day: false,
+        source: "chat",
+        source_message_ids: [],
+        proposed_at: ~U[2026-10-09 05:00:00.000000Z]
+      })
+
+    RisiMe.Repo.insert!(c)
+
+    # With a promise in the Ledger the memory route finds it, and the model answers from it.
+    fake_llm!(fn _, _ -> final("Your open promises:\n- You: Send the price list", []) end)
+
+    q = "We see but have I promised you should be able to read what I promised and let me know"
+    {body2, _} = ask!(ctx, q)
+    assert body2 =~ "Your open promises:"
+    assert body2 =~ "Send the price list"
+    refute body2 =~ "only just started"
+  end
+
   test "nothing about that (memory exists): 'I don't have anything about that…', no model call",
        ctx do
     remember!(ctx.og, ctx.shenika.user, "Quote sent", at("2026-10-07"))
