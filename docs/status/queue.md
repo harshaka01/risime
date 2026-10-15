@@ -9,8 +9,10 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
   merged fragments; A) "One moment…" then hold, speech merges, interrupt only by button/"Risi, stop", ignore
   thinking aloud ("Was that for me?"), "Still checking…" after 4 s; B) promises/Ledger/notes/Risi Calendar always
   available. Server hotfix; "Risi brain: try now" when his conversation works end to end.
-- **C) Voice quality (in progress):** gapless streamed TTS; 3 candidate voices (Kokoro vs Orpheus/Chatterbox) to rate
-  on the Voices page; use his pick.
+- **C) Voice quality (frozen 15 Oct 15:00, Harsha):** gapless streamed TTS; 3 candidate voices (Kokoro vs Orpheus/Chatterbox)
+  to rate on the Voices page; use his pick. Built (8fb149ad worker, 805f589b Voices page), reverted on main by 40ab4a93 /
+  e4957651 under the freeze; resume = revert the reverts + a real harness gap run. Orpheus weights missing (night download).
+- **D) (frozen):** wip 1e084c1c on branch worktree-agent-aac73afcdb58cac1f (weather + SearXNG, untested; no decision doc yet).
 - **D) Open-domain answers:** model knowledge + weather (Open-Meteo, no key) + web search (self-hosted SearXNG,
   outbound only the query); a decision; "what can you do" lists them.
 - **E) Voice notes in any language** (Whisper large-v3): original transcript + Translate to en/si/ta for everyone,
