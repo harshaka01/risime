@@ -1430,11 +1430,11 @@ defmodule RisiMe.Agent.Turn do
       cond do
         schedule? and v2? ->
           {text, srcs, unread?} = RisiItems.agenda_v2(checks, ctx.asker, ctx.tz, local?)
-          {text, st.call_refs == [], nil, srcs, unread?}
+          {no_promises(text, srcs, ctx), st.call_refs == [], nil, srcs, unread?}
 
         schedule? ->
           {text, srcs, unread?} = RisiItems.agenda(checks, ctx.asker, ctx.tz, local?)
-          {text, st.call_refs == [], nil, srcs, unread?}
+          {no_promises(text, srcs, ctx), st.call_refs == [], nil, srcs, unread?}
 
         v2? ->
           {a, r, retry} = CalendarHonesty.enforce_v2(answer, checks, ctx.tz)
@@ -1809,6 +1809,16 @@ defmodule RisiMe.Agent.Turn do
       loop(st, ctx)
     end
   end
+
+  # Device test 15 Oct: "did I promise anything today or tomorrow?" with nothing of Risi's in the
+  # range says so first (the phone's events follow), never only the calendar.
+  defp no_promises(text, [], ctx) do
+    if ScheduleIntent.promise?(ctx.question),
+      do: "You have no promises, reminders or follow-ups due then.\n\n" <> text,
+      else: text
+  end
+
+  defp no_promises(text, _srcs, _ctx), do: text
 
   defp promises_text(ctx) do
     case ctx.items |> Map.values() |> Enum.sort_by(& &1.ref) do

@@ -311,6 +311,15 @@ defmodule RisiMe.Agent.CalendarV2Test do
       assert body =~ "From: your phone calendars · Risi"
     end
 
+    test "device test 15 Oct: a dated promise question says there are none, then the events",
+         ctx do
+      {_, body, _} = ask_with_phone!(ctx, "Did I promise anything today or tomorrow?", sync_off())
+      assert body =~ "You have no promises, reminders or follow-ups due then.\n\nMon 5 Oct"
+
+      assert {:schedule_read, _} =
+               RisiMe.Agent.ScheduleIntent.classify("What about this week?", ~D[2026-10-15])
+    end
+
     test "P0 15 Oct: Harsha's promise question never blames calendar setup", ctx do
       q = "We see but have I promised you should be able to read what I promised and let me know"
       assert {:memory, %{mode: :agreed}} = RisiMe.Agent.ScheduleIntent.classify(q, ~D[2026-10-15])

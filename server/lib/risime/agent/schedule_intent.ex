@@ -48,7 +48,7 @@ defmodule RisiMe.Agent.ScheduleIntent do
 
   @other ~r/\b(?:summari[sz]e|summary|translate|explain|pdf|export|share|forward|feel\s+free|for\s+free|free\s+to)\b/iu
 
-  @presence ~r/\banything\b|\b(?:do|did|have|will)\s+i\s+(?:have|got)\b|\bwhat\s+(?:do|did)\s+i\s+have\b|\bwhat'?s\s+(?:on|happening|planned)\b|\bcheck\b/iu
+  @presence ~r/\b(?:what|how)\s+about\b|\banything\b|\b(?:do|did|have|will)\s+i\s+(?:have|got)\b|\bwhat\s+(?:do|did)\s+i\s+have\b|\bwhat'?s\s+(?:on|happening|planned)\b|\bcheck\b/iu
 
   @promise ~r/\bpromis(?:e|ed|es)\b|\bcommit(?:ted|ments?)\b|පොරොන්දු|வாக்குறுதி/iu
 

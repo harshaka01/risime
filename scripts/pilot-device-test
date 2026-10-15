@@ -203,8 +203,16 @@ skills_on() {
   back_to_list || return 1
   tap "More options" || tap "Menu" || return 1; sleep 1
   tap "Settings" || return 1; sleep 2
-  for _ in $(seq 1 8); do [ -n "$(node_xy 'Risi skills')" ] && break; A shell input swipe 360 1000 360 400 300; sleep 1; done
-  tap "Risi skills" || return 1; sleep 3
+  # The button must be well inside the screen (at the bottom edge a tap lands on the navigation bar).
+  local xy
+  for _ in $(seq 1 12); do
+    xy="$(node_xy 'Risi skills')"
+    if [ -n "$xy" ] && [ "${xy##* }" -gt 200 ] && [ "${xy##* }" -lt 1000 ]; then break; fi
+    A shell input swipe 360 900 360 600 300; sleep 1; xy=""
+  done
+  [ -n "$xy" ] || return 1
+  A shell input tap $xy; sleep 3
+  wait_for 'text="Calendar"' 15 || return 1
   dump; shot skills-before
   local name st ok
   for name in "$@"; do
@@ -276,6 +284,8 @@ if [ "$ONLY" != chat ]; then
 fi
 [ "$ONLY" = setup ] && { KEEP=1; echo "==> setup done (device kept; next: --only chat with PDT_SETUP=$OUT)"; exit 0; }
 [ "$ONLY" = chat ] && { cp "${PDT_SETUP:?PDT_SETUP=<the setup run dir>}/calendar.tsv" "$OUT/"; "$ADB" connect "$SERIAL" >/dev/null 2>&1 || true; }
+# The skills again on a kept phone (already on: read back only).
+[ "$ONLY" = chat ] && { skills_on Calendar Reminders || fail "Risi skills screen didn't open"; }
 
 open_risi_chat || die "the Risi chat didn't open"
 T="$OUT/transcript.md"
@@ -283,6 +293,8 @@ T="$OUT/transcript.md"
   echo "Phone calendar:"; sed 's/^[0-9]*\t[0-9]*\t\([^\t]*\)\t\(.*\)$/- \2 \1/' "$OUT/calendar.tsv"; echo; } > "$T"
 echo "==> setup: a reminder"
 a="$(ask "Remind me tomorrow at 10 to call Shakya" q00)"
+# Confirm the reminder card (a write is never done without the user's tap).
+sleep 2; if tap "^Add"; then sleep 4; shot q00-confirmed; pass "reminder confirmed on the card"; else fail "no Add on the reminder card"; fi
 { echo "## Q0 (setup) Remind me tomorrow at 10 to call Shakya"; echo; echo '```'; echo "$a"; echo '```'; echo; } >> "$T"
 for i in "${!QUESTIONS[@]}"; do
   n=$((i + 1)); q="${QUESTIONS[$i]}"; tag="$(printf 'q%02d' "$n")"
