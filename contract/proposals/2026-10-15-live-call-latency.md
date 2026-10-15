@@ -1,6 +1,8 @@
 # Proposal: live call lines in about 2 s (2026-10-15, P0-1b)
 
-**Status:** proposal for root/Harsha, to be applied as an additive amendment of **§36** (and §40.9, which
+**Status:** APPLIED as **v1.50 §36.12** (2026-10-15, with the Sinhala/Tamil joining added after the first
+measurement: a fast session's si/ta chunks of one speaker are transcribed together, ≤ 8 s, see §36.12). Was:
+proposal for root/Harsha, to be applied as an additive amendment of **§36** (and §40.9, which
 reuses it). Nothing changes on the wire until root edits PROTOCOL.md. The server implements it **behind the
 runtime flag `RISI_LIVE_FAST`** (`off` | `canary` | `on`, default `off`; `canary` = a call with a
 `RISI_DEV_USERS` participant), and the app behind the developer flag **"Fast live call transcript"** (on unless a
@@ -27,10 +29,10 @@ turn merging are.
 
 Measured with the change (`scripts/call-latency-bench`, 3 speakers, live pilot speech service; full table in
 `docs/status/ci.md`): speech→line p50 / p95 **en 2.8 / 4.6 s** (end of phrase 1.6 / 2.7 s), **si 2.7 / 4.2 s**,
-**ta 3.1 / 4.8 s** (end of phrase 1.8 / 1.9 s), against 8.6–19 s before. **Open:** short chunks cost accuracy on
-si (CER 3.4 % → 21 %) and ta (14 % → 27 %) on the test clips (en WER 5.3 % → 7.0 %), so the rollout stays
-`canary` until si/ta are tuned (e.g. a longer minimum for si/ta chunks, or a final re-transcribed line); the turbo
-model loads only when the host has memory (today it mostly falls back to large-v3).
+**ta 3.1 / 4.8 s** (end of phrase 1.8 / 1.9 s), against 8.6–19 s before. Short chunks transcribed one by one
+cost accuracy on si (CER 3.4 % → 21 %) and ta (14 % → 27 %); **resolved in v1.50** by joining a speaker's si/ta
+chunks (≤ 8 s, one line): si CER 2.6 % at p50 4.2 s, ta 9.5 % at 4.7 s (en stays per chunk, 2.7 s, WER 7.0 %).
+The turbo model loads only when the host has memory (today it mostly falls back to large-v3).
 
 ## Proposal (additive)
 

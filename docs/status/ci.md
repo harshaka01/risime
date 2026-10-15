@@ -32,3 +32,15 @@ for its phrase's chunk to close) p50 is ~2.7–3.1 s. **Accuracy cost:** short c
 ta CER 14 % → 27 % on these read-speech clips (en WER 5.3 % → 7.0 %); keep `RISI_LIVE_FAST` on canary until si/ta
 are tuned (longer minimum for si/ta, or a re-transcribed final line). Small synthetic/read test set (3 en/ta, 1 si
 clip); real conversation clips are the next round.
+
+**After §36.12 (v1.50, 2026-10-15 ~02:00 UTC): Sinhala/Tamil chunks of one speaker joined (≤ 8 s) before
+transcription; English stays per chunk.** Same bench, live pilot service:
+
+| mode | lang | p50 speech→line | p95 | end-of-utterance p50 / p95 | speech service p50 / p95 | WER/CER |
+|---|---|---|---|---|---|---|
+| fast (joined) | si | **4.2 s** | 5.8 s | 2.4 / 2.4 s | 0.56 / 0.62 s | **0.026** (12-s: 0.034) |
+| fast (joined) | ta | **4.7 s** | 8.5 s | 2.9 / 3.0 s | 1.01 / 1.72 s | **0.095** (12-s: 0.141) |
+| fast | en | 2.7 s | 4.5 s | 1.7 / 2.5 s | 0.70 / 0.88 s | 0.070 (12-s: 0.053) |
+
+`beam_size 1` for English was not tried: the speech service has no per-request beam size (one env for all
+requests), so it needs a service change and an image rebuild.

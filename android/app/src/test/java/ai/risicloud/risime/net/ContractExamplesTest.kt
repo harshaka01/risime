@@ -344,6 +344,15 @@ class ContractExamplesTest {
                     require(it.chunk.maxBytes == 262144 && it.chunk.minMs == 5000 && it.chunk.maxMs == 20000 && !it.final)
                 }
             },
+            // v1.50 §36.12 a fast session: VAD-cut 1–4 s chunks with 0.5 s overlap; one line per chunk.
+            "call_transcribe_reply_fast.json" to { s ->
+                ProtocolJson.decodeFromString<CallTranscribeReply>(s).session!!.also {
+                    require(it.chunk.vad && it.chunk.overlapMs == 500 && it.chunk.minMs == 1000 && it.chunk.maxMs == 4000 && it.chunk.maxBytes == 262144)
+                }
+            },
+            "envelope_risi_call_transcript_fast.json" to { s ->
+                RisiTranscriptKinds.transcript(s)!!.also { require(it.turn == 3 && it.language == "en" && it.model == "faster-whisper-large-v3-turbo" && it.model == it.madeBy!!.model) }
+            },
             "signal_call_transcribe.json" to { s -> ProtocolJson.decodeFromString<Signal>(s).callTranscribe()!!.also { require(it.state == CallTranscribeStates.ON && it.startedAt != null && it.participants.all { p -> p.consent == CallTranscribeConsent.ALLOWED }) } },
             "call_transcribe_chunk_reply.json" to { s -> ProtocolJson.decodeFromString<CallTranscribeChunkReply>(s).also { require(it.seq == 3 && it.accepted && !it.duplicate) } },
             "error_not_consented.json" to { s -> apiError(s, CallTranscribeErrors.NOT_CONSENTED) },

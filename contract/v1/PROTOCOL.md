@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.49 (Release 0.3)
+# RisiMe Wire Protocol — v1.50 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -10340,7 +10340,7 @@ The request is auth plus `X-Device-Id` (the bound device), sent as `multipart/fo
 | `codec` | `"ogg_opus"`: Ogg/Opus, mono, 16 or 48 kHz, 16–32 kbit/s |
 | `audio` | the file part, at most **256 KiB** |
 
-- The phone cuts its own microphone into chunks of **10–15 s**. It sends silent chunks too: they act as the
+- The phone cuts its own microphone into chunks of **10–15 s** (a fast session, v1.50 §36.12: 1–4 s at pauses). It sends silent chunks too: they act as the
   keep-alive.
 - It records only while the state is `on` and its own microphone is not muted. While the microphone is muted
   it sends silent chunks.
@@ -10397,7 +10397,7 @@ risi: {"v": 1, "kind": "call_transcript", "call_id", "session_id", "turn": int (
   still not in Sinhala script after the speech service's retry. Absent otherwise.
 - **`body`:** `"Harsha 17:52: <text>"`. The name is the server's display name; the phone renders the name
   from its own data and the time in its own zone. These posts are silent.
-- **Grouping:**
+- **Grouping** (a fast session, v1.50: §36.12 instead):
   - Consecutive chunks of one speaker are merged into one turn, until another participant's speech starts,
     the turn reaches 60 s, or the session ends.
   - A turn is posted when it closes, or after 30 s of an open turn; a continuation is posted as the next
@@ -10554,6 +10554,62 @@ Clients ignore both fields if they don't know them; a v1.39 client is unaffected
 **Examples:** `envelope_risi_call_transcript_compare_si_script.json`,
 `envelope_risi_call_transcript_romanised.json`. **Gate:** both sides parse them; the server test checks the
 pass-through from the speech service into both kinds.
+
+### 36.12 Live lines in about 2 s: fast sessions (v1.50)
+Proposal 2026-10-15-live-call-latency (Harsha P0-1b, 2026-10-15: live lines arrived about 8 s after speech; 3-way
+calls need ≤ 2 s). **Additive.** Server flag **`RISI_LIVE_FAST`** (`off` | `canary` | `on`, default `off`;
+`canary` = a call with a `RISI_DEV_USERS` participant); Android developer setting **"Fast live call transcript"**
+(on unless a developer turns it off; it acts only when the server asks). Applies to §36 and §40.9 sessions alike.
+
+- **The session says "fast" (§36.2).** The server decides at the `request` (never for a `compare` session) and
+  keeps it for the session (`risi_call_transcribe_sessions.fast`, additive). `Session.chunk` gains two optional
+  fields, **`mode`** (`"vad"`) and **`overlap_ms`** (int); a fast session announces
+  `{"min_ms": 1000, "max_ms": 4000, "max_bytes": 262144, "mode": "vad", "overlap_ms": 500}`
+  (`call_transcribe_reply_fast.json`). Without `mode` nothing changes. A client that doesn't know `mode` (or sees
+  another value) keeps the §36.4 10–15 s chunks, which a fast session accepts too.
+- **The phone's chunks (android, normative while `mode` is `"vad"` and the setting is on):**
+  - it cuts its own microphone **at pauses** (a 20-ms energy gate over an adaptive noise floor): a chunk closes at a
+    pause of **≥ 300 ms** once it is **≥ 2 s** long; at the end of an utterance (**≥ 600 ms** of silence after
+    **≥ 200 ms** of speech) even if shorter; at **4 s** at the latest; and is uploaded as soon as it closes
+    (§36.4 endpoint and parts unchanged; `duration_ms` 1–4 000);
+  - the next chunk starts up to **`overlap_ms` before** the cut (all of it after a 4-s cut; only the trailing
+    silence after a pause), so its `offset_ms` may be lower than the previous chunk's end; `seq` still grows;
+  - silence before speech is not sent (0.5 s of it leads a chunk); a short keep-alive (≤ 0.6 s) goes out after
+    **15 s** without a chunk (the 90-s `left` rule holds); muted audio is silence;
+  - everything else in §36.4/§36.6 holds (own microphone only, memory only, zeroed, at most 2 held).
+- **The server (normative for a fast session):**
+  - **limits:** **40 chunks per participant per 60 s, burst 8; 4 queued** per participant (other §36.4 errors
+    unchanged);
+  - **priority:** chunks go to the speech service at its **`live`** priority; while the session is on the server
+    holds the speech-guard pause file (`reason=live_call`, so evals, the night compare run and the TTS lab start no
+    GPU work);
+  - **English and unsure** chunks: the language is detected first (`faster-whisper-large-v3`, with the call's hint,
+    §36.5); `en` goes to the **fast English model** (`RISI_SPEECH_FAST_EN`, default
+    `faster-whisper-large-v3-turbo`) with `language=en`, else (the service can't load it: 503) to the §36.5 route;
+    **each chunk with speech is posted at once as its own `call_transcript`** (`turn` + 1; no merging, no 30-s hold;
+    `envelope_risi_call_transcript_fast.json`);
+  - **Sinhala and Tamil** chunks are only detected, then **joined** per speaker: the speaker's next chunk that follows
+    without a pause joins them whatever its own detection says; they are transcribed together (one Ogg/Opus stream
+    without the overlaps, the service's `model=auto` route of §36.5/§36.11) and posted as **one** `call_transcript`
+    when they reach **8 s** of audio, **≥ 4 s** ending at a phone pause cut (a chunk shorter than 4 s), a pause of
+    **≥ 600 ms** after ≥ 4 s, another language or the same speaker's English, **6 s** after the first one arrived, or
+    the end of the session. Waiting audio stays in memory only and is dropped untranscribed on stop with `discard`;
+  - **overlap:** when a line's audio starts before the end of the same speaker's previous line, the server drops the
+    longest head of its text (at most 6 words, compared lower-cased without punctuation) that repeats the end of that
+    line; a line left without text is not posted.
+  - `call_transcript`'s shape is unchanged; `model` / `made_by.model` name the model that answered.
+- **Old apps, old servers:** an old app in a fast session keeps 12-s chunks within the higher limits (its lines are
+  posted per chunk); a new app with an old server never sees `mode`. Kill switch: `RISI_LIVE_FAST=off` (the next
+  request is a normal session).
+- **Speech service (infra, no wire):** `WHISPER_LIVE_RESERVE` (default 0) keeps that many GPU slots free of batch
+  work (compare, evals).
+- **Measured** (`scripts/call-latency-bench`, 3 speakers, live pilot service, `docs/status/ci.md`): speech→line p50
+  en 2.7 s (end of phrase 1.7 s), si 4.2 s, ta 4.7 s, against 8.6–19 s before; WER/CER en 5.3 → 7.0 %,
+  si 3.4 → 2.6 %, ta 14 → 9.5 %.
+- **Examples:** `call_transcribe_reply_fast.json`, `envelope_risi_call_transcript_fast.json`. **Gate:** server
+  `ExamplesV150Test`, `call_transcribe_fast_test.exs`, `call_transcribe_overlap_test.exs`,
+  `call_transcribe_ogg_join_test.exs`, `speech_http_test.exs`; Android `ContractExamplesTest`, `VadChunkerTest`,
+  `CallTranscribeManagerTest`.
 
 ## 37. Voice notes (v1.41)
 Decision 081 (NEXT-PHASE §A; proposal 2026-10-11-basic-messaging reserved the type). **Additive:** one MLS
@@ -12165,6 +12221,12 @@ body: "I need your calendar to do that. Update RisiMe to allow it here, or turn 
   `device_put_risi_fixit.json`.
 
 ## Changelog
+- **v1.50** (2026-10-15, P0-1b; proposal 2026-10-15-live-call-latency): §36.12 fast call-transcription sessions
+  (flag `RISI_LIVE_FAST`, default `off`): optional `Session.chunk.mode: "vad"` and `overlap_ms`; the phone cuts
+  1–4 s chunks at pauses with 0.5 s overlap; the server allows 40/min (burst 8, 4 queued), sends chunks at `live`
+  priority (fast English model `faster-whisper-large-v3-turbo` when it can be loaded), posts English per chunk at
+  once, joins a speaker's Sinhala/Tamil chunks (≤ 8 s) into one line, and drops words the overlap repeats.
+  Additive; old apps keep 12-s chunks.
 - **v1.49** (2026-10-14, one bundle of today's proposals already implemented on main; **v1.48 (Call Risi §41) is
   reserved and applied separately**):
   - §37.11 spoken @Risi in Official (proposal 2026-10-14-spoken-risi): a vocative "Risi, …" on Risi's own transcript of
