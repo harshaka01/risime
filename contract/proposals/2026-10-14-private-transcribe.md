@@ -1,6 +1,6 @@
 # Proposal: transcription and translation in PRIVATE chats, each only after the reader's yes (2026-10-14)
 
-**Status:** proposal for root/Harsha, to be applied as **v1.50** next to §37.13 voice-translate (new **§37.14**; §37.12 is transcribe progress since v1.49, amendments to **§24.0** and
+**Status:** proposal for root/Harsha, to be applied as **v1.51** next to §37.13 voice-translate (new **§37.14**; §37.12 is transcribe progress since v1.49, amendments to **§24.0** and
 **§37.0**). Decision 092 (Harsha, 14 Oct 09:42 SLT). Implemented server-side and on Android **behind
 `RISI_PRIVATE_TRANSCRIBE`** (`off` | `canary` | `on`, default `off`; `canary` = `RISI_DEV_USERS`, decided on the
 server and sent through `/me`, never hard-coded in the app). With the flag off nothing changes on the wire or in any
@@ -101,7 +101,7 @@ conversation access is needed or checked.
 ```json
 {"text": "හෙට උදේ 10ට කාර්යාලයේදී හමුවෙමු", "target": "si", "source": "en", "engine": "risime-server"}
 ```
-- `source`: the given `source`, else `null` (v1.50 doesn't detect it). `engine` is always
+- `source`: the given `source`, else `null` (v1.51 doesn't detect it). `engine` is always
   `"risime-server"` (clients label the result "Translation (RisiMe server)").
 
 **Errors:** `404 not_found` while `private_transcribe` doesn't apply to the caller; `422 bad_request` (empty, too
