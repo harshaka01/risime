@@ -45,7 +45,15 @@ data class TranscribeView(
 )
 
 /** What the recorder does now ([paused]: v1.45 §40.9, record nothing but keep the session's `seq`). */
-data class RecordTarget(val sessionId: String, val callId: String, val startedAt: String?, val conversationId: String, val paused: Boolean = false)
+data class RecordTarget(
+    val sessionId: String,
+    val callId: String,
+    val startedAt: String?,
+    val conversationId: String,
+    val paused: Boolean = false,
+    /** Proposal 2026-10-15-live-call-latency: the server asked for VAD-cut 1–4 s chunks (`chunk.mode: "vad"`). */
+    val vad: Boolean = false,
+)
 
 /**
  * §36.2/§36.6 the phone's side of the consent state machine. Pure; every input returns the pushes to send.
@@ -242,9 +250,9 @@ class TranscribeConsentMachine(private val me: String) {
         if (!c.official || !c.live) return null
         if (s.sessionId in finals || barSession != s.sessionId) return null
         // v1.45 §40.9: `paused` keeps the recorder (its `seq` goes on) but records and sends nothing.
-        if (s.state == CallTranscribeStates.PAUSED) return RecordTarget(s.sessionId, c.callId, s.startedAt, s.conversationId, paused = true)
+        if (s.state == CallTranscribeStates.PAUSED) return RecordTarget(s.sessionId, c.callId, s.startedAt, s.conversationId, paused = true, vad = s.chunk.vad)
         if (s.state != CallTranscribeStates.ON) return null
-        return RecordTarget(s.sessionId, c.callId, s.startedAt, s.conversationId)
+        return RecordTarget(s.sessionId, c.callId, s.startedAt, s.conversationId, vad = s.chunk.vad)
     }
 
     companion object {

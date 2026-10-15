@@ -274,7 +274,13 @@ class AppContainer(
             realtime.state,
             ai.risicloud.risime.calls.transcribe.MediaCodecOpusEncoder(),
             log = { Log.i("RisiMe", it) },
+            liveFast = { liveFastFlag.on.value },
         ).also { it.start() }
+    }
+
+    /** Proposal 2026-10-15-live-call-latency: the developer flag "Fast live call transcript" (on by default). */
+    val liveFastFlag by lazy {
+        ai.risicloud.risime.data.tabs.LiveFastFlag(context.getSharedPreferences("risime_tabs", Context.MODE_PRIVATE))
     }
 
     // ---- §25 (v1.25) Risi with tools ----

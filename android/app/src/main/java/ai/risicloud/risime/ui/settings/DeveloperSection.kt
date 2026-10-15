@@ -125,6 +125,7 @@ fun RisiDevSection(c: AppContainer) {
             PhoneRecogniserSection(c)
             PhoneTtsSection()
             CallRisiDevRow(c)
+            LiveFastDevRow(c.liveFastFlag)
             SendForMeDevRow(c)
             DevFlagRow(c.fixitFlag, FIXIT_FLAG_LABEL, FIXIT_FLAG_HELP, "dev_permission_fixit", reAdvertise = { c.refreshCapabilities() })
             DevFlagRow(c.skillDiagnosticsFlag, SKILL_DIAGNOSTICS_LABEL, SKILL_DIAGNOSTICS_HELP, "dev_skill_diagnostics")
@@ -136,6 +137,19 @@ const val FIXIT_FLAG_LABEL = "Permission fix-it buttons (\"Allow calendar\")"
 const val FIXIT_FLAG_HELP = "When Risi needs a permission it shows one button that asks for it, then finishes your request. On by default for developer accounts."
 const val SKILL_DIAGNOSTICS_LABEL = "Risi skills: show developer details"
 const val SKILL_DIAGNOSTICS_HELP = "Android permission names, sync, the calendar window and counts, error text and Copy diagnostics on the Risi skills page."
+
+/** Proposal 2026-10-15-live-call-latency: "Fast live call transcript" (follows the server unless turned off here). */
+@Composable
+fun LiveFastDevRow(flag: ai.risicloud.risime.data.tabs.LiveFastFlag) {
+    val on by flag.on.collectAsStateWithLifecycle()
+    Row(Modifier.fillMaxWidth().testTag("dev_live_fast"), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(ai.risicloud.risime.data.tabs.LiveFastFlag.LABEL, style = MaterialTheme.typography.bodyMedium)
+            Text(ai.risicloud.risime.data.tabs.LiveFastFlag.HELP, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = on, onCheckedChange = { flag.set(it) }, modifier = Modifier.testTag("dev_live_fast_switch"))
+    }
+}
 
 /** A developer flag's switch (proposal 2026-10-14-permission-fixit §43). */
 @Composable

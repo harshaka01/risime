@@ -3,6 +3,7 @@ package ai.risicloud.risime.calls.transcribe
 import ai.risicloud.risime.calls.CallPhase
 import ai.risicloud.risime.calls.CallSnapshot
 import ai.risicloud.risime.net.ApiResult
+import ai.risicloud.risime.net.CallTranscribeChunkLimits
 import ai.risicloud.risime.net.CallTranscribeActions
 import ai.risicloud.risime.net.CallTranscribeConsent
 import ai.risicloud.risime.net.CallTranscribeErrors
@@ -72,13 +73,21 @@ class CallTranscribeManagerTest {
     private fun snap(official: Boolean, phase: CallPhase = CallPhase.ACTIVE) =
         CallSnapshot(callId, dm, peer, outgoing = true, phase = phase, official = official)
 
-    private fun session(state: String, mine: String = CallTranscribeConsent.ALLOWED, requestedBy: String = me) = CallTranscribeSession(
+    private fun session(
+        state: String,
+        mine: String = CallTranscribeConsent.ALLOWED,
+        requestedBy: String = me,
+        chunk: CallTranscribeChunkLimits = CallTranscribeChunkLimits(),
+    ) = CallTranscribeSession(
         sessionId = "s1", callId = callId, conversationId = grp, state = state, requestedBy = requestedBy,
         startedAt = if (state == CallTranscribeStates.ON) "1970-01-01T00:00:00Z" else null,
         participants = listOf(CallTranscribeConsent(me, mine), CallTranscribeConsent(peer, CallTranscribeConsent.ALLOWED)),
+        chunk = chunk,
     )
 
-    private fun TestScope.setup(official: Boolean): Triple<CallTranscribeManager, Fake, MutableStateFlow<CallSnapshot?>> {
+    private val vadChunk = CallTranscribeChunkLimits(minMs = 1000, maxMs = 4000, mode = "vad", overlapMs = 500)
+
+    private fun TestScope.setup(official: Boolean, liveFast: Boolean = true): Triple<CallTranscribeManager, Fake, MutableStateFlow<CallSnapshot?>> {
         val fake = Fake { testScheduler.currentTime }
         val calls = MutableStateFlow<CallSnapshot?>(snap(official))
         val dispatcher = StandardTestDispatcher(testScheduler)
@@ -87,6 +96,7 @@ class CallTranscribeManagerTest {
             encoder = { pcm, _ -> ByteArray(64) { (pcm.firstOrNull() ?: 0).toByte() } },
             encodeDispatcher = dispatcher,
             nowMs = { testScheduler.currentTime },
+            liveFast = { liveFast },
         )
         m.start()
         runCurrent()
@@ -196,5 +206,39 @@ class CallTranscribeManagerTest {
         assertEquals(1, fake.uploads.size)
         // The fake encoder writes the first sample's low byte: 2000 → 0xD0 (the injected audio, not the mic's 1000 → 0xE8).
         assertEquals(2000.toShort().toByte(), fake.uploads[0].audio[0])
+    }
+
+    @Test
+    fun aFastSessionCutsAtFourSecondsWithOverlap() = runTest {
+        val (m, fake, _) = setup(official = true)
+        m.onSignal(session(CallTranscribeStates.ON, chunk = vadChunk))
+        runCurrent()
+        assertEquals("s1", m.recording.value)
+        // 8 s of steady speech: cut at 4 s, the next one starts 0.5 s before the cut.
+        repeat(8) { CallMicTap.onMicrophone(mic(), 48_000, 1) }
+        runCurrent()
+        assertEquals(listOf(0, 1), fake.uploads.map { it.seq })
+        assertEquals(listOf(4_000L, 4_000L), fake.uploads.map { it.durationMs })
+        assertEquals(listOf(0L, 3_500L), fake.uploads.map { it.offsetMs })
+    }
+
+    @Test
+    fun theDeveloperFlagOffKeepsTwelveSecondChunksInAFastSession() = runTest {
+        val (m, fake, _) = setup(official = true, liveFast = false)
+        m.onSignal(session(CallTranscribeStates.ON, chunk = vadChunk))
+        runCurrent()
+        repeat(13) { CallMicTap.onMicrophone(mic(), 48_000, 1) }
+        runCurrent()
+        assertEquals(listOf(12_000L), fake.uploads.map { it.durationMs })
+    }
+
+    @Test
+    fun anOldServersSessionWithoutModeKeepsTwelveSecondChunks() = runTest {
+        val (m, fake, _) = setup(official = true)
+        m.onSignal(session(CallTranscribeStates.ON))
+        runCurrent()
+        repeat(13) { CallMicTap.onMicrophone(mic(), 48_000, 1) }
+        runCurrent()
+        assertEquals(listOf(12_000L), fake.uploads.map { it.durationMs })
     }
 }

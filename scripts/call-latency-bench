@@ -10,6 +10,8 @@ until the line that carries it would show on the other phones:
               + POST_MS (server post + push to the peers, measured on the pilot: see --post-ms)
 
 Modes:
+  before-chunk  today's chunks and model call, each chunk posted as soon as it is transcribed (no
+          turn merging: the best case of today's path, when the speakers alternate every chunk).
   before  12-s fixed chunks (TranscribeChunker, today), model=auto, priority normal (today's
           server call), one chunk in flight per speaker (the server's queue).
   fast    the VAD chunker (VadChunker.kt: 2-4 s cut at pauses, 0.5 s overlap, keep-alive every
@@ -232,24 +234,39 @@ def transcribe_before(url, k, audio, args):
     return (b or {}).get("text", "") if s == 200 else None, (b or {}).get("model")
 
 
+FAST_BACKOFF = {"until": 0.0}
+
+
 def transcribe_fast(url, k, audio, args):
-    """Speech.Http fast path (RISI_LIVE_FAST): detect, then the language's model."""
+    """Speech.Http.transcribe_fast (RISI_LIVE_FAST): while the fast English model can be served,
+    detect (live) and route en to it, si/ta to auto + language; when the service can't load it
+    (503/404), model=auto at priority live (one request) for 5 min."""
+    def auto(lang=None):
+        f = {"model": "auto", "priority": "live", "response_format": "verbose_json"}
+        if lang:
+            f["language"] = lang
+        s, b = post(url, k, "/v1/audio/transcriptions", f, audio)
+        return (b or {}).get("text", "") if s == 200 else None, (b or {}).get("model")
+
+    if not args.fast_en or time.monotonic() < FAST_BACKOFF["until"]:
+        return auto()
     s, d = post(url, k, "/v1/audio/detect", {"priority": "live"}, audio)
+    if s == 404:
+        return auto()
     if s != 200 or d is None:
         return None, None
     if d.get("reason") == "no_speech":
         return "", None
-    lang = d.get("language") or "en"
-    if lang == "en" and args.fast_en:
+    lang = d.get("language")
+    if lang == "en":
         s, b = post(url, k, "/v1/audio/transcriptions",
                     {"model": args.fast_en, "language": "en", "priority": "live",
                      "response_format": "verbose_json"}, audio)
         if s == 200:
             return b.get("text", ""), b.get("model")
-    s, b = post(url, k, "/v1/audio/transcriptions",
-                {"model": "auto", "language": lang, "priority": "live",
-                 "response_format": "verbose_json"}, audio)
-    return (b or {}).get("text", "") if s == 200 else None, (b or {}).get("model")
+        if s in (404, 503):
+            FAST_BACKOFF["until"] = time.monotonic() + 300
+    return auto(lang)
 
 
 def encode(pcm):
@@ -318,8 +335,9 @@ def build(lang, speakers, rounds, gap_s=0.6):
 
 def run(mode, lang, args, url, k):
     tracks, speech, refs, total = build(lang, args.speakers, args.rounds)
-    chunkers = [FixedChunker() if mode == "before" else VadChunker() for _ in tracks]
-    fn = transcribe_before if mode == "before" else transcribe_fast
+    old = mode.startswith("before")
+    chunkers = [FixedChunker() if old else VadChunker() for _ in tracks]
+    fn = transcribe_before if old else transcribe_fast
     t0 = time.monotonic() + 0.5
     results = [[] for _ in tracks]  # (chunk, line_at, text, model, svc_s, enc_s)
     qs = [queue.Queue() for _ in tracks]

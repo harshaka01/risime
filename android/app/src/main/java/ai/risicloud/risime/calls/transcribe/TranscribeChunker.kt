@@ -18,7 +18,7 @@ class TranscribeChunker(
     private val targetMs: Long = TARGET_MS,
     private val rate: Int = Pcm.RATE,
     private val onChunk: (PcmChunk) -> Unit,
-) {
+) : MicChunker {
     companion object {
         const val MIN_MS = 10_000L
         const val MAX_MS = 15_000L
@@ -44,13 +44,13 @@ class TranscribeChunker(
         private set
 
     /** Starts (or restarts) at [baseOffsetMs] after `started_at`, e.g. when this phone joins the recording late. */
-    fun start(baseOffsetMs: Long) {
+    override fun start(baseOffsetMs: Long) {
         this.baseOffsetMs = baseOffsetMs.coerceAtLeast(0)
         started = true
     }
 
     /** Feeds [n] samples of 16 kHz mono; [muted] feeds silence of the same length (§36.4). */
-    fun feed(pcm: ShortArray, n: Int = pcm.size, muted: Boolean = false) {
+    override fun feed(pcm: ShortArray, n: Int, muted: Boolean) {
         if (!started) return
         var i = 0
         while (i < n) {
@@ -64,7 +64,7 @@ class TranscribeChunker(
     }
 
     /** Feeds [ms] of silence (the microphone delivered nothing: the keep-alive still goes out). */
-    fun padSilence(ms: Long) {
+    override fun padSilence(ms: Long) {
         if (!started || ms <= 0) return
         var left = rate * ms / 1000
         while (left > 0) {
@@ -78,7 +78,7 @@ class TranscribeChunker(
     }
 
     /** Fed duration since start (ms). */
-    val fedMs: Long get() = fedSamples * 1000 / rate
+    override val fedMs: Long get() = fedSamples * 1000 / rate
 
     private fun cut() {
         val out = buf
@@ -90,7 +90,7 @@ class TranscribeChunker(
     }
 
     /** v1.45 §40.9 paused: the partial chunk is dropped and zeroed (it may not be sent). */
-    fun dropPartial() {
+    override fun dropPartial() {
         buf.fill(0)
         fill = 0
     }
@@ -99,7 +99,7 @@ class TranscribeChunker(
      * v1.45 §40.9 back `on` after a pause: the next chunk starts at [offsetMs] after `started_at` (the
      * `seq` goes on, so the server's "strictly increasing" holds); [fedMs] is the silence filler's clock.
      */
-    fun resumeAt(offsetMs: Long, fedMs: Long) {
+    override fun resumeAt(offsetMs: Long, fedMs: Long) {
         dropPartial()
         baseOffsetMs = (offsetMs - cutSamples * 1000 / rate).coerceAtLeast(0)
         fedSamples = fedMs.coerceAtLeast(0) * rate / 1000
@@ -107,7 +107,7 @@ class TranscribeChunker(
     }
 
     /** Stop: the partial chunk is dropped and zeroed (after a final state there is nothing to send). */
-    fun clear() {
+    override fun clear() {
         buf.fill(0)
         fill = 0
         started = false

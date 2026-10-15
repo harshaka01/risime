@@ -46,7 +46,16 @@ data class CallTranscribeChunkLimits(
     @SerialName("min_ms") val minMs: Int = 5000,
     @SerialName("max_ms") val maxMs: Int = 20000,
     @SerialName("max_bytes") val maxBytes: Int = 262144,
-)
+    /** Proposal 2026-10-15-live-call-latency: `"vad"` = a fast session (1–4 s chunks cut at pauses). Absent: 10–15 s. */
+    val mode: String? = null,
+    @SerialName("overlap_ms") val overlapMs: Int? = null,
+) {
+    val vad: Boolean get() = mode == MODE_VAD
+
+    companion object {
+        const val MODE_VAD = "vad"
+    }
+}
 
 /** §36.2 the session of one call attempt. */
 @Serializable

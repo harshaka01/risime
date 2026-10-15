@@ -62,6 +62,11 @@ class CallTranscribeManager(
     private val encodeDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default,
     /** Device clock (ms) for the silence filler. */
     private val nowMs: () -> Long = System::currentTimeMillis,
+    /**
+     * Proposal 2026-10-15-live-call-latency: the developer flag "Fast live call transcript" (on unless a developer
+     * turned it off). When the server asks for VAD chunks and this is on, the [VadChunker] cuts at pauses.
+     */
+    private val liveFast: () -> Boolean = { true },
 ) {
     private val mutex = Mutex()
     private var machine: TranscribeConsentMachine? = null
@@ -237,7 +242,7 @@ class CallTranscribeManager(
         recorder = r
         _recording.value = t.sessionId
         r.start()
-        log("transcribe: recording on (session ${t.sessionId})")
+        log("transcribe: recording on (session ${t.sessionId}${if (r.fast) ", fast" else ""})")
     }
 
     private fun stopRecorder(why: String) {
@@ -271,8 +276,12 @@ class CallTranscribeManager(
             onStop = { a -> onUploadStop(a, target.sessionId, target.callId) },
             log = log,
         )
-        private val chunker = TranscribeChunker { pcm -> encodeAndQueue(pcm) }
+        private val chunker: MicChunker =
+            if (target.vad && liveFast()) VadChunker { pcm -> encodeAndQueue(pcm) } else TranscribeChunker { pcm -> encodeAndQueue(pcm) }
         private var filler: Job? = null
+
+        /** VAD-cut 1–4 s chunks (proposal 2026-10-15-live-call-latency). */
+        val fast: Boolean get() = chunker is VadChunker
 
         init {
             chunker.start(baseFed)
