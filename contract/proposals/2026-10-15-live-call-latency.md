@@ -25,6 +25,13 @@ So a word reaches the peer ≈ 6 s (chunk) + 1.3 s (server) on average when both
 window, and up to 30+ s when one person talks. The speech model is not the bottleneck; the chunk length and the
 turn merging are.
 
+Measured with the change (`scripts/call-latency-bench`, 3 speakers, live pilot speech service; full table in
+`docs/status/ci.md`): speech→line p50 / p95 **en 2.8 / 4.6 s** (end of phrase 1.6 / 2.7 s), **si 2.7 / 4.2 s**,
+**ta 3.1 / 4.8 s** (end of phrase 1.8 / 1.9 s), against 8.6–19 s before. **Open:** short chunks cost accuracy on
+si (CER 3.4 % → 21 %) and ta (14 % → 27 %) on the test clips (en WER 5.3 % → 7.0 %), so the rollout stays
+`canary` until si/ta are tuned (e.g. a longer minimum for si/ta chunks, or a final re-transcribed line); the turbo
+model loads only when the host has memory (today it mostly falls back to large-v3).
+
 ## Proposal (additive)
 
 ### 1. The session says "fast" (§36.2)
