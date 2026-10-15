@@ -11,6 +11,11 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
   carries it as `lang`; each reader's copy carries the language that reader spoke most (else
   `en`); its key points are translated when it differs (`RisiMe.Agent.Ledger`).
 
+  **Long calls** (P0 2026-10-15): the transcript is extracted in sections that fit risi-l1 and
+  reduced to one summary (`RisiMe.Agent.CallTranscribe.Sections`), on both paths; with
+  RISI_ACTION_ITEMS on, a call with items posts its summary card (line and key points) and the
+  `action_items` card.
+
   The transcript comes from the sealed 24-h buffer (`call_seg` rows of the session); the rows
   are deleted after the extraction (§36.8).
   """
@@ -146,6 +151,8 @@ defmodule RisiMe.Agent.CallTranscribe.Summary do
   defp legacy(conv, s, rows, ids, by_speaker) do
     call = %{
       call_id: s.call_id,
+      # P0 2026-10-15: names the session in a "part of this call" line.
+      session_id: s.session_id,
       media: "audio",
       duration_s: duration_s(s),
       transcript:

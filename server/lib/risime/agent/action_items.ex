@@ -49,7 +49,7 @@ defmodule RisiMe.Agent.ActionItems do
     Transcript
   }
 
-  alias RisiMe.Agent.CallTranscribe.{Session, Summary}
+  alias RisiMe.Agent.CallTranscribe.{Sections, Session, Summary}
   alias RisiMe.{Devices, Repo, TimeUUID}
   alias RisiMe.Workers.Risi, as: Job
 
@@ -59,6 +59,8 @@ defmodule RisiMe.Agent.ActionItems do
   @max_romanised 0.25
   @voice_min_ms 5_000
   @max_items 15
+  # P0 2026-10-15: a long call's sections together (each section ≤ 15).
+  @max_call_items 30
   @extra_s 30 * 86_400
   @extras "risi_action_extras"
 
@@ -215,7 +217,9 @@ defmodule RisiMe.Agent.ActionItems do
         reason = gate(rows) -> post_unclear(src, reason)
         # P0 2026-10-14: a call with no action items still gets its summary (the caller falls
         # back to the §27 discussion summary); a voice note with none posts nothing (§38).
-        true -> src |> run(call_lines(src, consenting)) |> none_to(:no_items)
+        # P0 2026-10-15: a call is extracted in sections (map-reduce), and a call with items
+        # gets its discussion summary card too.
+        true -> src |> run_call(s, call_lines(src, consenting)) |> none_to(:no_items)
       end
     else
       :ok
@@ -270,6 +274,7 @@ defmodule RisiMe.Agent.ActionItems do
       sender_id: speaker,
       text: text,
       language: language,
+      at: at,
       ref: ref(src.source, src.call_id, src.session_id, src.note_id, turn, offset || 0, at)
     }
   end
@@ -311,6 +316,84 @@ defmodule RisiMe.Agent.ActionItems do
   defp none_to(:none, value), do: value
   defp none_to(other, _value), do: other
 
+  # P0 2026-10-15 (a long call got items but no summary): the call's lines in sections that fit
+  # risi-l1 (`Sections`), one extraction per section (items and key points), the sections'
+  # summaries reduced to one, the items merged and de-duplicated. A failed section is skipped
+  # and named in one line; when every section fails, the error (the job retries).
+  defp run_call(_src, _s, []), do: :none
+
+  defp run_call(src, s, lines) do
+    sections = Sections.split(lines, & &1.at)
+    n = length(sections)
+
+    {oks, failed} = Sections.map(sections, fn sec, i -> extract(src, sec, section: {i, n}) end)
+
+    cond do
+      Enum.any?(failed, fn {_i, r} -> r == :rate_limited end) ->
+        {:snooze, 30}
+
+      oks == [] ->
+        {_i, reason} = hd(failed)
+        {:error, reason}
+
+      true ->
+        found = merge_sections(src, Enum.map(oks, &elem(&1, 1)))
+
+        if found.items == [] do
+          :none
+        else
+          result = store_and_publish(src, found)
+
+          if failed != [] and result == :ok do
+            spans = for {i, _} <- failed, do: span(Enum.at(sections, i - 1))
+            Summary.say(src.conv, s, Sections.gap_text(spans, src.started_at))
+          end
+
+          result
+        end
+    end
+  end
+
+  defp span(sec), do: {hd(sec).at, List.last(sec).at}
+
+  @doc false
+  # The sections' results as one: items in call order, de-duplicated (kind, owner, text); one
+  # summary and its key points (`Sections.reduce/2`, never empty when items were found).
+  def merge_sections(src, founds) do
+    items =
+      founds
+      |> Enum.flat_map(& &1.items)
+      |> Enum.uniq_by(&{&1.kind, &1.owner, String.downcase(&1.text)})
+      |> Enum.take(@max_call_items)
+
+    parts = Enum.map(founds, &%{key_points: &1[:key_points] || [], summary: &1.summary})
+
+    base = %{
+      conversation_id: src.conv,
+      chat_id: Secretary.chat_id(src.conv),
+      lang: src.lang,
+      meta: %{"source" => src.source, "call_id" => src.call_id, "session_id" => src.session_id}
+    }
+
+    r = Sections.reduce(base, parts)
+
+    {points, summary} =
+      cond do
+        r.key_points != [] -> {r.key_points, r.summary || String.slice(hd(r.key_points), 0, 280)}
+        r.summary != nil -> {[String.slice(r.summary, 0, 200)], r.summary}
+        items != [] -> {["Follow-ups were agreed."], "Follow-ups were agreed."}
+        true -> {[], nil}
+      end
+
+    %{
+      items: items,
+      key_points: points,
+      summary: summary,
+      lang: src.lang,
+      call_ref: r.call_ref || hd(founds).call_ref
+    }
+  end
+
   defp run(_src, []), do: :none
 
   defp run(src, lines) do
@@ -328,8 +411,9 @@ defmodule RisiMe.Agent.ActionItems do
   conversation's members; opted-out speakers are never owners) or `{:error, reason}`. Stores and
   posts nothing (the dev preview uses it as it is).
   """
-  def extract(src, lines) do
+  def extract(src, lines, opts \\ []) do
     conv = src.conv
+    section = opts[:section]
     members = Secretary.members(conv)
     tzs = Clock.user_tzs(Enum.map(members, & &1.user_id))
     tz = Secretary.chat_tz(conv)
@@ -341,10 +425,10 @@ defmodule RisiMe.Agent.ActionItems do
       task: "extract_actions",
       conversation_id: conv,
       chat_id: Secretary.chat_id(conv),
-      system: Prompts.action_system(src.source),
+      system: Prompts.action_system(src.source, section),
       user: text,
       schema_name: "action_items",
-      schema: Prompts.action_schema(),
+      schema: Prompts.action_schema(src.source),
       source_message_ids: if(src.note_id, do: [src.note_id], else: []),
       max_tokens: 2_000,
       confidence: &confidence/1,
@@ -356,7 +440,9 @@ defmodule RisiMe.Agent.ActionItems do
         "lang" => src.lang,
         "turns" => src[:turns],
         "lines" => length(lines),
-        "audio_s" => src.audio_s
+        "audio_s" => src.audio_s,
+        "section" => section && elem(section, 0),
+        "sections" => section && elem(section, 1)
       },
       # §38.7: counts per kind and per owner, never text.
       log_output: &counts(&1, refs)
@@ -390,7 +476,17 @@ defmodule RisiMe.Agent.ActionItems do
               |> String.slice(0, 280)
               |> nonempty()
 
-        {:ok, %{items: items, summary: summary, lang: src.lang, call_ref: call_ref}}
+        key_points =
+          if src.source == "call", do: Sections.clean_points(out["key_points"]), else: []
+
+        {:ok,
+         %{
+           items: items,
+           summary: summary,
+           key_points: key_points,
+           lang: src.lang,
+           call_ref: call_ref
+         }}
 
       {:error, reason} ->
         {:error, reason}
@@ -498,7 +594,7 @@ defmodule RisiMe.Agent.ActionItems do
       ended_at: Clock.usec(src.ended_at || src.started_at),
       participants: src.participants,
       recipients: recipients,
-      key_points: [],
+      key_points: found[:key_points] || [],
       summary: found.summary || "",
       items_count: length(found.items),
       call_ref: found.call_ref,
@@ -632,6 +728,11 @@ defmodule RisiMe.Agent.ActionItems do
 
   defp publish(d, found, src) do
     names = Map.new(Secretary.members(d.conversation_id), &{&1.user_id, &1.name})
+
+    # P0 2026-10-15: a call's discussion summary (the §35.4 summary card: its one line and key
+    # points) is posted with its action items; the items alone are never the whole summary.
+    if d.source == "call" and d.key_points != [], do: LedgerOut.summary_card(d)
+
     {body, risi} = card(d, found.items, src, names)
 
     case Out.post(d.conversation_id, body, risi) do

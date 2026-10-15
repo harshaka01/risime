@@ -30,7 +30,10 @@ WKEY="$(grep -E '^WHISPER_API_KEY=' "$REPO/.env" 2>/dev/null | tail -1 | cut -d=
 [ -n "$WKEY" ] || fail "summary: WHISPER_API_KEY missing from .env"
 umask 077
 { echo "RISI_CALL_TRANSCRIBE=on"; echo "RISI_LEDGER=on"; echo "RISI_ACTION_ITEMS=canary"; echo "RISI_DEV_USERS=${CSIDS[0]}"
-  echo "WHISPER_API_KEY=$WKEY"; echo "RISI_SPEECH_URL=http://127.0.0.1:8200"; } >> "$WORK/risi.env"
+  echo "WHISPER_API_KEY=$WKEY"; echo "RISI_SPEECH_URL=http://127.0.0.1:8200"
+  # P0 2026-10-15: CS_SECTION_S-second sections, so these one-minute calls take the long-call (map-reduce) path that a
+  # 30-min call takes with the pilot's 600-s sections. CS_SECTION_S=0 keeps the pilot's sections (one per call here).
+  [ "${CS_SECTION_S:-20}" != 0 ] && echo "RISI_CALL_SECTION_S=${CS_SECTION_S:-20}"; } >> "$WORK/risi.env"
 umask 022
 unset WKEY
 
@@ -40,7 +43,8 @@ llm_script() {  # <tag> <items 0|1>
   [ "$2" = 1 ] && items='[{"kind":"task","text":"Send the revised quote '"$tag"'i","owner":null,"counterparts":[],"due_local":null,"due_text":"Friday","source":["m1"],"lang":"en","confidence":0.9}]'
   cat > "$WORK/cs-llm-$tag.json" <<JSON
 {"v": 1, "rules": [
-  {"name": "actions", "task": "action_items", "actions": [{"summary": "${tag}s The call covered the office meeting and the quote.", "items": $items}]},
+  {"name": "actions", "task": "action_items", "actions": [{"summary": "${tag}s The call covered the office meeting and the quote.", "key_points": ["${tag}p The office meeting and the quote were discussed."], "items": $items}]},
+  {"name": "reduce", "task": "call_summary", "actions": [{"key_points": ["${tag}r The whole call: the office meeting and the revised quote."], "summary": "${tag}r Office meeting and the revised quote."}]},
   {"name": "discussion", "task": "discussion_summary", "actions": [{"key_points": ["${tag}k The team meets at the office tomorrow at ten.", "${tag}k The revised quote goes out on Friday."], "summary": "${tag}d Office meeting and the revised quote.", "items": []}]}
 ]}
 JSON
@@ -239,7 +243,20 @@ official_run() {  # <tag> <items 0|1> <clip> <reps> <words regex> <label>
 
 # 4a. One action item: the action_items card with the item, on both phones.
 official_run cs1 1 en 4 'office|quote|friday|meet|revised' "official (1 item)"
-await_card "official (1 item)" 'cs1i|cs1s|cs1k|cs1d'
+await_card "official (1 item)" 'cs1i|cs1s|cs1k|cs1d|cs1p|cs1r'
+# P0 2026-10-15: a call with an action item gets its discussion summary card (key points) too, not only the items.
+for DEV in A B; do
+  ok=""; to_bottom; for _ in $(seq 1 10); do dump; grep -qE 'cs1p The office|cs1r The whole call' "$WORK/ui-$DEV.xml" && { ok=1; break; }; A shell input swipe 540 900 540 1300 300; sleep 1; done
+  [ -n "$ok" ] || { csshot "1-item-no-summary-$DEV"; fail "official (1 item): $DEV shows the items but no discussion summary card (key points)"; }
+  for _ in 1 2 3 4 5; do to_bottom; done   # back to the newest posts for the item check below
+done
+pass "official (1 item): the discussion summary card (key points) is there with the action items on both phones"
+if [ "${CS_SECTION_S:-20}" != 0 ]; then
+  na="$(grep -cE '"name": ?"action_items"' "$WORK/llm-requests.jsonl" || true)"; nr="$(grep -cE '"name": ?"call_summary"' "$WORK/llm-requests.jsonl" || true)"
+  [ "$na" -ge 2 ] && [ "$nr" -ge 1 ] || fail "official (1 item): the call wasn't summarised in sections (${CS_SECTION_S:-20}-s sections: $na action_items requests, $nr reduce requests)"
+  grep -qF 'cs1r The whole call' "$WORK/ui-A.xml" "$WORK/ui-B.xml" 2>/dev/null || echo "CALLTEST WARN official (1 item): the reduced summary (cs1r) isn't on screen; the section's own points are"
+  pass "official (1 item): long-call path: $na section extractions and $nr reduce for one card (sections of ${CS_SECTION_S:-20} s)"
+fi
 for DEV in A B; do
   ok=""; for _ in 1 2 3 4 5 6; do dump; grep -qF 'Send the revised quote cs1i' "$WORK/ui-$DEV.xml" && { ok=1; break; }; A shell input swipe 540 900 540 1300 300; sleep 1; done
   [ -n "$ok" ] || fail "official (1 item): $DEV's card doesn't show the action item"
@@ -251,9 +268,9 @@ lines_check "official (1 item)" 'office|quote|friday|meet|revised'
 
 # 4b. Zero action items: still a summary card (the P0 regression).
 official_run cs2 0 jfk 2 'country|ask|fellow|americans|what' "official (0 items)"
-await_card "official (0 items)" 'cs2k|cs2d|cs2s'
+await_card "official (0 items)" 'cs2k|cs2d|cs2s|cs2r'
 for DEV in A B; do csshot "0-items-$DEV"; done
-DEV=A; dump; grep -qE 'cs2[dk]' "$WORK/ui-$DEV.xml" && kind="the §27 discussion card" || kind="an action_items card with no items"
+DEV=A; dump; grep -qE 'cs2[dkr]' "$WORK/ui-$DEV.xml" && kind="the §27 discussion card" || kind="an action_items card with no items"
 pass "official (0 items): zero action items still give the summary card on both phones ($kind)"
 lines_check "official (0 items)" 'country|ask|fellow|americans|what'
 
@@ -282,7 +299,7 @@ pass "stopped: Stop removed the bar on both phones, the call went on, nothing up
 DEV=A; csshot stopped-call
 end_call
 no_leftovers "stopped"
-await_card "stopped" 'cs3i|cs3s|cs3k|cs3d'
+await_card "stopped" 'cs3i|cs3s|cs3k|cs3d|cs3p|cs3r'
 for DEV in A B; do
   ok=""; for _ in $(seq 1 20); do to_bottom; dump; grep -qF 'transcription was turned off after that' "$WORK/ui-$DEV.xml" && { ok=1; break; }; sleep 1; done
   [ -n "$ok" ] || { for _ in 1 2 3; do A shell input swipe 540 900 540 1300 300; sleep 1; dump; grep -qF 'transcription was turned off after that' "$WORK/ui-$DEV.xml" && { ok=1; break; }; done; }

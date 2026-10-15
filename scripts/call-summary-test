@@ -8,7 +8,13 @@
 #  2. Official call (~60 s, English clips injected on both phones through the debug MIC_INJECT seam, transcription
 #     asked by A and allowed by B), End → within CS_SUMMARY_S (30) s the summary card is in the Official chat on BOTH
 #     phones; the live transcript lines of both speakers are there. Run 1: the model finds one action item → the
-#     action_items card shows it. Run 2: zero items → still a summary card (the P0 regression).
+#     action_items card shows it, AND the discussion summary card (key points) is there too (P0 2026-10-15: a long
+#     call got items but no summary). Run 2: zero items → still a summary card (the P0 regression).
+#     Long call (P0 2026-10-15): the server runs RISI_CALL_SECTION_S=CS_SECTION_S (20) so these ~1-min calls are
+#     summarised in sections and reduced to one card, the path a 30-min call takes with the pilot's 600-s sections;
+#     run 1 checks ≥ 2 section extractions and 1 reduce in the fake LLM's record. A real 30-min call would hold the
+#     gate for 30 min: the 30-min transcript itself is server-tested (server/test/risime/agent/
+#     call_summary_long_call_test.exs). CS_SECTION_S=0 runs with the pilot's sections.
 #  3. Official call, A turns transcription off (Stop) while the call goes on, then End → the summary card plus Risi's
 #     "Summary of the first … min; transcription was turned off after that." on both phones.
 #  No FATAL / ANR / main-thread DB on either phone; no call left behind.
@@ -18,7 +24,7 @@
 # Prints "CSTEST PASS|FAIL|WARN …" lines and "CSTEST OK" at the end; exit 1 on a failure. Screenshots:
 # docs/status/screens/66-call-summary-*.png; diagnostics in ~/risime-logs/calltest_cs/. Never touches :4000.
 # Own instance and ports (never the nightly's CALLTEST_* values): CS_INSTANCE (_cs), CS_PORT (4414), CS_LLM_PORT (8191),
-# CS_REDROID_A/B (-cs1/-cs2), CS_REDROID_A/B_PORT (5755/5756), CS_CLIP_PORT (8767), CS_SUMMARY_S (30).
+# CS_REDROID_A/B (-cs1/-cs2), CS_REDROID_A/B_PORT (5755/5756), CS_CLIP_PORT (8767), CS_SUMMARY_S (30), CS_SECTION_S (20).
 set -euo pipefail
 args=(); while [ $# -gt 0 ]; do
   if [ "$1" = --apk ] && [ $# -gt 1 ]; then args+=(--apk "$(realpath "$2")"); shift 2; else args+=("$1"); shift; fi
@@ -35,7 +41,7 @@ export CALLTEST_PORT="${CS_PORT:-4414}"
 export CALLTEST_LLM_PORT="${CS_LLM_PORT:-8191}"
 export CALLTEST_REDROID_A="${CS_REDROID_A:--cs1}" CALLTEST_REDROID_A_PORT="${CS_REDROID_A_PORT:-5755}"
 export CALLTEST_REDROID_B="${CS_REDROID_B:--cs2}" CALLTEST_REDROID_B_PORT="${CS_REDROID_B_PORT:-5756}"
-export CS_CLIP_PORT="${CS_CLIP_PORT:-8767}" CS_SUMMARY_S="${CS_SUMMARY_S:-30}"
+export CS_CLIP_PORT="${CS_CLIP_PORT:-8767}" CS_SUMMARY_S="${CS_SUMMARY_S:-30}" CS_SECTION_S="${CS_SECTION_S:-20}"
 for p in "$CALLTEST_PORT" "$CALLTEST_LLM_PORT" "$CS_CLIP_PORT" "$CALLTEST_REDROID_A_PORT" "$CALLTEST_REDROID_B_PORT"; do
   ss -ltnH "sport = :$p" | grep -q . && { echo "CSTEST FAIL port $p is busy (set the CS_* port variables)"; exit 2; }
 done
