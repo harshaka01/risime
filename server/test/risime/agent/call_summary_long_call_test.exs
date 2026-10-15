@@ -183,7 +183,7 @@ defmodule RisiMe.Agent.CallSummaryLongCallTest do
 
     assert tasks() == ["action_items"]
     {body, card} = await_post(w.og, "discussion_card")
-    assert card["source"] == "call" and card["summary"] == "Part 1: the quote."
+    assert card["source"] == "call" and card["summary"] == "Part 1: the quote. — Point of part 1."
     assert card["key_points"] == ["Point of part 1."]
     assert body =~ "Summary: Part 1: the quote.\n• Point of part 1."
 
@@ -211,7 +211,10 @@ defmodule RisiMe.Agent.CallSummaryLongCallTest do
         do: assert(hd(r["messages"])["content"] =~ "part #{i} of 3")
 
     {_body, card} = await_post(w.og, "discussion_card")
-    assert card["summary"] == "The revised quote and its transport cost."
+
+    assert card["summary"] ==
+             "The revised quote and its transport cost. — The quote was revised; Transport cost is open."
+
     assert card["key_points"] == ["The quote was revised.", "Transport cost is open."]
     refute_post(w.og, "discussion_card")
 
@@ -232,7 +235,10 @@ defmodule RisiMe.Agent.CallSummaryLongCallTest do
     assert :ok = job(w, s)
 
     {_body, card} = await_post(w.og, "discussion_card")
-    assert card["summary"] == "The revised quote and its transport cost."
+
+    assert card["summary"] ==
+             "The revised quote and its transport cost. — The quote was revised; Transport cost is open."
+
     {_body, items} = await_post(w.og, "action_items")
     assert Enum.map(items["items"], & &1["text"]) == ["Send the revised quote"]
 
@@ -248,7 +254,10 @@ defmodule RisiMe.Agent.CallSummaryLongCallTest do
 
     {_body, card} = await_post(w.og, "discussion_card")
     assert card["key_points"] == ["Point of part 1.", "Point of part 2.", "Point of part 3."]
-    assert card["summary"] == "Part 1: the quote. Part 2: the quote. Part 3: the quote."
+
+    assert card["summary"] ==
+             "Part 1: the quote. Part 2: the quote. Part 3: the quote. — Point of part 1; Point of part 2; Point of part 3."
+
     {_body, _items} = await_post(w.og, "action_items")
   end
 
@@ -276,7 +285,10 @@ defmodule RisiMe.Agent.CallSummaryLongCallTest do
            ]
 
     {_body, card} = await_post(w.og, "discussion_card")
-    assert card["summary"] == "The revised quote and its transport cost."
+
+    assert card["summary"] ==
+             "The revised quote and its transport cost. — The quote was revised; Transport cost is open."
+
     refute_post(w.og, "discussion_card")
     refute_post(w.og, "action_items")
   end
@@ -319,6 +331,18 @@ defmodule RisiMe.Agent.CallSummaryLongCallTest do
     {_body, _card} = await_post(w.og, "discussion_card")
     {_body, copy} = await_post(rca, "discussion_summary")
     assert copy["key_points"] == ["Only talk."] and copy["items"] == []
+  end
+
+  test "the card line: the summary, then the key points that fit in 280 characters" do
+    alias RisiMe.Agent.LedgerOut
+
+    assert LedgerOut.card_line("Quote talk.", ["Quote talk", "Price is 45000."]) ==
+             "Quote talk. — Price is 45000."
+
+    assert LedgerOut.card_line("Quote talk.", []) == "Quote talk."
+    long = for i <- 1..8, do: "Point #{i} " <> String.duplicate("x", 50)
+    line = LedgerOut.card_line("Quote talk.", long)
+    assert String.length(line) <= 280 and line =~ "Point 1" and not (line =~ "Point 8")
   end
 
   test "sections: at most max_chars of text and max_span_s of call time each" do

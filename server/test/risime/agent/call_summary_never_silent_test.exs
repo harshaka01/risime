@@ -84,7 +84,10 @@ defmodule RisiMe.Agent.CallSummaryNeverSilentTest do
     assert :ok = summary_job(w, sid)
 
     {_body, card} = await_post(w.og, "discussion_card")
-    assert card["source"] == "call" and card["summary"] == "Quote talk."
+
+    assert card["source"] == "call" and
+             card["summary"] == "Quote talk. — The quote needs the transport cost."
+
     assert [%Discussion{source: "call"}] = Repo.all(Discussion)
     assert Summary.segments(w.og, session!(sid)) == []
   end

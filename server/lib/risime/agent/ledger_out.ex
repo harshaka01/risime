@@ -312,7 +312,8 @@ defmodule RisiMe.Agent.LedgerOut do
       "started_at" => Clock.ts(d.started_at),
       "ended_at" => Clock.ts(d.ended_at),
       "with" => d.participants,
-      "summary" => d.summary,
+      "summary" =>
+        if(d.source == "call", do: card_line(d.summary, d.key_points), else: d.summary),
       "key_points" => d.key_points,
       "items_count" => 0,
       "call_ref" => d.call_ref,
@@ -329,6 +330,31 @@ defmodule RisiMe.Agent.LedgerOut do
       {:ok, _} -> :ok
       {:error, reason} -> Logger.warning("Risi summary card not sent: #{inspect(reason)}")
     end
+  end
+
+  @doc """
+  P0 2026-10-15: a call's summary card line: its one-line summary, then as many key points as
+  fit, " — a; b; c", at most 280 characters (§27.4: one line). The phones show this card's
+  `summary` only (not `key_points`), so the call's key points are read here. Points that repeat
+  the summary are left out.
+  """
+  def card_line(summary, points) do
+    summary = summary |> to_string() |> String.trim()
+    norm = &(&1 |> String.downcase() |> String.trim_trailing("."))
+
+    points =
+      points
+      |> Enum.map(&(&1 |> to_string() |> String.replace(~r/\s+/, " ") |> String.trim()))
+      |> Enum.reject(&(&1 == "" or norm.(&1) == norm.(summary)))
+
+    Enum.reduce_while(points, {summary, ""}, fn p, {line, sep} ->
+      sep = if sep == "", do: " — ", else: "; "
+      next = line <> sep <> String.trim_trailing(p, ".")
+      if String.length(next) <= 279, do: {:cont, {next, sep}}, else: {:halt, {line, sep}}
+    end)
+    |> elem(0)
+    |> then(fn l -> if l == summary or String.ends_with?(l, "."), do: l, else: l <> "." end)
+    |> String.slice(0, 280)
   end
 
   defp card(d, n) do
