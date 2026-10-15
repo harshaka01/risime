@@ -64,6 +64,12 @@ stored), the write went `void`; the model then made a Risi Calendar card: 14:15:
   sets the `calendar_add`/`risi_calendar_add` start/end before the tool runs and the action draft's slots (the day
   too when the words name one); a Call Risi write without a day asks "Which day should I put it on?" and never
   takes the day of an earlier read. Tests: `test/risime/agent/time_range_test.exs`, call_3_test.
+- **srv13 live 16:35Z** (first fast-lane try failed on a flaky `ActionItemsTest` setup, `with_attestation_key`
+  `{:error, :exists}`; the retry passed 1131/0). Device on srv13: chat pass 10/10 (run 20261015T163925Z); call 3
+  drafts "Discuss about RISD, tomorrow, 10 am to 12 pm", the racing correction 9 to 10 am, "That's correct" →
+  "Added …" (row done); call 4 added by voice. The turn path's guard fired once correctly (the correction turn's
+  model said it had updated the event while its card was pending). Open: STT spelled "The Sixteenth" and the
+  day parser doesn't read word ordinals ("Was that for me?").
 - Tests: `test/risime/agent/call_risi/call_3_test.exs` (the replay, call 4 voice confirm, units),
   `test/risime/agent/claim_guard_test.exs` (10 adversarial prompts); question set 52/52 with
   `harsha-2026-10-15-call-3`. Device: `pilot-device-test` seeds an all-day "Family day" on the 18th and turns on the
