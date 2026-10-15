@@ -75,3 +75,23 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
 3. Calendar v2: the app half (branch calendar-v2) is not on main; finish it and its gate, then switch on for everyone.
 4. DB rename risime_dev → prod (Harsha's conditions: verified backup, rule-9 counts before/after, roll back on any
    mismatch, message him).
+
+## Harsha 2026-10-16 04:49 / 04:52 SLT
+- **Voice pick:** A, Kokoro (for now). Live already: the call voice is `kokoro:af_heart`, the sampled voice. No change needed.
+- **URGENT hearing hotfix (in progress):** server srvN (VAD gate, no-speech/low-logprob drops, hallucination
+  phrases, no STT during Risi's speech, "Sorry, I didn't catch that") and APK `0.3.0-nightly.11-hotfix`
+  (contract v1.53 §41.10, on-device English STT), with only this in it. Gates: compile, unit tests,
+  upgrade/rule 9, one real Call Risi test with his 04:4x call script. Other gates skipped by Harsha; say so in
+  the notes.
+- **NEXT, after the hotfix: ADMIN SWITCHBOARD** (/admin, admins only, per user, live within 5 s, audited):
+  - call voice: Kokoro / Chatterbox-Turbo / Dia2 / Orpheus, with stock voice, measured latency and a "too slow
+    for calls" warning;
+  - call STT: phone on-device / server Whisper large-v3 / turbo;
+  - brain model: risi-l1 / candidates once evaluated;
+  - "Apply to: only me / all users", default only me.
+  - Admin sign-in: Keycloak step B (redirect URI) is still missing. Checked 23:4xZ: "Invalid parameter:
+    redirect_uri".
+- Chatterbox-Turbo samples resent to his Risi chat (23:4xZ). All 4 engines had posted at 17:34Z, so the cause
+  of the missing message is unknown: check the app's handling of 4 Risi posts in the same second.
+- Deferred from the 23:14Z call (not hearing): the empty "Fri 16 Oct:" card during a call, the brief
+  BadBooleanError, one 4.8-s chat turn, side-talk replies, the "for two" → 2 pm write.
