@@ -33,7 +33,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   result up.
   """
 
-  alias RisiMe.Agent.CallRisi.{Fillers, LLMStream, Sentences, Spoken}
+  alias RisiMe.Agent.CallRisi.{Fillers, LLMStream, PhoneCalendar, Sentences, Spoken}
   alias RisiMe.Agent.{Clock, ScheduleIntent}
 
   # The 25 s tool budget (tests shorten it: `config :risime, :risi_call_tool_wait_ms`).
@@ -57,7 +57,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   @doc """
   Runs the turn. `ctx`: `%{pid, utt, conv, call_id, user_id, device_id, history, filler_n, tools?}`
   and optionally `topic` (the call's last tool topic), `once` (the once-per-call lines already
-  said), `titles` (`(start_utc, end_utc) -> title | nil`, speech only) and `caps` (the tool names
+  said), `cal?` (the device may send its titles, §41.8) and `caps` (the tool names
   for "what can you do?"; default: the registry's for this user). `wav` is the utterance (16 kHz
   mono WAV, in memory, dropped after STT); `prefix` is the text of an earlier utterance of the same
   turn that got no answer yet (the user paused and went on).
@@ -260,11 +260,15 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     if route == "calendar_read" and range,
       do: report(ctx, {:topic, %{route: route, range: range}})
 
+    # §41.8: the phone's titles for this one answer, asked at once (in parallel with the turn).
+    cal = if route == "calendar_read" and range, do: cal_request(ctx, range)
+
     # Linked: when the session kills this task (barge-in, a new question) the §25 turn dies too
     # and its per-user lock (§25.6) is released. Trapping exits keeps a crash of the turn honest.
     Process.flag(:trap_exit, true)
     deadline = System.monotonic_time(:millisecond) + tool_wait_ms()
     inner = start_inner(ctx, env, request_id)
+    ctx = Map.put(ctx, :cal, cal)
 
     wait_answer(
       %{ctx: ctx, rid: request_id, env: env, inner: inner, deadline: deadline},
@@ -273,6 +277,61 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       nil
     )
   end
+
+  # Contract v1.52 §41.8: only for a device with `call_risi_cal` (the session's `cal?`). The
+  # session sends the Port command; the phone's reply comes back as `{:call_risi_cal, ev}`.
+  defp cal_request(ctx, range) do
+    if Map.get(ctx, :cal?) == true do
+      now = Clock.now()
+      tz = Clock.user_tz(ctx.user_id)
+
+      from =
+        if range[:now?],
+          do: now,
+          else: Clock.to_utc(NaiveDateTime.new!(range.from, ~T[00:00:00]), tz)
+
+      to = Clock.to_utc(NaiveDateTime.new!(range.to, ~T[00:00:00]), tz)
+      max = DateTime.add(from, 8 * 86_400, :second)
+      to = if DateTime.compare(to, max) == :gt, do: max, else: to
+      off = PhoneCalendar.offset_s(now, Clock.local(now, tz))
+
+      case PhoneCalendar.request(from, to, offset_s: off) do
+        {:ok, cmd} ->
+          report(ctx, {:cal_req, cmd})
+          %{cmd: cmd, t0: System.monotonic_time(:millisecond)}
+
+        _ ->
+          nil
+      end
+    end
+  rescue
+    _ -> nil
+  end
+
+  # The phone's events for this answer (at most the 2 s since the request), or an error.
+  defp cal_events(%{cmd: cmd, t0: t0}) do
+    left = max(PhoneCalendar.timeout_ms() - (System.monotonic_time(:millisecond) - t0), 0)
+    PhoneCalendar.await(cmd, left)
+  end
+
+  defp cal_events(_), do: {:error, "off"}
+
+  # `(start_utc, end_utc) -> title | nil` over the phone's events (same start and end; else the
+  # same start).
+  defp titles_fn({:ok, events}) when events != [] do
+    unix = fn s ->
+      case DateTime.from_iso8601(to_string(s)) do
+        {:ok, d, _} -> DateTime.to_unix(d)
+        _ -> nil
+      end
+    end
+
+    exact = Map.new(events, &{{DateTime.to_unix(&1.start), DateTime.to_unix(&1.end)}, &1.title})
+    starts = Map.new(events, &{DateTime.to_unix(&1.start), &1.title})
+    fn s, e -> exact[{unix.(s), unix.(e)}] || starts[unix.(s)] end
+  end
+
+  defp titles_fn(_), do: nil
 
   defp start_inner(ctx, env, request_id) do
     me = self()
@@ -344,27 +403,33 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   ## The spoken answer
 
   defp speak_answer(ctx, _answer, %{ok?: _} = facts, question) do
-    titles = Map.get(ctx, :titles)
+    # §41.8: the phone's titles live only in this process, for this one answer.
+    cal = if facts.ok?, do: cal_events(Map.get(ctx, :cal)), else: {:error, "off"}
+    titles = titles_fn(cal)
     {rendered, missing?} = Spoken.render(facts, titles: titles)
+    log = if Map.get(ctx, :cal), do: PhoneCalendar.log_fields(cal), else: %{}
 
     text =
       if facts.ok?,
-        do: phrase(ctx, rendered, question, Spoken.titles(facts, titles)),
+        do: phrase(ctx, rendered, question, Spoken.titles(facts, titles), log),
         else: rendered
 
-    # What the transcript keeps: never a title from the phone (times only).
-    stored =
-      if Spoken.titled?(facts, titles),
-        do: elem(Spoken.render(facts, titles: nil), 0),
-        else: nil
-
     note =
-      if missing? and
-           once(ctx, :titles_note, fn -> :ok end),
-         do: " I can see the times; the titles stay on your phone.",
-         else: ""
+      if missing? and once(ctx, :titles_note, fn -> :ok end),
+        do: " " <> PhoneCalendar.times_only_note(),
+        else: ""
 
-    say_text(ctx, text <> note, stored && stored <> note)
+    # What the transcript keeps: never a title from the phone (the times-only rendering, then
+    # PhoneCalendar's redaction as a second guard; `titles_spoken` marks the line).
+    stored =
+      if Spoken.titled?(facts, titles) do
+        {:ok, events} = cal
+        times = elem(Spoken.render(facts, titles: nil), 0) <> note
+        {safe, _} = PhoneCalendar.redact(times, events)
+        %{text: safe, titles_spoken: true}
+      end
+
+    say_text(ctx, text <> note, stored)
   end
 
   defp speak_answer(ctx, answer, _facts, _question) do
@@ -385,10 +450,17 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   end
 
   # risi-l1 phrases the rendering; its text is used only when `Spoken.checked/3` passes.
-  defp phrase(ctx, rendered, question, titles) do
+  defp phrase(ctx, rendered, question, titles, log_meta) do
     buf = {__MODULE__, :phrase}
     Process.put(buf, "")
-    opts = [conversation_id: ctx.conv, call_id: ctx.call_id, max_tokens: 160, timeout: 8_000]
+
+    opts = [
+      conversation_id: ctx.conv,
+      call_id: ctx.call_id,
+      max_tokens: 160,
+      timeout: 8_000,
+      log_meta: log_meta
+    ]
 
     said =
       case LLMStream.run(Spoken.compose_messages(rendered, question), opts, fn d ->

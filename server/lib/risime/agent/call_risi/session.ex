@@ -79,6 +79,13 @@ defmodule RisiMe.Agent.CallRisi.Session do
            topic: nil,
            once: MapSet.new(),
            last_user: nil,
+           # v1.52 §41.8: the caller's phone can send its meeting titles for a voice answer;
+           # `cal_wait` is the one open request `{id, brain pid}` (titles never stored here).
+           cal?:
+             Map.get_lazy(args, :cal?, fn ->
+               CallRisi.PhoneCalendar.capable?(args.user_id, args.device_id)
+             end),
+           cal_wait: nil,
            barge_ins: 0,
            ended?: false
          }}
@@ -168,8 +175,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
       tools?: Map.get(st.args, :tools?, true),
       topic: st.topic,
       once: st.once,
-      # The hook for the phone's titles (speech only; root's contract change): nil until then.
-      titles: Map.get(st.args, :titles),
+      cal?: st.cal?,
       caps: Map.get(st.args, :caps)
     }
 
@@ -196,6 +202,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
           case store do
             :skip -> st
             s when is_binary(s) -> add_line(st, :risi, s, kind, utt)
+            %{text: s} -> titled_line(add_line(st, :risi, s, kind, utt))
             _ -> add_line(st, :risi, text, kind, utt)
           end
 
@@ -213,6 +220,14 @@ defmodule RisiMe.Agent.CallRisi.Session do
     record(t, st, :ok)
     {:noreply, %{st | turn: nil}}
   end
+
+  # §41.8: the phone's reply goes only to the brain that asked (matching id); never logged.
+  defp media(%{"ev" => "cal", "id" => id} = ev, %{cal_wait: {id, pid}} = st) do
+    if is_pid(pid), do: send(pid, {:call_risi_cal, ev})
+    {:noreply, %{st | cal_wait: nil}}
+  end
+
+  defp media(%{"ev" => "cal"}, st), do: {:noreply, st}
 
   defp media(%{"ev" => "error", "code" => code}, st) do
     Logger.warning("call risi: worker error #{inspect(code)} call=#{st.args.call_id}")
@@ -241,6 +256,12 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp brain({:first_token, ms}, st), do: {:noreply, put_in(st.turn.first_token_ms, ms)}
   defp brain({:topic, topic}, st), do: {:noreply, %{st | topic: topic}}
   defp brain({:once, key}, st), do: {:noreply, %{st | once: MapSet.put(st.once, key)}}
+
+  # §41.8: the brain's titles request goes to the worker (published to the caller only).
+  defp brain({:cal_req, %{"cmd" => "cal_req", "id" => id} = cmd}, st) do
+    Media.impl().command(st.media, cmd)
+    {:noreply, %{st | cal_wait: {id, st.turn.pid}}}
+  end
 
   defp brain({:piece, text, kind}, st), do: brain({:piece, text, kind, nil}, st)
 
@@ -316,6 +337,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
       case store do
         :skip -> st.turn.stored
         s when is_binary(s) -> [s | st.turn.stored]
+        %{text: s} -> [s | st.turn.stored]
         _ -> [text | st.turn.stored]
       end
 
@@ -328,6 +350,10 @@ defmodule RisiMe.Agent.CallRisi.Session do
         turn: turn
     }
   end
+
+  # §41.8: the stored line of an answer that had the phone's titles: times only, marked.
+  defp titled_line(%{lines: [line | rest]} = st),
+    do: %{st | lines: [Map.put(line, "titles_spoken", true) | rest]}
 
   # An answer piece of the last user utterance was heard in full: no merging into it any more.
   defp answered(%{last_user: %{utt: utt} = l} = st, utt, kind) when kind != :filler,

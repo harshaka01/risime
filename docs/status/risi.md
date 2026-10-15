@@ -2,6 +2,43 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## P0 2026-10-15: Harsha's Call Risi call (07:11–07:13Z) fixed
+
+**State:** green (agent + contract suites; question set 50/50 with the fake model). Server only.
+Root causes (all confirmed in code and the pilot log, session `#PID<0.6556.0>`):
+- **a)** `Turn.voice_sink` spoke the §25 card's `answer`; with v2 + local events that is only the
+  head line + footer. Now the turn also hands the call `RisiItems.voice_facts/4` (phone busy
+  times + Risi Calendar events, reminders, promises, follow-ups, scheduled messages; local times)
+  and `CallRisi.Spoken` renders them; risi-l1 may rephrase, used only if it keeps every time, adds
+  no number, names every title and doesn't refuse (`Spoken.checked/3`). The card is unchanged.
+- **b)** fragments / follow-ups went to the chat route (no tools). Now the session keeps the
+  call's topic (last calendar range); a date-only fragment, "why can't you…", "what about…",
+  "anything else", "the entire week" after a calendar turn is a calendar read (range passed to
+  the turn as env `__schedule`). The chat prompt no longer lets the model say it can't see the
+  calendar.
+- **c)** the §25 turn ran in an unlinked `Task.start`: a cancelled brain left it holding the
+  per-user lock → `{:snooze,_}` → "I'm still busy". Now `Task.start_link` (brain traps exits): a
+  new question kills both and frees the lock; a held lock is retried every 0.7 s inside the 25 s
+  budget; the "still busy" line is gone.
+- **d)** `ScheduleIntent.relative/2` matched "tomorrow" before "today": "today and tomorrow" = Fri
+  only. Now two days.
+- **Date choices (recorded):** "the 18th" = this month's 18th when it is today or later, else next
+  month's; "this week" / "the (entire|whole) week" / "rest of the week" = today → end of Sunday,
+  except on a Sunday = the coming 7 days (keeps the normative §34 fixture). "anything <day>" is a
+  schedule question.
+- Fragments: a new utterance starting ≤ 1.5 s after the last one ended merges with it when no
+  answer to it was heard yet (a filler may have been); the earlier turn is cancelled.
+- "What can you do?": a true spoken list from `Tools.allowed/1` for this user (calendar, Risi's
+  items, memory, reminders, calendar add, send/schedule message — only those offered).
+- Titles: §41.8 `PhoneCalendar` wired (cal_req at the start of a calendar voice turn on a
+  `call_risi_cal` device, ≤ 2 s); titles only in the one spoken answer; stored transcript line =
+  times-only rendering, `titles_spoken: true`; learning log `log_fields` counts only; else times +
+  "I can see the times; the titles stay on your phone." once a call.
+- si/ta speech: "I can only speak English on calls for now, so I'll answer in English." once a
+  call, then the answer.
+- Question set: `eval/sets/call-risi/questions.jsonl` (50 cases incl. `harsha-2026-10-15-call`);
+  runner `mix test --only call_questions` (fake model; `CALL_QUESTIONS_LIVE=1` = live risi-l1).
+
 ## PART 9: Risi reads every Official voice note, understands it and acts (2026-10-13)
 
 **State:** green (`MIX_TEST_PARTITION=p9`, full suite). Server-only, no migration and no wire change,

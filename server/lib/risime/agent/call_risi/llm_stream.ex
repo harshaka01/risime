@@ -171,7 +171,11 @@ defmodule RisiMe.Agent.CallRisi.LLMStream do
       prompt_sha256: LLM.prompt_hash(messages),
       status: status,
       output: nil,
-      meta: Map.put(meta, "call_id", opts[:call_id])
+      # `log_meta`: counts only (e.g. PhoneCalendar.log_fields/1, §41.8: never a title).
+      meta:
+        meta
+        |> Map.merge(Map.take(opts[:log_meta] || %{}, ~w(cal_ok cal_reason events_n titles_n)))
+        |> Map.put("call_id", opts[:call_id])
     })
   rescue
     e ->

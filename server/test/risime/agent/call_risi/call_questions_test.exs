@@ -269,6 +269,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
       test: me,
       metrics_to: me,
       tools?: true,
+      cal?: false,
       caps: ~w(risi_calendar_check risi_items set_reminder risi_calendar_add memory_search),
       post: fn _conv, _body, risi -> send(me, {:posted, risi}) end
     }

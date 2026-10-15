@@ -233,6 +233,7 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
       worker_url: "ws://127.0.0.1:7880",
       test: me,
       tools?: true,
+      cal?: false,
       caps: ~w(risi_calendar_check risi_items set_reminder memory_search),
       post: fn conv, body, risi -> send(me, {:posted, conv, body, risi}) end
     }
@@ -420,27 +421,6 @@ defmodule RisiMe.Agent.CallRisi.CallP0Test do
 
     assert_receive {:turn_run,
                     %{"text" => "and on the 18th?", "__schedule" => %{from: ~D[2026-10-18]}}}
-  end
-
-  test "titles from the phone (hook) are spoken but never stored", %{args: args} do
-    titles = fn "2026-10-16T10:00:00Z", _ -> "Interview with Nadeesha" end
-    pid = start!(Map.put(args, :titles, titles))
-    utter(pid, 1, "en:what's on my calendar tomorrow")
-    u1 = says(1)
-    assert answer_text(u1) =~ "Interview with Nadeesha from 10 to 11 am"
-    heard(pid, u1)
-
-    # The next chat turn's history (to the model) has the times-only line.
-    utter(pid, 2, "en:thanks")
-    # (risi-l1 phrased turn 1 with the title: our own model, only the prompt's hash is logged.)
-    assert_receive {:llm, [%{"content" => "You are Risi, the user's assistant" <> _} | _] = msgs}
-    refute inspect(msgs) =~ "Nadeesha"
-    assert inspect(msgs) =~ "Tomorrow: busy from 10 to 11 am"
-    heard(pid, says(2))
-
-    texts = pid |> transcript() |> Enum.map(& &1["text"])
-    refute Enum.any?(texts, &(&1 =~ "Nadeesha"))
-    assert Enum.any?(texts, &(&1 =~ "Tomorrow: busy from 10 to 11 am"))
   end
 
   test "Sinhala speech: one line once a call, then the answer in English", %{args: args} do
