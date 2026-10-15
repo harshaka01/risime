@@ -53,6 +53,20 @@ echo "==> migrate (Ecto + CQL)"
 bash -c "$ENVLOAD; exec '$REL/bin/risime' eval 'RisiMe.Release.migrate()'"
 
 ln -sfn "$REL" "$RUNROOT/current.new" && mv -T "$RUNROOT/current.new" "$RUNROOT/current"
+# The Call Risi media worker (decision 090) runs from ~/risime-voice (RISI_VOICE_WORKER): ship this tag's
+# copy with it (until 15 Oct nothing did, and the pilot ran a stale worker). Atomic; each new call
+# spawns the new file, running calls keep theirs. The previous copy stays as .prev.
+VW="$HOME/risime-voice"
+if [ -d "$VW" ] && [ -f "$RUN/infra/voice/risi_voice_worker.py" ] \
+   && ! cmp -s "$RUN/infra/voice/risi_voice_worker.py" "$VW/risi_voice_worker.py"; then
+  if "$VW/venv/bin/python" -I -m py_compile "$RUN/infra/voice/risi_voice_worker.py" 2>/dev/null; then
+    cp -p "$VW/risi_voice_worker.py" "$VW/risi_voice_worker.py.prev" 2>/dev/null || true
+    cp "$RUN/infra/voice/risi_voice_worker.py" "$VW/risi_voice_worker.py.new" && mv -f "$VW/risi_voice_worker.py.new" "$VW/risi_voice_worker.py"
+    echo "==> Call Risi worker updated from $TAG"
+  else
+    echo "warn: $TAG's Call Risi worker doesn't compile: kept the running one"
+  fi
+fi
 echo "$(date -u +%FT%TZ) $TAG" >> "$RUNROOT/HISTORY"
 
 if systemctl --user cat risime.service >/dev/null 2>&1; then
