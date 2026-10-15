@@ -99,10 +99,13 @@ class VadChunker:
     MIN_MS, MAX_MS, PAUSE_MS, END_MS, MIN_SPEECH_MS = 2000, 4000, 300, 600, 200
     OVERLAP_MS, PREROLL_MS, KEEPALIVE_MS = 500, 500, 15000
     MARGIN_DB, ABS_MIN_DB = 10.0, -55.0
+    QUIET_SEARCH_MS = 1000
+    QUIET_CUT = True  # --cut exact: the v1.50 first version (cut at exactly 4 s)
 
     def __init__(self):
         self.buf = array.array("h")
         self.flags = []  # per frame: speech?
+        self.levels = []  # per frame: dBFS
         self.start = 0  # sample index of buf[0]
         self.floor = -60.0
         self.idle_frames = 0
@@ -115,6 +118,7 @@ class VadChunker:
 
     def is_speech(self, frame):
         d = self.db(frame)
+        self.levels.append(d)
         if d < self.floor:
             self.floor = d
         else:
@@ -150,12 +154,20 @@ class VadChunker:
                 drop = frames - keep
                 del self.buf[:drop * FRAME]
                 del self.flags[:drop]
+                del self.levels[:drop]
                 self.start += drop * FRAME
             return out
         sil = self._trailing_silence()
         ms = self._ms(frames)
         if ms >= self.MAX_MS:
-            out.append(self._emit(frames, self.OVERLAP_MS // 20, "max"))
+            n = frames
+            if self.QUIET_CUT:  # after the quietest frame of the last second (latest on a tie)
+                q = frames - 1
+                for i in range(max(0, frames - self.QUIET_SEARCH_MS // 20), frames):
+                    if self.levels[i] <= self.levels[q]:
+                        q = i
+                n = q + 1
+            out.append(self._emit_first(n, frames, self.OVERLAP_MS // 20, "max"))
         elif ms >= self.MIN_MS and self._ms(sil) >= self.PAUSE_MS:
             out.append(self._emit(frames, min(self.OVERLAP_MS // 20, sil), "pause"))
         elif self._ms(sil) >= self.END_MS and self._ms(speech_frames) >= self.MIN_SPEECH_MS:
@@ -163,12 +175,16 @@ class VadChunker:
         return out
 
     def _emit(self, frames, keep, kind):
-        c = Chunk(self.seq, self.start, self.buf[:], kind)
+        return self._emit_first(frames, frames, keep, kind)
+
+    def _emit_first(self, n, frames, keep, kind):
+        c = Chunk(self.seq, self.start, self.buf[:n * FRAME], kind)
         self.seq += 1
         self.idle_frames = 0
-        drop = frames - keep
+        drop = n - min(keep, n)
         del self.buf[:drop * FRAME]
         del self.flags[:drop]
+        del self.levels[:drop]
         self.start += drop * FRAME
         return c
 
@@ -237,7 +253,7 @@ def transcribe_before(url, k, audio, args, cont=False):
 FAST_BACKOFF = {"until": 0.0}
 DEFER = object()
 SEEN = "\u2063"  # a joined line's later chunks: covered by the line, its text counted once
-JOIN_MAX_MS, JOIN_MIN_MS, JOIN_PAUSE_MS, JOIN_WAIT_S, JOIN_CUT_MS = 8000, 4000, 600, 6.0, 3900
+JOIN_MAX_MS, JOIN_MIN_MS, JOIN_PAUSE_MS, JOIN_WAIT_S, JOIN_CUT_MS = 8000, 4000, 600, 6.0, 3000
 
 
 def transcribe_joined(url, k, audio, lang):
@@ -401,7 +417,7 @@ def run(mode, lang, args, url, k):
     def sender(i):
         # v1.50 §36.12 (CallTranscribe.Call.pend/flush): a speaker's si/ta chunks wait and are
         # transcribed as one stream without the overlaps (here: re-encoded PCM, the server trims
-        # the Opus packets) at 8 s of audio, >= 4 s ending at a pause cut (a chunk < 3.9 s), a
+        # the Opus packets) at 8 s of audio, >= 4 s ending at a pause cut (a chunk < 3 s), a
         # >= 600 ms pause after >= 4 s, or 6 s after the first; a chunk with no pause before it
         # joins whatever its own detection says.
         pending, state = [], {"ms": 0, "first": None, "lang": None}
@@ -609,11 +625,14 @@ def main():
                     help="fast English pieces: the previous lines as the initial prompt")
     ap.add_argument("--prompt-guard", action="store_true",
                     help="redo a prompted piece without the prompt when it repeats or echoes")
+    ap.add_argument("--cut", choices=("quiet", "exact"), default="quiet",
+                    help="fast: a 4-s piece without a pause is cut after its quietest frame (VadChunker.kt) or at 4 s")
     ap.add_argument("--md", action="store_true")
     args = ap.parse_args()
     if not re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", args.url):
         raise SystemExit("loopback only")
     k = key()
+    VadChunker.QUIET_CUT = args.cut == "quiet"
     rows = []
     for lang in args.langs.split(","):
         for mode in args.modes.split(","):

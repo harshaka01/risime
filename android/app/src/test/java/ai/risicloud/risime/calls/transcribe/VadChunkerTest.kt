@@ -28,11 +28,35 @@ class VadChunkerTest {
     }
 
     @Test
-    fun continuousSpeechIsCutEvery4sWithHalfASecondOfOverlap() {
+    fun continuousSpeechIsCutAtItsQuietestFrameBefore4sWithHalfASecondOfOverlap() {
+        // The quiet frame every 200 ms (at 100–120 ms) is where the cut falls: 3.92 s, then 3.9 s pieces.
         feed(11_000, speech = true)
         assertEquals(listOf(0, 1, 2), chunks.map { it.seq })
-        assertEquals(listOf(4_000L, 4_000L, 4_000L), chunks.map { it.durationMs })
-        assertEquals(listOf(0L, 3_500L, 7_000L), chunks.map { it.offsetMs })
+        assertEquals(listOf(3_920L, 3_900L, 3_900L), chunks.map { it.durationMs })
+        // Each next piece starts 0.5 s before the previous cut.
+        assertEquals(listOf(0L, 3_420L, 6_820L), chunks.map { it.offsetMs })
+    }
+
+    @Test
+    fun theFourSecondCutFallsAtTheQuietestFrameOfTheLastSecond() {
+        val loud = ShortArray(320) { 3000 }
+        val dip = ShortArray(320) { 300 }
+        // 4 s of steady speech with one quiet 20-ms frame at 3.30 s (frame 165) and a louder-than-floor dip at 2.5 s.
+        for (f in 0 until 200) c.feed(if (f == 165) dip else if (f == 125) ShortArray(320) { 1500 } else loud, 320, false)
+        assertEquals(1, chunks.size)
+        assertEquals(0L, chunks[0].offsetMs)
+        assertEquals(3_320L, chunks[0].durationMs)
+        // The frames after the cut are not lost: the next piece starts 0.5 s before it.
+        feed(600, speech = false)
+        assertEquals(2, chunks.size)
+        assertEquals(2_820L, chunks[1].offsetMs)
+    }
+
+    @Test
+    fun steadySpeechWithoutAQuieterFrameIsCutAtExactly4s() {
+        val loud = ShortArray(320) { 3000 }
+        repeat(200) { c.feed(loud, 320, false) }
+        assertEquals(listOf(4_000L), chunks.map { it.durationMs })
     }
 
     @Test

@@ -1053,8 +1053,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
     rt = %{rt | parts: Map.put(rt.parts, user, p)}
 
-    # ≥ 8 s, or ≥ 4 s ending at a pause: a chunk shorter than the phone's 4-s maximum was cut at
-    # a pause (§36.4 fast: ≥ 300 ms of silence), so the utterance may have ended.
+    # ≥ 8 s, or ≥ 4 s ending at a pause: a chunk under `join_cut_ms` (3 s) was cut at a pause (a
+    # 4-s-limit piece is cut at its quietest frame, 3-4 s), so the utterance may have ended.
     cond do
       p.pend_ms >= t.join_max_ms -> flush(rt, user)
       p.pend_ms >= t.join_min_ms and meta.duration_ms < t.join_cut_ms -> flush(rt, user)

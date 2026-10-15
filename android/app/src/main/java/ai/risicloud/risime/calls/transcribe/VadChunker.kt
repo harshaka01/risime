@@ -21,7 +21,8 @@ interface MicChunker {
  * Proposal 2026-10-15-live-call-latency (P0-1b): the fast session's chunker. It cuts this phone's own microphone
  * at pauses, so each line reaches the other phones about 2 s after it was said:
  * - a chunk closes at a pause of [PAUSE_MS] once it is [MIN_MS] long, at the end of an utterance ([END_MS] of
- *   silence after at least [MIN_SPEECH_MS] of speech) even if shorter, and at [MAX_MS] at the latest;
+ *   silence after at least [MIN_SPEECH_MS] of speech) even if shorter, and at [MAX_MS] at the latest
+ *   (then after the quietest 20-ms frame of the last [QUIET_SEARCH_MS], so the cut falls between words);
  * - the next chunk starts up to [OVERLAP_MS] before the cut (the whole overlap after a forced cut; only the
  *   trailing silence after a pause), so a word cut at the edge is never lost; the server drops the repeated words;
  * - silence before speech is not sent (only [PREROLL_MS] of it leads a chunk); a short keep-alive chunk goes out
@@ -44,6 +45,9 @@ class VadChunker(
         const val OVERLAP_MS = 500
         const val PREROLL_MS = 500
         const val KEEPALIVE_MS = 15_000
+
+        /** A piece that reaches [MAX_MS] without a pause is cut after the quietest frame of its last [QUIET_SEARCH_MS]. */
+        const val QUIET_SEARCH_MS = 1_000
         const val MARGIN_DB = 10.0
         const val ABS_MIN_DB = -55.0
         const val FLOOR_START_DB = -60.0
@@ -63,6 +67,7 @@ class VadChunker(
     private var frameFill = 0
     private val buf = ShortArray(maxFrames * frameLen)
     private val flags = BooleanArray(maxFrames)
+    private val levels = DoubleArray(maxFrames)
     private var frames = 0
     private var floor = FLOOR_START_DB
     private var idleFrames = 0
@@ -109,17 +114,18 @@ class VadChunker(
         }
     }
 
-    private fun isSpeech(): Boolean {
-        val d = db(frame, frameLen)
+    private fun isSpeech(d: Double): Boolean {
         floor = if (d < floor) d else floor + (d - floor) * 0.002
         floor = floor.coerceIn(-90.0, -30.0)
         return d > floor + MARGIN_DB && d > ABS_MIN_DB
     }
 
     private fun onFrame() {
-        val sp = isSpeech()
+        val level = db(frame, frameLen)
+        val sp = isSpeech(level)
         frame.copyInto(buf, frames * frameLen, 0, frameLen)
         flags[frames] = sp
+        levels[frames] = level
         frames++
         frameFill = 0
         timeline += frameLen
@@ -144,19 +150,34 @@ class VadChunker(
         val ms = frames * FRAME_MS
         val silMs = sil * FRAME_MS
         when {
-            ms >= MAX_MS -> emit(OVERLAP_MS / FRAME_MS)
+            ms >= MAX_MS -> emitAtQuietest()
             ms >= MIN_MS && silMs >= PAUSE_MS -> emit(min(OVERLAP_MS / FRAME_MS, sil))
             silMs >= END_MS && speechFrames * FRAME_MS >= MIN_SPEECH_MS -> emit(min(OVERLAP_MS / FRAME_MS, sil))
         }
     }
 
     /** Sends the buffer as one chunk and keeps its last [keepFrames] as the head of the next one. */
-    private fun emit(keepFrames: Int) {
-        val samples = frames * frameLen
-        val start = timeline - samples
+    private fun emit(keepFrames: Int) = emitFirst(frames, keepFrames)
+
+    /**
+     * The 4-s limit without a pause: the piece ends after the quietest 20-ms frame of its last [QUIET_SEARCH_MS]
+     * (the latest one on a tie), so the cut falls between words rather than inside one; the frames after it start
+     * the next piece, with the usual [OVERLAP_MS] before the cut.
+     */
+    private fun emitAtQuietest() {
+        val from = max(0, frames - QUIET_SEARCH_MS / FRAME_MS)
+        var q = frames - 1
+        for (k in from until frames) if (levels[k] <= levels[q]) q = k
+        emitFirst(q + 1, OVERLAP_MS / FRAME_MS)
+    }
+
+    /** Sends the first [n] frames as one chunk; the next one starts [keepFrames] before the cut. */
+    private fun emitFirst(n: Int, keepFrames: Int) {
+        val samples = n * frameLen
+        val start = timeline - frames * frameLen
         val pcm = buf.copyOf(samples)
         idleFrames = 0
-        shift(frames - keepFrames)
+        shift(n - min(keepFrames, n))
         onChunk(PcmChunk(seq++, baseOffsetMs + start * 1000 / rate, samples * 1000L / rate, pcm))
     }
 
@@ -166,6 +187,7 @@ class VadChunker(
         val keep = frames - n
         buf.copyInto(buf, 0, n * frameLen, frames * frameLen)
         flags.copyInto(flags, 0, n, frames)
+        levels.copyInto(levels, 0, n, frames)
         buf.fill(0, keep * frameLen, frames * frameLen)
         frames = keep
     }

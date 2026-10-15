@@ -234,7 +234,7 @@ defmodule RisiMe.Agent.CallTranscribeFastTest do
       assert t["language"] == "ta"
     end
 
-    test "≥ 4 s ending at the phone's pause cut (< 4 s chunk) goes out at once" do
+    test "≥ 4 s ending at the phone's pause cut (< 3 s chunk) goes out at once" do
       fast!("on")
       w = transcribe_world!()
       sid = start_on!(w)
