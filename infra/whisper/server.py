@@ -33,6 +33,9 @@ Live first (incident 2026-10-14, docs/status/incident-2026-10-14-sinhala-slow.md
   priority      form field on every endpoint: live (voice notes) | normal (default: call chunks) |
                 batch (compare default, evals). The GPU slots go to live first, then normal, then
                 batch, FIFO within a class (WHISPER_PRIORITY=off: plain FIFO as before).
+                A live call chunk (RISI_LIVE_FAST, P0-1b 2026-10-15) is sent as live too.
+  live reserve  WHISPER_LIVE_RESERVE (default 0 = off): that many GPU slots are never taken by a
+                batch request, so live work never waits behind a long compare/eval decode.
   CPU fallback  WHISPER_CPU_FALLBACK (e.g. omnilingual-ctc-1b, ONNX int8 on the CPU) loads at start,
                 stays resident, is outside the GPU budget and the GPU slots (its own
                 WHISPER_CPU_WORKERS), and is never evicted. A Sinhala chunk whose Sinhala models
@@ -184,6 +187,10 @@ else:
 CPU_WORKERS = int(os.environ.get("WHISPER_CPU_WORKERS", "2"))
 HARD_FLOOR_MB = int(os.environ.get("WHISPER_HARD_FLOOR_MB", "1536"))
 PRIORITY_ON = os.environ.get("WHISPER_PRIORITY", "on") != "off"
+# Live first (P0-1b 2026-10-15, proposal 2026-10-15-live-call-latency): GPU slots that a batch
+# request (compare, evals) may never take, so a live call chunk or voice note never waits behind
+# a long batch decode. 0 = off (as before); 1 with the default 2 slots.
+LIVE_RESERVE = int(os.environ.get("WHISPER_LIVE_RESERVE", "0"))
 ACCEPTED = set(SPECS) | {"whisper-1", "auto"}
 
 if not API_KEY:
@@ -228,19 +235,26 @@ def current_hotwords():
 
 class PrioritySlots:
     """At most n holders; waiters are served by class (live, normal, batch), FIFO within a class.
+    A batch holder may only take a slot while `reserve` slots stay free for live and normal.
     `with slots:` uses the calling request's priority (set_priority)."""
 
-    def __init__(self, n):
+    def __init__(self, n, reserve=0):
         self.n, self.busy, self.seq = n, 0, 0
+        self.reserve = max(0, min(reserve, n - 1)) if PRIORITY_ON else 0
         self.cv = threading.Condition()
         self.waiting = []  # heap of (class, seq)
+
+    def _limit(self, cls):
+        return self.n - (self.reserve if cls == PRIORITIES["batch"] else 0)
 
     def __enter__(self):
         with self.cv:
             self.seq += 1
             me = (PRIORITIES[current_priority()] if PRIORITY_ON else 1, self.seq)
             heapq.heappush(self.waiting, me)
-            while not (self.busy < self.n and self.waiting[0] == me):
+            # The head of the heap is the most urgent waiter: a batch head means no live or
+            # normal request waits, and it still leaves `reserve` slots free.
+            while not (self.busy < self._limit(me[0]) and self.waiting[0] == me):
                 self.cv.wait()
             heapq.heappop(self.waiting)
             self.busy += 1
@@ -259,11 +273,12 @@ class PrioritySlots:
             waiting = {k: 0 for k in PRIORITIES}
             for c, _ in self.waiting:
                 waiting[names[c]] += 1
-            return {"slots": self.n, "running": self.busy, "waiting": waiting}
+            return {"slots": self.n, "running": self.busy, "waiting": waiting,
+                    "live_reserve": self.reserve}
 
 
 # At most NUM_WORKERS GPU transcriptions run at once; more requests wait here, live first.
-slots = PrioritySlots(NUM_WORKERS)
+slots = PrioritySlots(NUM_WORKERS, LIVE_RESERVE)
 # The CPU fallback runs beside them (no GPU).
 cpu_slots = threading.BoundedSemaphore(CPU_WORKERS)
 compare_lock = threading.Lock()

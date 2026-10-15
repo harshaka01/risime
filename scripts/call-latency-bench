@@ -1,0 +1,497 @@
+#!/usr/bin/env python3
+"""Speech -> live line latency of the Official-call transcription path (P0-1b, 2026-10-15).
+
+Plays a synthetic N-way conversation (the test clips of scripts/call-transcribe-test, one speaker
+at a time, low noise on every microphone) in REAL TIME through the phone's chunker and the live
+speech service, exactly as the server asks it, and measures for every 100 ms of speech the time
+until the line that carries it would show on the other phones:
+
+    line_at = chunk cut (phone) + encode (Ogg/Opus, gst) + speech service (loopback, real)
+              + POST_MS (server post + push to the peers, measured on the pilot: see --post-ms)
+
+Modes:
+  before  12-s fixed chunks (TranscribeChunker, today), model=auto, priority normal (today's
+          server call), one chunk in flight per speaker (the server's queue).
+  fast    the VAD chunker (VadChunker.kt: 2-4 s cut at pauses, 0.5 s overlap, keep-alive every
+          15 s), the RISI_LIVE_FAST server call (detect at priority live; en -> the fast English
+          model, else the language's current route with language=<lang>), overlap de-duplication
+          (CallTranscribe.Overlap) before the text is scored.
+
+Prints one JSON line per (mode, language) and a Markdown table (--md). Text quality: WER (en) or
+CER (si/ta) of each speaker's joined lines against the clips' reference texts.
+
+  scripts/call-latency-bench [--modes before,fast] [--langs en,si,ta] [--speakers 3]
+                             [--rounds 2] [--post-ms 300] [--fast-en faster-whisper-large-v3-turbo]
+                             [--md]
+
+The key comes from .env (WHISPER_API_KEY) and is never printed; no audio or text is written
+anywhere (decoded clips stay in memory). Loopback only.
+"""
+import argparse
+import array
+import io
+import json
+import math
+import os
+import queue
+import re
+import statistics
+import subprocess
+import sys
+import threading
+import time
+import unicodedata
+import urllib.error
+import urllib.request
+import uuid
+
+RATE = 16000
+FRAME = 320  # 20 ms
+ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+CLIPS = {
+    "en": [("android/testdata/transcribe/en-tts.ogg",
+            "Let's meet at the office tomorrow at ten. We will send the revised quote on Friday."),
+           ("infra/whisper/testdata/en-jfk.ogg",
+            "And so, my fellow Americans, ask not what your country can do for you, ask what you "
+            "can do for your country.")],
+    "ta": [("android/testdata/transcribe/ta-tts.ogg",
+            "நாளை காலை பத்து மணிக்கு அலுவலகத்தில் சந்திப்போம். திருத்திய விலைப்பட்டியலை "
+            "வெள்ளிக்கிழமை அனுப்புவோம்."),
+           ("infra/whisper/testdata/ta-fleurs-10015420708072669120.ogg", "@ta.txt")],
+    "si": [("infra/whisper/testdata/si-slr30-sin_6897_3117231257.ogg", "@si.txt")],
+}
+
+
+# ---------------------------------------------------------------- the phone's chunkers
+
+class Chunk:
+    def __init__(self, seq, start, pcm, kind):
+        self.seq, self.start, self.pcm, self.kind = seq, start, pcm, kind  # start: sample index
+
+    @property
+    def end(self):
+        return self.start + len(self.pcm)
+
+
+class FixedChunker:
+    """TranscribeChunker.kt (today): cuts every target_ms, silence included."""
+
+    def __init__(self, target_ms=12000):
+        self.cap = RATE * target_ms // 1000
+        self.buf, self.pos, self.seq = array.array("h"), 0, 0
+
+    def feed(self, frame):
+        out = []
+        self.buf.extend(frame)
+        if len(self.buf) >= self.cap:
+            out.append(Chunk(self.seq, self.pos, self.buf, "fixed"))
+            self.seq += 1
+            self.pos += len(self.buf)
+            self.buf = array.array("h")
+        return out
+
+
+class VadChunker:
+    """VadChunker.kt, line for line (keep the constants in step)."""
+    MIN_MS, MAX_MS, PAUSE_MS, END_MS, MIN_SPEECH_MS = 2000, 4000, 300, 600, 200
+    OVERLAP_MS, PREROLL_MS, KEEPALIVE_MS = 500, 500, 15000
+    MARGIN_DB, ABS_MIN_DB = 10.0, -55.0
+
+    def __init__(self):
+        self.buf = array.array("h")
+        self.flags = []  # per frame: speech?
+        self.start = 0  # sample index of buf[0]
+        self.floor = -60.0
+        self.idle_frames = 0
+        self.seq = 0
+
+    @staticmethod
+    def db(frame):
+        s = sum(x * x for x in frame) / max(1, len(frame))
+        return -120.0 if s <= 0 else 10 * math.log10(s / (32768.0 * 32768.0))
+
+    def is_speech(self, frame):
+        d = self.db(frame)
+        if d < self.floor:
+            self.floor = d
+        else:
+            self.floor += (d - self.floor) * 0.002
+        self.floor = min(-30.0, max(-90.0, self.floor))
+        return d > self.floor + self.MARGIN_DB and d > self.ABS_MIN_DB
+
+    def _ms(self, frames):
+        return frames * 20
+
+    def _trailing_silence(self):
+        n = 0
+        for f in reversed(self.flags):
+            if f:
+                break
+            n += 1
+        return n
+
+    def feed(self, frame):
+        out = []
+        sp = self.is_speech(frame)
+        self.buf.extend(frame)
+        self.flags.append(sp)
+        frames = len(self.flags)
+        speech_frames = sum(self.flags)
+        if speech_frames == 0:
+            self.idle_frames += 1
+            keep = self.PREROLL_MS // 20
+            if self.idle_frames * 20 >= self.KEEPALIVE_MS:
+                out.append(self._emit(frames, 0, "keepalive"))
+                self.idle_frames = 0
+            elif frames > keep:
+                drop = frames - keep
+                del self.buf[:drop * FRAME]
+                del self.flags[:drop]
+                self.start += drop * FRAME
+            return out
+        sil = self._trailing_silence()
+        ms = self._ms(frames)
+        if ms >= self.MAX_MS:
+            out.append(self._emit(frames, self.OVERLAP_MS // 20, "max"))
+        elif ms >= self.MIN_MS and self._ms(sil) >= self.PAUSE_MS:
+            out.append(self._emit(frames, min(self.OVERLAP_MS // 20, sil), "pause"))
+        elif self._ms(sil) >= self.END_MS and self._ms(speech_frames) >= self.MIN_SPEECH_MS:
+            out.append(self._emit(frames, min(self.OVERLAP_MS // 20, sil), "end"))
+        return out
+
+    def _emit(self, frames, keep, kind):
+        c = Chunk(self.seq, self.start, self.buf[:], kind)
+        self.seq += 1
+        self.idle_frames = 0
+        drop = frames - keep
+        del self.buf[:drop * FRAME]
+        del self.flags[:drop]
+        self.start += drop * FRAME
+        return c
+
+
+# ---------------------------------------------------------------- overlap de-duplication
+
+def norm(word):
+    """CallTranscribe.Overlap's word: lower case, letters, marks and digits only."""
+    return "".join(c for c in word.lower() if unicodedata.category(c)[0] in "LMN")
+
+
+def norm_words(text):
+    return [w for w in (norm(t) for t in text.split()) if w]
+
+
+def dedup(prev_tail, text, max_k=6):
+    """CallTranscribe.Overlap.strip/2: drop the longest head of `text` (<= 6 words) that repeats
+    the tail of the previous line of the same speaker."""
+    words = text.split()
+    nw = [norm(w) for w in words]
+    best = 0
+    for k in range(1, min(max_k, len(nw), len(prev_tail)) + 1):
+        if nw[:k] == prev_tail[-k:] and all(nw[:k]):
+            best = k
+    return " ".join(words[best:])
+
+
+# ---------------------------------------------------------------- the speech service
+
+def key():
+    for line in open(os.path.join(ROOT, ".env")):
+        if line.startswith("WHISPER_API_KEY="):
+            return line.split("=", 1)[1].strip()
+    raise SystemExit("WHISPER_API_KEY not in .env")
+
+
+def multipart(fields, audio):
+    b = uuid.uuid4().hex
+    out = io.BytesIO()
+    for k, v in fields.items():
+        out.write(f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode())
+    out.write(f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"chunk.ogg\"\r\n"
+              "Content-Type: audio/ogg\r\n\r\n".encode())
+    out.write(audio)
+    out.write(f"\r\n--{b}--\r\n".encode())
+    return out.getvalue(), f"multipart/form-data; boundary={b}"
+
+
+def post(url, k, path, fields, audio, timeout=30):
+    body, ctype = multipart(fields, audio)
+    req = urllib.request.Request(url + path, data=body, method="POST",
+                                 headers={"Authorization": f"Bearer {k}", "Content-Type": ctype})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        return e.code, None
+
+
+def transcribe_before(url, k, audio, args):
+    s, b = post(url, k, "/v1/audio/transcriptions",
+                {"model": "auto", "response_format": "verbose_json"}, audio)
+    return (b or {}).get("text", "") if s == 200 else None, (b or {}).get("model")
+
+
+def transcribe_fast(url, k, audio, args):
+    """Speech.Http fast path (RISI_LIVE_FAST): detect, then the language's model."""
+    s, d = post(url, k, "/v1/audio/detect", {"priority": "live"}, audio)
+    if s != 200 or d is None:
+        return None, None
+    if d.get("reason") == "no_speech":
+        return "", None
+    lang = d.get("language") or "en"
+    if lang == "en" and args.fast_en:
+        s, b = post(url, k, "/v1/audio/transcriptions",
+                    {"model": args.fast_en, "language": "en", "priority": "live",
+                     "response_format": "verbose_json"}, audio)
+        if s == 200:
+            return b.get("text", ""), b.get("model")
+    s, b = post(url, k, "/v1/audio/transcriptions",
+                {"model": "auto", "language": lang, "priority": "live",
+                 "response_format": "verbose_json"}, audio)
+    return (b or {}).get("text", "") if s == 200 else None, (b or {}).get("model")
+
+
+def encode(pcm):
+    """Ogg/Opus 16 kHz mono 24 kbit/s (the phone's OggOpus), in memory."""
+    p = subprocess.run(
+        ["gst-launch-1.0", "-q", "fdsrc", "fd=0", "!",
+         "rawaudioparse", "format=pcm", "pcm-format=s16le", "sample-rate=16000", "num-channels=1",
+         "!", "audioconvert", "!", "opusenc", "bitrate=24000", "!", "oggmux", "!", "fdsink", "fd=1"],
+        input=pcm.tobytes(), capture_output=True, check=True)
+    return p.stdout
+
+
+def decode(path):
+    p = subprocess.run(
+        ["gst-launch-1.0", "-q", "filesrc", f"location={path}", "!", "oggdemux", "!", "opusdec",
+         "!", "audioconvert", "!", "audioresample", "!",
+         "audio/x-raw,format=S16LE,rate=16000,channels=1", "!", "fdsink", "fd=1"],
+        capture_output=True, check=True)
+    a = array.array("h")
+    a.frombytes(p.stdout[: len(p.stdout) // 2 * 2])
+    return a
+
+
+# ---------------------------------------------------------------- one run
+
+def ref_text(lang, t):
+    if t.startswith("@"):
+        return open(os.path.join(ROOT, "infra/whisper/testdata", t[1:])).read().strip()
+    return t
+
+
+def build(lang, speakers, rounds, gap_s=0.6):
+    """Speaker i speaks clip (i + r) of the language in its slot; everyone else is silent.
+    -> tracks (sample arrays with -60 dBFS noise), speech intervals per speaker, refs per speaker."""
+    clips = [(decode(os.path.join(ROOT, p)), ref_text(lang, t)) for p, t in CLIPS[lang]]
+    gap = int(gap_s * RATE)
+    slots, pos = [], gap
+    for r in range(rounds):
+        for i in range(speakers):
+            pcm, ref = clips[(i + r) % len(clips)]
+            slots.append((i, pos, pcm, ref))
+            pos += len(pcm) + gap
+    total = pos + 13 * RATE  # long enough for the last 12-s chunk to be cut
+    seed = 12345
+    tracks = []
+    for _ in range(speakers):
+        t = array.array("h", bytes(2 * total))
+        for j in range(total):  # deterministic low noise (about -60 dBFS)
+            seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+            t[j] = (seed >> 16) % 61 - 30
+        tracks.append(t)
+    speech = [[] for _ in range(speakers)]
+    refs = [[] for _ in range(speakers)]
+    for i, p0, pcm, ref in slots:
+        tr = tracks[i]
+        for j, v in enumerate(pcm):
+            tr[p0 + j] = max(-32768, min(32767, tr[p0 + j] + v))
+        # the clip's own leading/trailing silence is not speech: trim by energy (20-ms frames)
+        fr = [VadChunker.db(pcm[k:k + FRAME]) > -45 for k in range(0, len(pcm) - FRAME, FRAME)]
+        a = next((k for k, f in enumerate(fr) if f), 0)
+        b = len(fr) - next((k for k, f in enumerate(reversed(fr)) if f), 0)
+        speech[i].append((p0 + a * FRAME, p0 + b * FRAME))
+        refs[i].append(ref)
+    return tracks, speech, refs, total
+
+
+def run(mode, lang, args, url, k):
+    tracks, speech, refs, total = build(lang, args.speakers, args.rounds)
+    chunkers = [FixedChunker() if mode == "before" else VadChunker() for _ in tracks]
+    fn = transcribe_before if mode == "before" else transcribe_fast
+    t0 = time.monotonic() + 0.5
+    results = [[] for _ in tracks]  # (chunk, line_at, text, model, svc_s, enc_s)
+    qs = [queue.Queue() for _ in tracks]
+
+    def sender(i):
+        while True:
+            item = qs[i].get()
+            if item is None:
+                return
+            c, cut_at = item
+            e0 = time.monotonic()
+            ogg = encode(c.pcm)
+            e1 = time.monotonic()
+            text, model = fn(url, k, ogg, args)
+            done = time.monotonic()
+            results[i].append((c, done + args.post_ms / 1000, text, model, done - e1, e1 - e0,
+                               cut_at))
+
+    threads = [threading.Thread(target=sender, args=(i,), daemon=True) for i in range(len(tracks))]
+    for th in threads:
+        th.start()
+    for f0 in range(0, total - FRAME, FRAME):
+        due = t0 + (f0 + FRAME) / RATE
+        now = time.monotonic()
+        if due > now:
+            time.sleep(due - now)
+        for i, tr in enumerate(tracks):
+            for c in chunkers[i].feed(tr[f0:f0 + FRAME]):
+                qs[i].put((c, time.monotonic()))
+    for q in qs:
+        q.put(None)
+    for th in threads:
+        th.join()
+
+    if mode == "before":
+        group_turns(results, t0)
+    lat, eou, svc, enc, chunk_ms, hyp_all = [], [], [], [], [], []
+    lost = 0
+    n_chunks = sum(len(r) for r in results)
+    models = {}
+    for i, rs in enumerate(results):
+        rs.sort(key=lambda x: x[0].seq)
+        for c, line_at, text, model, s, e, _ in rs:
+            svc.append(s)
+            enc.append(e)
+            chunk_ms.append(len(c.pcm) * 1000 / RATE)
+            if model:
+                models[model] = models.get(model, 0) + 1
+        with_text = [(c, la) for c, la, text, *_ in rs if text and text.strip()]
+        for a, b in speech[i]:
+            last = None
+            for p in range(a, b, RATE // 10):  # every 100 ms of speech
+                spoken = t0 + p / RATE
+                hits = [la for c, la in with_text if c.start <= p < c.end]
+                if not hits:
+                    lost += 1
+                    continue
+                lat.append(min(hits) - spoken)
+                last = min(hits) - spoken
+            if last is not None:
+                eou.append(last)
+        # the speaker's joined lines, de-duplicated like the server (fast) or as posted (before)
+        prev, prev_end, out = [], -1, []
+        for c, la, text, *_ in rs:
+            if not text or not text.strip():
+                continue
+            t = dedup(prev, text) if mode == "fast" and c.start < prev_end else text
+            prev_end = max(prev_end, c.end)
+            if t.strip():
+                out.append(t)
+                prev = (prev + norm_words(t))[-8:]
+        hyp_all.append((" ".join(out), " ".join(refs[i])))
+    err = [score(lang, h, r) for h, r in hyp_all]
+    q = lambda xs, p: round(sorted(xs)[min(len(xs) - 1, int(p * len(xs)))], 2) if xs else None
+    minutes = total / RATE / 60
+    return {
+        "mode": mode, "lang": lang, "speakers": len(tracks), "audio_s": round(total / RATE, 1),
+        "p50_s": q(lat, 0.5), "p95_s": q(lat, 0.95), "eou_p50_s": q(eou, 0.5),
+        "eou_p95_s": q(eou, 0.95), "svc_p50_s": q(svc, 0.5), "svc_p95_s": q(svc, 0.95),
+        "enc_p50_s": q(enc, 0.5), "chunk_p50_ms": q(chunk_ms, 0.5),
+        "chunks_per_min_per_speaker": round(n_chunks / len(tracks) / minutes, 1),
+        "lost_speech_pct": round(100 * lost / max(1, lost + len(lat)), 1),
+        ("wer" if lang == "en" else "cer"): round(statistics.mean(err), 3), "models": models,
+        "post_ms": args.post_ms,
+    }
+
+
+def group_turns(results, t0, open_s=30.0, max_s=60.0):
+    """Today's server (§36.5 grouping, CallTranscribe.Call): a speaker's chunks are one turn until
+    another participant's speech arrives, the turn spans 60 s, or 30 s after it opened; the line is
+    posted when the turn closes. Rewrites each chunk's line_at to its turn's post time."""
+    ev = sorted(((r[1], i, j) for i, rs in enumerate(results) for j, r in enumerate(rs)
+                 if r[2] and r[2].strip()), key=lambda x: x[0])
+    post = None
+    turn = None  # (speaker, opened_at, start_sample, [(i, j)])
+
+    def close(at):
+        for i, j in turn[3]:
+            r = results[i][j]
+            results[i][j] = (r[0], at) + r[2:]
+
+    for at, i, j in ev:
+        res_at = at  # result time + post (already in line_at)
+        c = results[i][j][0]
+        if turn and res_at - turn[1] > open_s:
+            close(turn[1] + open_s)
+            turn = None
+        if turn and turn[0] == i and (c.end - turn[2]) / RATE <= max_s:
+            turn[3].append((i, j))
+        else:
+            if turn:
+                close(res_at)
+            turn = (i, res_at, c.start, [(i, j)])
+    if turn:  # the last turn: posted with its last chunk (a lower bound for today's path)
+        close(max(results[i][j][1] for i, j in turn[3]))
+
+
+def edit(a, b):
+    d = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        prev, d[0] = d[0], i
+        for j in range(1, len(b) + 1):
+            cur = min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] != b[j - 1]))
+            prev, d[j] = d[j], cur
+    return d[len(b)]
+
+
+def score(lang, hyp, ref):
+    if lang == "en":
+        h, r = norm_words(hyp), norm_words(ref)
+    else:
+        f = lambda s: [c for c in unicodedata.normalize("NFC", s) if not c.isspace()
+                       and unicodedata.category(c)[0] != "P"]
+        h, r = f(hyp), f(ref)
+    return edit(h, r) / max(1, len(r))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--modes", default="before,fast")
+    ap.add_argument("--langs", default="en,si,ta")
+    ap.add_argument("--speakers", type=int, default=3)
+    ap.add_argument("--rounds", type=int, default=2)
+    ap.add_argument("--post-ms", type=int, default=300,
+                    help="server post + push to the peers (pilot 2026-10-14: 50-360 ms)")
+    ap.add_argument("--fast-en", default="faster-whisper-large-v3-turbo",
+                    help="the fast English model ('' = the en route, large-v3)")
+    ap.add_argument("--url", default=os.environ.get("RISI_SPEECH_URL", "http://127.0.0.1:8200"))
+    ap.add_argument("--md", action="store_true")
+    args = ap.parse_args()
+    if not re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", args.url):
+        raise SystemExit("loopback only")
+    k = key()
+    rows = []
+    for lang in args.langs.split(","):
+        for mode in args.modes.split(","):
+            r = run(mode, lang, args, args.url, k)
+            rows.append(r)
+            print(json.dumps(r, ensure_ascii=False), flush=True)
+    if args.md:
+        print("\n| mode | lang | speakers | p50 speech→line | p95 | end-of-utterance p50 / p95 | "
+              "speech service p50 / p95 | chunk p50 | chunks/min/speaker | lost speech | WER/CER | "
+              "models |")
+        print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        for r in rows:
+            e = r.get("wer", r.get("cer"))
+            print(f"| {r['mode']} | {r['lang']} | {r['speakers']} | {r['p50_s']} s | {r['p95_s']} s "
+                  f"| {r['eou_p50_s']} / {r['eou_p95_s']} s | {r['svc_p50_s']} / {r['svc_p95_s']} s "
+                  f"| {r['chunk_p50_ms']} ms | {r['chunks_per_min_per_speaker']} "
+                  f"| {r['lost_speech_pct']} % | {e} | "
+                  + ", ".join(f"{m} ×{n}" for m, n in r["models"].items()) + " |")
+
+
+if __name__ == "__main__":
+    main()

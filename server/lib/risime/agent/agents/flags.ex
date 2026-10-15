@@ -58,7 +58,11 @@ defmodule RisiMe.Agents.Flags do
     "RISI_VOICE_TRANSLATE" => :risi_voice_translate,
     # Decision 092 (proposal 2026-10-14-private-transcribe): transcription and translation in
     # Private, each only after the reader's explicit yes; canary = RISI_DEV_USERS via /me.
-    "RISI_PRIVATE_TRANSCRIBE" => :risi_private_transcribe
+    "RISI_PRIVATE_TRANSCRIBE" => :risi_private_transcribe,
+    # P0-1b 2026-10-15 (proposal 2026-10-15-live-call-latency): live Official-call lines in about
+    # 2 s (VAD-cut 2-4 s chunks, the fast English model, live GPU priority); canary = a call
+    # with a RISI_DEV_USERS participant.
+    "RISI_LIVE_FAST" => :risi_live_fast
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
@@ -73,7 +77,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_CALENDAR_V2" => "canary",
     "RISI_VOICE_LANG_ID" => "on",
     "RISI_VOICE_TRANSLATE" => "canary",
-    "RISI_PRIVATE_TRANSCRIBE" => "off"
+    "RISI_PRIVATE_TRANSCRIBE" => "off",
+    "RISI_LIVE_FAST" => "off"
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000

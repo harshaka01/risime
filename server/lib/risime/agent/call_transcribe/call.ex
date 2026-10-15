@@ -20,9 +20,9 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
 
   import Ecto.Query
 
-  alias RisiMe.Agent.{Clock, Lang, LearningLog, Out, Speech, Transcript}
+  alias RisiMe.Agent.{Clock, Lang, LearningLog, Out, Speech, SpeechGuard, Transcript}
   alias RisiMe.Agent.CallTranscribe
-  alias RisiMe.Agent.CallTranscribe.{Lines, Session}
+  alias RisiMe.Agent.CallTranscribe.{Lines, Overlap, Session}
   alias RisiMe.{Repo, TimeUUID}
 
   @max_sessions 3
@@ -168,6 +168,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
         {:noreply, finalize(st, "stopped", "unavailable", nil, false)}
 
       true ->
+        st = %{st | rt: guard(st.rt)}
         {:noreply, put_timer(st, :tick, {:tick, sid}, t.tick_ms)}
     end
   end
@@ -289,20 +290,33 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
   defp add_parts(%{rt: nil} = st, _users), do: st
 
   defp add_parts(%{rt: rt} = st, users) do
-    parts = Enum.reduce(users, rt.parts, &Map.put_new(&2, &1, new_part(mono())))
+    parts = Enum.reduce(users, rt.parts, &Map.put_new(&2, &1, new_part(mono(), rt.fast)))
     %{st | rt: %{rt | parts: parts}}
   end
 
-  defp new_part(now) do
+  defp new_part(now, fast?) do
     %{
       seen: MapSet.new(),
       max_seq: nil,
       queue: :queue.new(),
       inflight: nil,
       last_chunk_at: now,
-      tokens: CallTranscribe.timing().chunk_burst / 1,
-      tokens_at: now
+      tokens: limits(fast?).burst / 1,
+      tokens_at: now,
+      # Fast sessions: the speaker's last words and line end (the overlap de-duplication).
+      tail: [],
+      tail_end: nil
     }
+  end
+
+  # §36.4 per-participant limits; a fast session's 1-4 s chunks get their own (proposal
+  # 2026-10-15-live-call-latency).
+  defp limits(fast?) do
+    t = CallTranscribe.timing()
+
+    if fast?,
+      do: %{per_min: t.fast_chunk_per_min, burst: t.fast_chunk_burst, queue: t.fast_queue_max},
+      else: %{per_min: t.chunk_per_min, burst: t.chunk_burst, queue: @queue_max}
   end
 
   ## Pushes (§36.3)
@@ -449,6 +463,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       discard: false
     }
 
+    s = %{s | fast: CallTranscribe.live_fast?(Session.user_ids(s), s.compare)}
+
     s = Repo.insert!(s)
     CallTranscribe.signal(s)
 
@@ -482,7 +498,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     s = %{s | state: "on", started_at: Clock.usec(Clock.now()), expires_at: nil}
     now = mono()
 
-    parts = Map.new(Session.user_ids(s), fn u -> {u, new_part(now)} end)
+    parts = Map.new(Session.user_ids(s), fn u -> {u, new_part(now, s.fast)} end)
 
     rt = %{
       sid: s.session_id,
@@ -497,6 +513,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       lang_ms: %{},
       spk_ms: %{},
       hint: hint(s),
+      fast: s.fast,
+      guard_at: nil,
       chunks: 0,
       speech_ms: 0,
       latency_ms: 0,
@@ -504,6 +522,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       posts: 0
     }
 
+    rt = guard(rt)
     st = cancel_timer(st, :expire)
     st = save(%{st | rt: rt}, s)
     st = enqueue_post(st, {:consent, s})
@@ -633,7 +652,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     rt = st.rt
     p = rt.parts[user]
     now = mono()
-    {tokens, p} = refill(p, now)
+    lim = limits(rt.fast)
+    {tokens, p} = refill(p, now, lim)
 
     cond do
       MapSet.member?(p.seen, m.seq) ->
@@ -645,7 +665,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       tokens < 1.0 ->
         {{:error, 429, :rate_limited}, st}
 
-      queued(p) >= @queue_max ->
+      queued(p) >= lim.queue ->
         {{:error, 503, :transcribe_unavailable}, st}
 
       true ->
@@ -679,9 +699,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     end
   end
 
-  defp refill(p, now) do
-    t = CallTranscribe.timing()
-    tokens = min(t.chunk_burst / 1, p.tokens + (now - p.tokens_at) * t.chunk_per_min / 60_000)
+  defp refill(p, now, lim) do
+    tokens = min(lim.burst / 1, p.tokens + (now - p.tokens_at) * lim.per_min / 60_000)
     {tokens, %{p | tokens: tokens, tokens_at: now}}
   end
 
@@ -703,6 +722,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
         {audio, meta} = Map.pop(chunk, :audio)
         compare? = st_session(st, sid).compare
         opts = Speech.hint_opts(Map.get(rt, :hint))
+        # Proposal 2026-10-15-live-call-latency: live GPU priority and the fast English model.
+        opts = if Map.get(rt, :fast), do: opts ++ [fast: true, priority: "live"], else: opts
 
         task =
           Task.Supervisor.async_nolink(CallTranscribe.TaskSup, fn ->
@@ -831,6 +852,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
         transcribed: rt.transcribed + 1
     }
 
+    {r, rt} = overlap(rt, meta, r)
+
     if r.speech do
       rt = count_speech(rt, meta, r.model, r.language)
 
@@ -876,7 +899,56 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     }
   end
 
+  ## Fast sessions (proposal 2026-10-15-live-call-latency)
+
+  # The chunk overlaps the speaker's previous one (the phone's 0.5 s): drop the repeated words.
+  defp overlap(%{fast: true} = rt, meta, %{speech: true} = r) do
+    p = rt.parts[meta.speaker]
+
+    text =
+      if p.tail_end != nil and DateTime.compare(meta.start, p.tail_end) == :lt,
+        do: Overlap.strip(p.tail, r.text),
+        else: r.text
+
+    p = %{
+      p
+      | tail: Overlap.tail(p.tail, text),
+        tail_end: max_dt(p.tail_end || meta.end, meta.end)
+    }
+
+    rt = %{rt | parts: Map.put(rt.parts, meta.speaker, p)}
+
+    if String.trim(text) == "",
+      do: {%{r | text: "", speech: false}, rt},
+      else: {%{r | text: text}, rt}
+  end
+
+  defp overlap(rt, _meta, r), do: {r, rt}
+
+  # While a fast session is on, the speech-guard pause file says "live call": the evals, the
+  # night compare run and the TTS lab don't start GPU work (extended every minute).
+  defp guard(%{fast: true} = rt) do
+    now = mono()
+
+    if rt.guard_at == nil or now - rt.guard_at >= 60_000 do
+      SpeechGuard.hold("live_call", CallTranscribe.timing().fast_guard_s)
+      %{rt | guard_at: now}
+    else
+      rt
+    end
+  end
+
+  defp guard(rt), do: rt
+
   ## Turns (§36.5 grouping)
+
+  # Proposal 2026-10-15-live-call-latency: a fast session posts every chunk's line at once (the
+  # phone already cut it at a pause); a turn is one chunk.
+  defp add_segment(st, %{fast: true} = rt, seg) do
+    {st, rt} = close_turn(st, rt)
+    {st, rt} = open_turn(st, rt, seg, false)
+    close_turn(st, rt)
+  end
 
   defp add_segment(st, rt, seg) do
     t = CallTranscribe.timing()
@@ -910,9 +982,16 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     end
   end
 
-  defp open_turn(st, rt, seg) do
+  defp open_turn(st, rt, seg, flush? \\ true) do
     ref = make_ref()
-    Process.send_after(self(), {:flush_turn, rt.sid, ref}, CallTranscribe.timing().turn_open_ms)
+
+    if flush?,
+      do:
+        Process.send_after(
+          self(),
+          {:flush_turn, rt.sid, ref},
+          CallTranscribe.timing().turn_open_ms
+        )
 
     turn = %{
       ref: ref,

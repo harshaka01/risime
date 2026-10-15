@@ -518,4 +518,155 @@ defmodule RisiMe.Agent.SpeechHttpTest do
       assert {:error, :unavailable} = Http.fallback_transcribe("a")
     end
   end
+
+  describe "proposal 2026-10-15-live-call-latency: the fast path (RISI_LIVE_FAST)" do
+    setup do
+      Http.reset_fast_backoff()
+      on_exit(&Http.reset_fast_backoff/0)
+    end
+
+    defp detected(conn, lang, p \\ 0.98),
+      do: Req.Test.json(conn, %{"language" => lang, "probability" => p, "reason" => "detected"})
+
+    test "English: detect (live, with the hint), then the fast English model with language=en" do
+      rec =
+        stub(fn conn, body ->
+          assert field(body, "priority") == "live"
+
+          case conn.request_path do
+            "/v1/audio/detect" ->
+              assert field(body, "language_hint") == "si,en"
+              detected(conn, "en")
+
+            "/v1/audio/transcriptions" ->
+              assert field(body, "model") == "faster-whisper-large-v3-turbo"
+              assert field(body, "language") == "en"
+
+              Req.Test.json(conn, %{
+                "text" => " see you at ten ",
+                "language" => "en",
+                "model" => "faster-whisper-large-v3-turbo",
+                "processing_s" => 0.21
+              })
+          end
+        end)
+
+      assert {:ok, r} =
+               Http.transcribe("a", fast: true, priority: "live", language_hint: ["si", "en"])
+
+      assert %{text: "see you at ten", model: "faster-whisper-large-v3-turbo", language: "en"} = r
+      assert r.language_probability == 0.98
+
+      assert ["/v1/audio/detect", "/v1/audio/transcriptions"] =
+               rec |> Agent.get(& &1) |> Enum.reverse() |> Enum.map(&elem(&1, 0))
+    end
+
+    test "Sinhala and Tamil keep their route: model=auto with the detected language" do
+      for lang <- ["si", "ta"] do
+        stub(fn conn, body ->
+          case conn.request_path do
+            "/v1/audio/detect" ->
+              detected(conn, lang)
+
+            "/v1/audio/transcriptions" ->
+              assert field(body, "model") == "auto"
+              assert field(body, "language") == lang
+              assert field(body, "priority") == "live"
+              Req.Test.json(conn, %{"text" => "x", "language" => lang, "model" => "m-#{lang}"})
+          end
+        end)
+
+        assert {:ok, %{model: "m-" <> ^lang, language: ^lang}} =
+                 Http.transcribe("a", fast: true, priority: "live")
+      end
+    end
+
+    test "no speech at detection: nothing is transcribed" do
+      rec =
+        stub(fn conn, _ ->
+          assert conn.request_path == "/v1/audio/detect"
+          Req.Test.json(conn, %{"reason" => "no_speech", "language" => nil, "model" => nil})
+        end)
+
+      assert {:ok, %{speech: false, text: ""}} = Http.transcribe("a", fast: true)
+      assert length(Agent.get(rec, & &1)) == 1
+    end
+
+    test "the fast model can't be loaded (503): auto with language=en, then auto only for 5 min" do
+      rec =
+        stub(fn conn, body ->
+          case {conn.request_path, field(body, "model")} do
+            {"/v1/audio/detect", _} ->
+              detected(conn, "en")
+
+            {_, "faster-whisper-large-v3-turbo"} ->
+              Plug.Conn.send_resp(conn, 503, "{}")
+
+            {_, "auto"} ->
+              Req.Test.json(conn, %{
+                "text" => "ok",
+                "language" => "en",
+                "model" => "faster-whisper-large-v3"
+              })
+          end
+        end)
+
+      assert {:ok, %{model: "faster-whisper-large-v3"}} = Http.transcribe("a", fast: true)
+
+      assert [
+               {"/v1/audio/detect", _, _},
+               {"/v1/audio/transcriptions", b1, _},
+               {"/v1/audio/transcriptions", b2, _}
+             ] = rec |> Agent.get(& &1) |> Enum.reverse()
+
+      assert field(b1, "model") == "faster-whisper-large-v3-turbo"
+      assert field(b2, "model") == "auto" and field(b2, "language") == "en"
+
+      # Backed off: one auto request (no detect, no fast model).
+      Agent.update(rec, fn _ -> [] end)
+
+      assert {:ok, %{model: "faster-whisper-large-v3"}} =
+               Http.transcribe("a", fast: true, priority: "live")
+
+      assert [{"/v1/audio/transcriptions", b, _}] = Agent.get(rec, & &1)
+      assert field(b, "model") == "auto" and field(b, "language") == nil
+      assert field(b, "priority") == "live"
+    end
+
+    test "an older service without /v1/audio/detect (404): auto as before" do
+      stub(fn conn, body ->
+        case conn.request_path do
+          "/v1/audio/detect" ->
+            Plug.Conn.send_resp(conn, 404, "{}")
+
+          _ ->
+            assert field(body, "model") == "auto"
+            Req.Test.json(conn, %{"text" => "ok", "language" => "en"})
+        end
+      end)
+
+      assert {:ok, %{text: "ok"}} = Http.transcribe("a", fast: true)
+    end
+
+    test "fast_en_model: the default, a configured one, none" do
+      assert Http.fast_en_model() == "faster-whisper-large-v3-turbo"
+      cfg = Application.get_env(:risime, :risi_speech_http)
+      Application.put_env(:risime, :risi_speech_http, Keyword.put(cfg, :fast_en_model, "x"))
+      assert Http.fast_en_model() == "x"
+      Application.put_env(:risime, :risi_speech_http, Keyword.put(cfg, :fast_en_model, "none"))
+      assert Http.fast_en_model() == nil
+    end
+
+    test "without the fast flag nothing changes: one auto request, no priority" do
+      rec =
+        stub(fn conn, body ->
+          assert field(body, "model") == "auto"
+          assert field(body, "priority") == nil
+          Req.Test.json(conn, %{"text" => "ok", "language" => "en"})
+        end)
+
+      assert {:ok, _} = Http.transcribe("a")
+      assert [{"/v1/audio/transcriptions", _, _}] = Agent.get(rec, & &1)
+    end
+  end
 end

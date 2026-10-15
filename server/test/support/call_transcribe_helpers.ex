@@ -21,9 +21,13 @@ defmodule RisiMe.FakeSpeech do
   def healthy?, do: Application.get_env(:risime, :fake_speech_healthy, true)
 
   @impl true
-  def transcribe(audio, _opts \\ []) do
+  def transcribe(audio, opts \\ []) do
     wait_gate()
     notify(:transcribe, audio)
+
+    # Proposal 2026-10-15-live-call-latency: the options reach the test too (fast, priority).
+    if pid = Application.get_env(:risime, :risi_test_pid),
+      do: send(pid, {:fake_speech_opts, audio, opts})
 
     # Proposal 2026-10-14-voice-queue: `:fake_speech_down` = the service is down (every call
     # fails, whatever the audio says) until a test brings it back.

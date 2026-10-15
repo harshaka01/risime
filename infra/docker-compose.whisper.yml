@@ -77,6 +77,8 @@ services:
       WHISPER_CPU_WORKERS: ${WHISPER_CPU_WORKERS:-2}
       WHISPER_HARD_FLOOR_MB: ${WHISPER_HARD_FLOOR_MB:-1536}
       WHISPER_PRIORITY: ${WHISPER_PRIORITY:-on}
+      # P0-1b 2026-10-15: GPU slots a batch request (compare, evals) may never take (0 = off).
+      WHISPER_LIVE_RESERVE: ${WHISPER_LIVE_RESERVE:-0}
       TRITON_CACHE_DIR: /cache/triton
       # cudaMallocAsync returns freed CUDA memory instead of caching it: measured 2.0 GB vs
       # 4.4 GB resident for large-v3 (int8_float16 vs float16 + cub_caching), and no slower.

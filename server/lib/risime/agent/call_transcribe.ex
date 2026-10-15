@@ -38,7 +38,14 @@ defmodule RisiMe.Agent.CallTranscribe do
     unavailable_ms: 60_000,
     # §36.4: 8 chunks per participant per 60 s, a burst of 3 (a token bucket).
     chunk_per_min: 8,
-    chunk_burst: 3
+    chunk_burst: 3,
+    # Proposal 2026-10-15-live-call-latency (RISI_LIVE_FAST): a fast session's 1-4 s chunks.
+    fast_chunk_per_min: 40,
+    fast_chunk_burst: 8,
+    fast_queue_max: 4,
+    # The speech-guard pause file is held while a fast session is on (evals, the night run and
+    # the TTS lab stand back), extended every minute.
+    fast_guard_s: 120
   }
 
   @max_live 4
@@ -100,6 +107,17 @@ defmodule RisiMe.Agent.CallTranscribe do
 
   @doc "Compare mode for a request of `user`: listed now and the setting on."
   def compare?(user), do: dev?(user) and dev_setting(user)
+
+  @doc """
+  Proposal 2026-10-15-live-call-latency: true when a new session of these participants takes the
+  live fast path (`RISI_LIVE_FAST` on, or canary with a `RISI_DEV_USERS` participant). A compare
+  session never does (it runs every model on each chunk).
+  """
+  def live_fast?(users, compare?) do
+    not compare? and RisiMe.Agents.Flags.feature_for("RISI_LIVE_FAST", users)
+  rescue
+    _ -> false
+  end
 
   ## Devices
 

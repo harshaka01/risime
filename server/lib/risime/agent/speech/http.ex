@@ -28,8 +28,9 @@ defmodule RisiMe.Agent.Speech.Http do
   * **Health:** `GET /health`, cached 15 s.
   * **Priority** (incident 2026-10-14): `opts[:priority]` `"live"` (voice notes,
     `Speech.transcribe_note/2`) or `"batch"` (compare) is sent as the multipart field
-    `priority`; call chunks send none (`normal`). The service's priority gate serves `live`
-    first; an older service ignores the field.
+    `priority`; call chunks send none (`normal`), except a fast session's (`RISI_LIVE_FAST`,
+    `transcribe_fast/2`: `live`). The service's priority gate serves `live` first; an older
+    service ignores the field.
   * **Fallback** (incident 2026-10-14): `fallback_transcribe/2` asks the fast CPU model
     (omniASR-CTC-1B int8) by name; `Speech.transcribe_note/2` uses it after a timeout.
   * **Language hint** (decision 071 amendment d): `opts[:language_hint]` (`["si", "en"]`) is
@@ -106,7 +107,120 @@ defmodule RisiMe.Agent.Speech.Http do
         end
 
       :auto ->
-        transcribe_auto(audio, opts)
+        if opts[:fast], do: transcribe_fast(audio, opts), else: transcribe_auto(audio, opts)
+    end
+  end
+
+  @fast_en_default "faster-whisper-large-v3-turbo"
+  @fast_backoff_ms 300_000
+
+  @doc """
+  Proposal 2026-10-15-live-call-latency (`RISI_LIVE_FAST`): a live call chunk (`opts[:fast]`,
+  sent at `priority: "live"`). While the fast English model (`fast_en_model/0`) can be served:
+  the language is detected first (`/v1/audio/detect`, with the call's hint), an English chunk
+  goes to that model with `language=en`, and Sinhala and Tamil keep their current route
+  (`model=auto` with the detected `language`, so the service doesn't detect twice). When the
+  service can't load it (`503`: not enough memory; `404`: not served), every chunk goes to
+  `model=auto` as before (one request) for 5 min before the model is tried again.
+  """
+  def transcribe_fast(audio, opts) do
+    en = fast_en_model()
+
+    if en == nil or fast_backoff?() do
+      transcribe_auto(audio, opts)
+    else
+      case detect_routed(audio, opts) do
+        {:ok, %{"reason" => "no_speech"}} ->
+          {:ok, no_speech()}
+
+        {:ok, %{} = d} ->
+          lang = if d["language"] in ["si", "ta", "en"], do: d["language"]
+          p = d["probability"]
+
+          r =
+            if lang == "en",
+              do: fast_en(audio, en, opts),
+              else: post_transcription(audio, "auto", Keyword.put(opts, :language, lang))
+
+          with {:ok, res} <- r,
+               do: {:ok, %{res | language_probability: res.language_probability || p}}
+
+        {:error, :not_served} ->
+          transcribe_auto(audio, opts)
+
+        {:error, _} = e ->
+          e
+      end
+    end
+  end
+
+  defp fast_en(audio, en, opts) do
+    case post_transcription(audio, en, Keyword.put(opts, :language, "en")) do
+      {:error, e} when e in [:unavailable, :not_served] ->
+        :persistent_term.put({__MODULE__, :fast_backoff}, System.monotonic_time(:millisecond))
+        Logger.info("speech: fast English model unavailable (#{e}), auto route for 5 min")
+        post_transcription(audio, "auto", Keyword.put(opts, :language, "en"))
+
+      other ->
+        other
+    end
+  end
+
+  @doc "The fast English model alias (`RISI_SPEECH_FAST_EN`; `\"\"` or `\"none\"`: none)."
+  def fast_en_model do
+    case Keyword.get(config(), :fast_en_model, System.get_env("RISI_SPEECH_FAST_EN")) do
+      nil -> @fast_en_default
+      v when v in ["", "none"] -> nil
+      v -> v
+    end
+  end
+
+  defp fast_backoff? do
+    case :persistent_term.get({__MODULE__, :fast_backoff}, nil) do
+      nil -> false
+      at -> System.monotonic_time(:millisecond) - at < @fast_backoff_ms
+    end
+  end
+
+  @doc false
+  def reset_fast_backoff, do: :persistent_term.erase({__MODULE__, :fast_backoff})
+
+  defp no_speech do
+    %{
+      text: "",
+      language: "en",
+      model: Speech.route("en"),
+      elapsed_ms: 0,
+      speech: false,
+      romanised: false,
+      language_probability: nil,
+      script: nil,
+      segments: [],
+      avg_logprob: nil,
+      no_speech_prob: nil
+    }
+  end
+
+  # The routing decision with the call's hint (the same decision `model=auto` makes).
+  defp detect_routed(audio, opts) do
+    with {:ok, base} <- base_url() do
+      fields =
+        [file: {audio, filename: "chunk.ogg", content_type: "audio/ogg"}]
+        |> with_hint(Keyword.delete(opts, :hotwords))
+        |> with_priority(opts)
+
+      case Req.post(req(base <> "/v1/audio/detect", Keyword.get(opts, :timeout, @timeout_ms)),
+             form_multipart: fields
+           ) do
+        {:ok, %{status: 200, body: %{} = b}} -> {:ok, b}
+        {:ok, %{status: 404}} -> {:error, :not_served}
+        {:ok, %{status: s}} when s in [429, 503] -> {:error, :unavailable}
+        {:ok, %{status: _}} -> {:error, :failed}
+        {:error, %{reason: :timeout}} -> {:error, :timeout}
+        {:error, _} -> {:error, :unavailable}
+      end
+    else
+      _ -> {:error, :unavailable}
     end
   end
 

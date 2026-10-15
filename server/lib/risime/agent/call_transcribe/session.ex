@@ -26,6 +26,8 @@ defmodule RisiMe.Agent.CallTranscribe.Session do
     field :by, :binary_id
     field :discard, :boolean, default: false
     field :compare, :boolean, default: false
+    # Proposal 2026-10-15-live-call-latency (RISI_LIVE_FAST): decided at the request.
+    field :fast, :boolean, default: false
     field :participants, {:array, :map}
     field :chunks, :integer, default: 0
     field :speech_ms, :integer, default: 0
@@ -38,6 +40,16 @@ defmodule RisiMe.Agent.CallTranscribe.Session do
   @live ~w(requested on paused)
 
   @chunk %{"min_ms" => 5000, "max_ms" => 20_000, "max_bytes" => 262_144}
+  # Proposal 2026-10-15-live-call-latency: a fast session asks for VAD-cut chunks of 1-4 s with
+  # 0.5 s of overlap (`mode` and `overlap_ms` are new and optional; an older app ignores them and
+  # keeps its 10-15 s chunks, which a fast session accepts too).
+  @chunk_fast %{
+    "min_ms" => 1000,
+    "max_ms" => 4000,
+    "max_bytes" => 262_144,
+    "mode" => "vad",
+    "overlap_ms" => 500
+  }
 
   @doc "The final states (§36.2)."
   def final_states, do: @final
@@ -48,8 +60,10 @@ defmodule RisiMe.Agent.CallTranscribe.Session do
   @doc "True for `requested`, `on` and (v1.45) `paused`."
   def live?(%__MODULE__{state: s}), do: s in @live
 
-  @doc "The §36.4 chunk limits."
+  @doc "The §36.4 chunk limits (a fast session's: proposal 2026-10-15-live-call-latency)."
   def chunk, do: @chunk
+  def chunk(%__MODULE__{fast: true}), do: @chunk_fast
+  def chunk(_), do: @chunk
 
   @doc "A participant's entry (or nil)."
   def participant(%__MODULE__{participants: ps}, user),
@@ -82,7 +96,7 @@ defmodule RisiMe.Agent.CallTranscribe.Session do
       "by" => s.by,
       "reason" => s.reason,
       "discard" => s.discard,
-      "chunk" => @chunk,
+      "chunk" => chunk(s),
       "server_ts" => Clock.ts(now)
     }
   end

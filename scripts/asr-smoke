@@ -318,6 +318,25 @@ assert S.decide(low, ["ta"], "prior") == ("ta", "hint_prior")
 assert S.decide(si_d, [], "force") == ("si", "detected")
 assert S.parse_hint("si, EN,fr,si") == ["si", "en"]
 print("ok   hint fixture: decide() off/prior/force (mode now %s, en_min_p %s)" % (S.HINT_MODE, S.HINT_EN_P))
+# P0-1b 2026-10-15: a live request takes the reserved slot; a second batch waits for it.
+import threading, time
+if S.PRIORITY_ON:
+    sl, order = S.PrioritySlots(2, 1), []
+    def job(p, name, hold):
+        S.set_priority(p)
+        with sl:
+            order.append(name)
+            time.sleep(hold)
+    ts = [threading.Thread(target=job, args=a) for a in
+          (("batch", "b1", 0.4), ("batch", "b2", 0.05), ("live", "l1", 0.05))]
+    for t in ts:
+        t.start()
+        time.sleep(0.05)
+    for t in ts:
+        t.join()
+    assert order == ["b1", "l1", "b2"], order
+    assert S.PrioritySlots(1, 1).reserve == 0
+    print("ok   live reserve fixture: %s (WHISPER_LIVE_RESERVE now %s)" % (order, S.LIVE_RESERVE))
 print("FIXTURE PASS")
 ' 2>&1)" || fail "si retry fixture: $fx"
 grep -q '^FIXTURE PASS$' <<<"$fx" || fail "si retry fixture: $fx"

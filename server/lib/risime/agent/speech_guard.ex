@@ -42,14 +42,20 @@ defmodule RisiMe.Agent.SpeechGuard do
   def slow_ms(_), do: 8_000
 
   @doc "Writes (or extends) the pause file for `code`, unless a manual pause is in place."
-  def pause(code) do
+  def pause(code), do: hold(code, pause_s())
+
+  @doc """
+  Writes (or extends) the pause file for `code` for `seconds` from now, unless a manual pause is
+  in place (a live fast call holds it while it runs: proposal 2026-10-15-live-call-latency).
+  """
+  def hold(code, seconds) when is_integer(seconds) and seconds > 0 do
     case path() do
       nil ->
         :ok
 
       path ->
         now = System.os_time(:second)
-        until = now + pause_s()
+        until = now + seconds
 
         case File.read(path) do
           {:ok, body} ->
