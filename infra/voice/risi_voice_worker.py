@@ -67,7 +67,25 @@ WIN_MS = 32
 MAX_UTT_S = 30
 PREROLL_WINS = 10  # 320 ms kept before the speech start
 TAIL_MS = 700
-ECHO_RATIO = 0.35
+# While Risi speaks, a voiced window counts only if the caller's level after AEC is at least this
+# share of Risi's loudest output in the last 800 ms (2026-10-15: 0.35 rejected a caller talking over
+# gapless speech, whose level after AEC was ~0.3 of Risi's; the AEC residual of a -6 dB echo is ~0.05-0.13).
+ECHO_RATIO = float(os.environ.get("RISI_VOICE_ECHO_RATIO", "0.15"))
+# A barge-in fires on k voiced windows among the last n (k, n as % of barge_ms; 300 ms -> 6 of 9).
+# Replayed on the 15 Oct -6 dB echo log: 6 of 9 never fired on echo, 5 of 8 did once.
+ECHO_RATIO_COLD = 0.35
+# Echo the AEC let through (harness -6 dB, 15 Oct: a self-barge "smaller chunks" at in/out 0.3, the same
+# level as a caller) is still a copy of Risi's audio: a voiced window whose waveform matches Risi's
+# recent output (normalised cross-correlation >= ECHO_CORR at some delay) is not the caller.
+ECHO_CORR = float(os.environ.get("RISI_VOICE_ECHO_CORR", "0.5"))
+ECHO_CORR_WIN = 100  # ms of caller-side audio compared
+ECHO_EXCESS = float(os.environ.get("RISI_VOICE_ECHO_EXCESS", "1.5"))
+ECHO_RAW_CORR_MAX = float(os.environ.get("RISI_VOICE_ECHO_RAW_CORR_MAX", "0.6"))
+ECHO_REF_MS = 1200  # ms of Risi's played audio searched (covers the echo path's delay)
+AEC_WARM_MS = int(os.environ.get("RISI_VOICE_AEC_WARM_MS", "4000"))
+BARGE_K_PCT = int(os.environ.get("RISI_VOICE_BARGE_K_PCT", "60"))
+BARGE_N_PCT = int(os.environ.get("RISI_VOICE_BARGE_N_PCT", "90"))
+LEVEL_LOG = os.environ.get("RISI_VOICE_LEVEL_LOG", "")
 BARGE_KEEP_WINS = 94  # 3 s kept while Risi speaks (a barge-in run may start that far back)
 # Gapless speech (2026-10-15, Harsha's item C): Kokoro pads every sentence it speaks with ~300 ms of
 # silence before and ~550 ms after (measured: af_heart, af_bella, bf_emma), so two sentences played
@@ -122,6 +140,48 @@ def cal_event(payload, pending):
         ev["ok"] = False
         ev["reason"] = "error"
     return ev
+
+
+def echo_ncc(mic16, ref, with_lag=False):
+    """Is the caller-side audio (after AEC, the last ECHO_CORR_WIN ms at 16 kHz) a copy of what Risi
+    played (the last ECHO_REF_MS)? The peak normalised cross-correlation over every delay in that span:
+    echo the AEC let through is a delayed, filtered copy of Risi's audio (high); a caller's voice is
+    not (low), and double-talk lowers it. 0.0 when there is no reference or no signal."""
+    if len(mic16) < mic16.maxlen or len(ref) < len(mic16):
+        return (0.0, None) if with_lag else 0.0
+    m = np.concatenate(list(mic16))
+    m = m - m.mean()
+    mn = float(np.sqrt(np.dot(m, m)))
+    if mn < 1e-3:
+        return (0.0, None) if with_lag else 0.0
+    f = np.concatenate([x for _, x in ref])
+    n, k = len(f), len(m)
+    size = 1 << int(np.ceil(np.log2(n + k)))
+    xc = np.fft.irfft(np.fft.rfft(f, size) * np.conj(np.fft.rfft(m, size)), size)[: n - k + 1]
+    c2 = np.concatenate([[0.0], np.cumsum(f.astype(np.float64) ** 2)])
+    fn = np.sqrt(np.maximum(c2[k:] - c2[: n - k + 1], 1e-9))
+    ncc = np.abs(xc) / (fn * mn)
+    if with_lag:
+        i = int(np.argmax(ncc))
+        return float(ncc[i]), n - k - i  # the delay, in samples back from the newest reference
+    return float(np.max(ncc))
+
+
+def raw_rms_now(frames):
+    x = np.concatenate(list(frames)).astype(np.float64)
+    return float(np.sqrt(np.mean(x ** 2)))
+
+
+def ref_rms(ref, lag, k):
+    """RMS of Risi's played audio `lag` samples back from the newest (k samples), or None."""
+    if not ref:
+        return None
+    f = np.concatenate([x for _, x in ref])
+    a = len(f) - k - lag
+    if a < 0 or lag < 0:
+        return None
+    seg = f[a:a + k]
+    return float(np.sqrt(np.mean(seg.astype(np.float64) ** 2)))
 
 
 def now_ms():
@@ -233,6 +293,7 @@ class Worker:
         self.source = None
         self.apm = rtc.AudioProcessingModule(echo_cancellation=True, high_pass_filter=True)
         self.vad = load_silero_vad()
+        self.vad_raw = load_silero_vad()
         self.cfg = {}
         self.caller = None
         self.say_q = asyncio.Queue()  # (gen, say) not yet being synthesised
@@ -255,6 +316,8 @@ class Worker:
         # beat ECHO_RATIO x Risi's own recent output level.
         self.speak_until = 0.0
         self.out_levels = collections.deque()  # (t_ms, rms) of Risi's frames, last ~1.5 s
+        self.played_ms = 0  # Risi's audio played so far in this call (the AEC's training)
+        self.ref = collections.deque()  # (t_ms, 160 samples at 16 kHz) of Risi's played audio
         self.cal_pending = collections.OrderedDict()  # v1.52 §41.8: request ids sent, not yet answered
 
     # ---- control
@@ -384,10 +447,20 @@ class Worker:
         rs = soxr.ResampleStream(SR, VAD_SR, 1, dtype="float32")
         buf16 = np.zeros(0, dtype=np.float32)
         lvl = []
+        raw_lvl = []
+        dbg = open(LEVEL_LOG, "a") if LEVEL_LOG else None  # numbers only (harness tuning)
         pre = []
         utt = None  # list of 16-kHz float windows while in speech
         voiced = 0
         run = 0
+        hist = collections.deque(maxlen=64)
+        pre_raw = []
+        utt_raw = False
+        mic16 = collections.deque(maxlen=ECHO_CORR_WIN // 10)  # 10-ms frames at 16 kHz, after AEC
+        raw16 = collections.deque(maxlen=ECHO_CORR_WIN // 10)  # the same before the AEC
+        rawbuf = np.zeros(0, dtype=np.float32)
+        lags = collections.deque(maxlen=50)
+        erl = collections.deque(maxlen=50)
         silence = 0
         speech_ms = 0
         last_voice = 0.0
@@ -397,47 +470,128 @@ class Worker:
                 f = ev.frame
                 if f.samples_per_channel != FRAME:
                     continue
+                raw = np.frombuffer(f.data, dtype=np.int16)
+                raw_lvl.append(float(np.sqrt(np.mean(raw.astype(np.float32) ** 2))))
+                r16 = raw.astype(np.float32).reshape(-1, 3).mean(axis=1)  # a copy, before the AEC
+                raw16.append(r16)
+                rawbuf = np.concatenate([rawbuf, r16 / 32768.0])
                 self.apm.process_stream(f)  # AEC (reverse = Risi's own audio) + high-pass, in place
                 pcm = np.frombuffer(f.data, dtype=np.int16)
                 lvl.append(float(np.sqrt(np.mean(pcm.astype(np.float32) ** 2))))
+                mic16.append(pcm.astype(np.float32).reshape(-1, 3).mean(axis=1))
                 clean = den.frame(pcm)
                 buf16 = np.concatenate([buf16, rs.resample_chunk(clean / 32768.0)])
                 while len(buf16) >= VAD_WIN:
                     win, buf16 = buf16[:VAD_WIN], buf16[VAD_WIN:]
                     p = float(self.vad(torch.from_numpy(win.copy()), VAD_SR).item())
+                    # The same 32 ms before the AEC (its own VAD state): the caller's voice is there even
+                    # when the AEC's double-talk suppression removes it (gapless speech, 15 Oct).
+                    p_raw = 0.0
+                    rwin = None
+                    if len(rawbuf) >= VAD_WIN:
+                        rwin, rawbuf = rawbuf[:VAD_WIN], rawbuf[VAD_WIN:]
+                        p_raw = float(self.vad_raw(torch.from_numpy(rwin.copy()), VAD_SR).item())
                     t_now = now_ms()
                     speaking = self.speaking or t_now < self.speak_until
                     in_rms = max(lvl[-4:]) if lvl else 0.0
                     lvl = lvl[-4:]
                     is_voice = p >= (0.7 if speaking else 0.5)
-                    if speaking and is_voice and in_rms < ECHO_RATIO * self.out_level(t_now):
+                    raw_rms = max(raw_lvl[-4:]) if raw_lvl else 0.0
+                    raw_lvl = raw_lvl[-4:]
+                    if dbg:
+                        dbg.write("%d %d %.2f %.0f %.0f %.0f\n" % (t_now, speaking, p, in_rms, raw_rms,
+                                                                  self.out_level(t_now)))
+                    # Until the AEC has heard AEC_WARM_MS of Risi, its echo residual is high (15 Oct
+                    # -6 dB harness: up to 0.84 of Risi's level in the first 5 s, <= ~0.4 after):
+                    # the strict gate of 14 Oct (0.35, consecutive windows) until then.
+                    warm = self.played_ms >= AEC_WARM_MS
+                    ratio = ECHO_RATIO if warm else ECHO_RATIO_COLD
+                    corr = echo_ncc(mic16, self.ref) if speaking and is_voice and warm else 0.0
+                    corr_raw, lag = echo_ncc(raw16, self.ref, with_lag=True) if speaking else (0.0, None)
+                    # The echo path (delay, loss) learned from windows that are clearly echo.
+                    if lag is not None and corr_raw >= 0.75:
+                        lags.append(lag)
+                        rr = ref_rms(self.ref, lag, len(raw16) * 160)
+                        if rr and rr > 100:
+                            erl.append(raw_rms_now(raw16) / rr)
+                    excess = 0.0
+                    if speaking and len(lags) >= 10 and len(erl) >= 10:
+                        rr = ref_rms(self.ref, int(np.median(lags)), len(raw16) * 160)
+                        if rr is not None:
+                            pred = float(np.median(erl)) * rr
+                            excess = raw_rms_now(raw16) / max(pred, 30.0)
+                    if dbg:
+                        dbg.write("C %d %.2f %.2f %.2f %.2f\n" % (t_now, corr, corr_raw, p_raw, excess))
+                    if speaking and is_voice and in_rms < ratio * self.out_level(t_now):
                         is_voice = False  # as loud as Risi's own echo would be: not the caller
+                    elif speaking and is_voice and warm and corr >= ECHO_CORR:
+                        is_voice = False  # a copy of Risi's own output: echo the AEC let through
+                    # Before the AEC: while Risi talks without pauses, the AEC's double-talk
+                    # suppression can remove the caller entirely (harness -6 dB echo, 15 Oct). Voice
+                    # there counts when the mic is ECHO_EXCESS x louder than the echo predicted from
+                    # what Risi played (the learned delay and loss); echo alone stays ~1.0 (p99 1.9).
+                    why = "post" if is_voice else ""
+                    # ... and only when the raw audio is not mostly a copy of Risi's (corr_raw below
+                    # ECHO_RAW_CORR_MAX: the echo tail after Risi's last frame mispredicts, 2-4x, but
+                    # still matches Risi's audio at 0.66-0.82; a caller talking over it is 0.2-0.6).
+                    if (speaking and not is_voice and p_raw >= 0.5 and excess >= ECHO_EXCESS
+                            and corr_raw < ECHO_RAW_CORR_MAX):
+                        is_voice, why = True, "excess"
+                    # No echo path at all after AEC_WARM_MS of Risi's audio (nothing ever matched what
+                    # Risi played: a phone with its own echo cancelling): the raw VAD at the normal
+                    # threshold, above the level gate, is the caller.
+                    elif (speaking and not is_voice and warm and not lags and p_raw >= 0.5
+                          and raw_rms >= ECHO_RATIO * self.out_level(t_now)):
+                        is_voice, why = True, "noecho"
                     t = now_ms()
                     if utt is None:
                         pre.append(win)
                         pre = pre[-BARGE_KEEP_WINS:]
-                        # Strictly consecutive voiced windows. (A leaky count that forgave gaps during
-                        # double-talk caught barge-ins sooner but let Risi's own echo through at -6 dB:
-                        # harness 2026-10-14, 3 self-barge-ins. Never hearing itself wins.)
+                        pre_raw.append(rwin if rwin is not None else win)
+                        pre_raw = pre_raw[-BARGE_KEEP_WINS:]
+                        # Not speaking: strictly consecutive voiced windows (64 ms). While Risi speaks
+                        # (a barge-in): k of the last n windows (BARGE_K_PCT / BARGE_N_PCT of barge_ms). With gapless speech the caller talks over continuous audio and the
+                        # AEC's double-talk suppression breaks a strict run (harness 2026-10-15: no
+                        # barge-in at all); the level gate (ECHO_RATIO 0.15 after AEC) keeps the echo out
+                        # (-6 dB echo test: no self-barge). History: 2026-10-14 a leaky count with the
+                        # old gate let echo through; the harness gate below is the check.
+                        hist.append(is_voice)
                         if is_voice:
                             voiced += 1
                             run += 1
                         else:
                             voiced, run = 0, 0
-                        need = self.cfg["barge_ms"] if speaking else 64
-                        if voiced * WIN_MS >= need:
+                        if speaking and not warm:
+                            fire = voiced * WIN_MS >= self.cfg["barge_ms"]
+                        elif speaking:
+                            n = max(2, -(-self.cfg["barge_ms"] * BARGE_N_PCT // (100 * WIN_MS)))
+                            k = max(2, -(-self.cfg["barge_ms"] * BARGE_K_PCT // (100 * WIN_MS)))
+                            recent = list(hist)[-n:]
+                            fire = sum(recent) >= k
+                            if fire:
+                                run = max(run, len(recent) - recent.index(True))
+                                voiced = max(voiced, sum(recent))
+                        else:
+                            fire = voiced * WIN_MS >= 64
+                        if fire:
+                            if dbg:
+                                dbg.write("FIRE %d %d %s\n" % (t_now, speaking, why))
                             if speaking and not barged:
                                 barged = True
                                 self.port.send({"ev": "barge_in", "utt_playing": self.playing_utt})
                                 self.stop_speaking()
-                            utt = list(pre[-(run + PREROLL_WINS):])
+                            # A barge-in is kept from before the AEC: during double-talk the AEC may
+                            # have removed the caller's first words (they are in the raw audio).
+                            utt_raw = speaking and len(pre_raw) == len(pre)
+                            src = pre_raw if utt_raw else pre
+                            utt = list(src[-(run + PREROLL_WINS):])
                             run = 0
                             speech_ms = voiced * WIN_MS
                             silence = 0
                             last_voice = t
                             self.port.send({"ev": "speech_start", "speaking": speaking})
                         continue
-                    utt.append(win)
+                    utt.append(rwin if utt_raw and rwin is not None else win)
                     if is_voice:
                         speech_ms += WIN_MS
                         silence = 0
@@ -450,6 +604,8 @@ class Worker:
                             keep = len(utt) - max(0, silence // WIN_MS - 3)  # ~100 ms tail kept
                             self.emit_utterance(utt[:keep], speech_ms, last_voice)
                         utt, voiced, run, pre, barged = None, 0, 0, [], False
+                        pre_raw, utt_raw = [], False
+                        hist.clear()
         finally:
             den.close()
 
@@ -572,10 +728,15 @@ class Worker:
         t_out = now_ms()
         # When the audio handed over so far will have played out (the source buffers ~200 ms).
         self.play_clock = max(self.play_clock, t_in) + FRAME * 1000.0 / SR
+        self.played_ms += FRAME * 1000 // SR
         self.speak_until = t_out + TAIL_MS
         self.out_levels.append((t_out, float(np.sqrt(np.mean(pcm.astype(np.float32) ** 2)))))
         while self.out_levels and self.out_levels[0][0] < t_out - 1500:
             self.out_levels.popleft()
+        # The reference for the echo check: what Risi played, 16 kHz (mean of 3), last ECHO_REF_MS.
+        self.ref.append((t_out, pcm.astype(np.float32).reshape(-1, 3).mean(axis=1)))
+        while self.ref and self.ref[0][0] < t_out - ECHO_REF_MS:
+            self.ref.popleft()
 
     async def player(self):
         prev_utt = None

@@ -229,6 +229,11 @@ async def main():
     if a.barge:
         _, pcm = clips[0]
         b = load(a.barge)
+        lead_ms = 0
+        for i in range(0, len(b) - FRAME, FRAME):
+            if float(np.sqrt(np.mean(b[i:i + FRAME].astype(np.float32) ** 2))) >= LOUD:
+                break
+            lead_ms += 10
         c.first_loud_after = None
         await c.play(pcm)
         c.mark = time.monotonic()
@@ -248,7 +253,15 @@ async def main():
             await asyncio.sleep(0.01)
         await task
         out["barge"] = {"stop_ms": None if stopped is None else int((stopped - t_talk) * 1000),
-                        "risi_was_speaking": c.last_loud > t_talk - 0.3}
+                        "risi_was_speaking": c.last_loud > t_talk - 0.3,
+                        # Host monotonic ms (the worker's clock too): to split the stop time into the
+                        # worker's detection and the audio path (RISI_VOICE_LEVEL_LOG FIRE lines).
+                        # The barge clip's own lead silence (TTS padding): stop_after_voice_ms is the
+                        # stop time from the caller's first audible frame.
+                        "clip_lead_ms": lead_ms,
+                        "stop_after_voice_ms": None if stopped is None else int((stopped - t_talk) * 1000) - lead_ms,
+                        "t_talk_mono_ms": int(t_talk * 1000),
+                        "t_stop_mono_ms": None if stopped is None else int(stopped * 1000)}
         c.first_loud_after = None
         c.mark = time.monotonic()
         first = await c.wait_first()
