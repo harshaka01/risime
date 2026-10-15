@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Root → Harsha in HIS Risi chat (Harsha 2026-10-15 15:31 SLT; RisiMe.Agent.RootInbox), with a push.
+#   scripts/risi-notify "<text>" [--options "A|B|C"] [--topic <slug>] [--kind ask|try|p0] [--sudo "<command>"]
+# Use ONLY when blocked on Harsha (a decision, a sudo command, a test on his phone), when something is ready to try
+# (--kind try: "Try now: <what to test>") and for P0 incidents (--kind p0). One message per topic (a new post on the
+# same --topic supersedes the open one; the same text again is refused). No progress chatter. Plain words, one question.
+# --sudo appends the command as copyable text plus "Run on spark2 (gx10-e23a)."
+# Options <= 3 are tap buttons (they send "Root: <option>"); more are lettered lines ("Reply with the letter.").
+# The recipient is RISI_ROOT_NOTIFY_USER in .env (the server refuses if unset). Replies: scripts/risi-inbox.
+# Prints only "posted <id>" or "refused: <why>".
+set -euo pipefail
+cd "$(dirname "$0")/.."
+text=""; options=""; topic=""; kind="ask"; sudo=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --options) options="${2:?}"; shift 2;;
+    --topic) topic="${2:?}"; shift 2;;
+    --kind) kind="${2:?}"; shift 2;;
+    --sudo) sudo="${2:?}"; shift 2;;
+    -*) echo "refused: unknown option $1"; exit 2;;
+    *) [ -z "$text" ] || { echo "refused: one text only (quote it)"; exit 2; }; text="$1"; shift;;
+  esac
+done
+[ -n "$text" ] || { echo 'usage: scripts/risi-notify "<text>" [--options "A|B|C"] [--topic <slug>] [--kind ask|try|p0] [--sudo "<cmd>"]'; exit 2; }
+b64=$(TEXT="$text" OPTIONS="$options" TOPIC="$topic" KIND="$kind" SUDO="$sudo" python3 -I -c '
+import base64, json, os
+o = [x.strip() for x in os.environ["OPTIONS"].split("|") if x.strip()]
+d = {"text": os.environ["TEXT"], "options": o, "topic": os.environ["TOPIC"] or None,
+     "kind": os.environ["KIND"], "sudo": os.environ["SUDO"] or None}
+print(base64.b64encode(json.dumps(d).encode()).decode())')
+out=$(scripts/risi-rpc "RisiMe.Agent.RootInbox.cli_post(\"$b64\")" 2>&1) || { echo "refused: rpc failed (is risime.service up?)"; exit 1; }
+line=$(printf '%s\n' "$out" | grep -E '^(posted|refused)' | tail -1 || true)
+echo "${line:-refused: no answer from the node}"
+case "$line" in posted*) exit 0;; *) exit 1;; esac

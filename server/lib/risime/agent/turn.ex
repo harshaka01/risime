@@ -148,7 +148,16 @@ defmodule RisiMe.Agent.Turn do
   defp turn_outcome({:snooze, _}), do: :snooze
   defp turn_outcome(_), do: :error
 
+  # Harsha 2026-10-15: a reply to root's question (`RisiMe.Agent.RootInbox`) is recorded for
+  # root before any routing; the brain does not run for it.
   defp do_run(conv, env, request_id, asker) do
+    case RisiMe.Agent.RootInbox.intercept(conv, env, request_id, asker) do
+      :pass -> brain(conv, env, request_id, asker)
+      result -> result
+    end
+  end
+
+  defp brain(conv, env, request_id, asker) do
     b = bounds()
     started = System.monotonic_time(:millisecond)
     turn_id = Ecto.UUID.generate()

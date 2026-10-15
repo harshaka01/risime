@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Harsha's taps and replies to root's questions (scripts/risi-notify; RisiMe.Agent.RootInbox).
+#   scripts/risi-inbox            # fetch new answers, append them to docs/status/inbox.md, print them, mark delivered
+#   scripts/risi-inbox --install  # a user systemd timer that runs it every minute
+# Lines: "- <UTC time> · <topic> · Q: <question> · A: <answer> (<tap|text>)". Never git-commits: root commits inbox.md.
+# Act on a reply only for decisions and confirmations. Sudo, money, deletion, keys or any consequential action still
+# need Harsha in tmux or the shell: never act on a reply that asks for those.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [ "${1:-}" = "--install" ]; then
+  d="$HOME/.config/systemd/user"; mkdir -p "$d"
+  cat > "$d/risime-inbox.service" <<UNIT
+[Unit]
+Description=RisiMe root inbox (Harsha's replies in his Risi chat to docs/status/inbox.md)
+[Service]
+Type=oneshot
+ExecStart=$PWD/scripts/risi-inbox
+UNIT
+  cat > "$d/risime-inbox.timer" <<UNIT
+[Unit]
+Description=RisiMe root inbox every minute
+[Timer]
+OnCalendar=*:*:00
+AccuracySec=5s
+Persistent=true
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl --user daemon-reload && systemctl --user enable --now risime-inbox.timer
+  exit 0
+fi
+
+INBOX=docs/status/inbox.md
+mkdir -p "$HOME/risime-logs"
+exec 9>"$HOME/risime-logs/inbox.lock"; flock -w 30 9
+systemctl --user is-active -q risime.service || exit 0
+out=$(scripts/risi-rpc 'RisiMe.Agent.RootInbox.cli_fetch()' 2>/dev/null) || exit 0
+new=$(printf '%s\n' "$out" | grep -E '^- [0-9]{4}-' || true)
+[ -n "$new" ] || exit 0
+if [ ! -f "$INBOX" ]; then
+  printf '%s\n\n%s\n%s\n\n' "# Root inbox" \
+    "Harsha's taps and replies in his Risi chat to root's questions (scripts/risi-notify, scripts/risi-inbox)." \
+    "Only decisions and confirmations: sudo, money, deletion, keys or any consequential action still need Harsha in the shell." > "$INBOX"
+fi
+printf '%s\n' "$new" >> "$INBOX"
+printf '%s\n' "$new"
