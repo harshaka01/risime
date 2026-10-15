@@ -43,10 +43,14 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
     by_day = Enum.group_by(events, &day_of/1)
 
     {busy_days, free_days} = Enum.split_with(days, &Map.has_key?(by_day, &1))
+    # Device test 15 Oct: the phone's calendar didn't answer: its days are not "free", only
+    # Risi's own items are known (and the unread line comes first).
+    phone_unread? = Enum.any?(f.unread || [], &(&1 =~ "your phone calendar"))
+    items_only? = f[:items_only] == true or phone_unread?
 
     text =
       cond do
-        busy_days == [] and f[:items_only] == true ->
+        busy_days == [] and items_only? ->
           "You have no promises, reminders or follow-ups #{range_phrase(f.from, f.to, f.today)}."
 
         busy_days == [] ->
@@ -77,7 +81,7 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
           extra = length(events) - @max_items
 
           day_lines =
-            if f[:items_only] == true,
+            if items_only?,
               do: items_days(days, Map.new(Enum.zip(busy_days, sentences)), f.today),
               else: [
                 Enum.reject(sentences, &is_nil/1),
@@ -96,7 +100,13 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
       end
 
     unread = Enum.join(f.unread || [], " ")
-    {String.trim(text <> " " <> unread), missing?}
+
+    text =
+      if phone_unread?,
+        do: String.trim(unread <> " " <> text),
+        else: String.trim(text <> " " <> unread)
+
+    {text, missing?}
   end
 
   # Device test 15 Oct (call 2): Risi's own items, day by day in order; a run of days without any
@@ -312,18 +322,45 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
     got = numbers(said)
 
     cond do
-      said == "" -> nil
-      Regex.match?(@refuse, said) -> nil
+      said == "" ->
+        nil
+
+      Regex.match?(@refuse, said) ->
+        nil
+
+      # What couldn't be read is always said.
+      Regex.match?(~r/couldn'?t reach/u, rendered) and
+          not Regex.match?(
+            ~r/(?:couldn'?t|could not|can'?t|cannot|wasn'?t able to)\s+(?:reach|read|get to)/iu,
+            said
+          ) ->
+        nil
+
       # Risi's own items only: a day without any is never "free" (the phone may have events).
-      Regex.match?(~r/\b[Nn]o promises\b/u, rendered) and Regex.match?(@free, said) -> nil
+      Regex.match?(~r/\b[Nn]o promises\b/u, rendered) and Regex.match?(@free, said) ->
+        nil
+
       # The calendar is the user's: "I am busy", "I can get the calendar" are wrong.
-      not Regex.match?(~r/\bI\b/u, rendered) and Regex.match?(~r/\bI\b/u, said) -> nil
-      Regex.match?(~r/\b(?:From|Checked|Not checked):/u, said) -> nil
-      String.length(said) > String.length(rendered) * 2 + 120 -> nil
-      not MapSet.subset?(got, allowed) -> nil
-      not MapSet.subset?(want, got) -> nil
-      not Enum.all?(titles, &String.contains?(String.downcase(said), String.downcase(&1))) -> nil
-      true -> said
+      not Regex.match?(~r/\bI\b/u, rendered) and Regex.match?(~r/\bI\b/u, said) ->
+        nil
+
+      Regex.match?(~r/\b(?:From|Checked|Not checked):/u, said) ->
+        nil
+
+      String.length(said) > String.length(rendered) * 2 + 120 ->
+        nil
+
+      not MapSet.subset?(got, allowed) ->
+        nil
+
+      not MapSet.subset?(want, got) ->
+        nil
+
+      not Enum.all?(titles, &String.contains?(String.downcase(said), String.downcase(&1))) ->
+        nil
+
+      true ->
+        said
     end
   end
 

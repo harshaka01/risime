@@ -8,7 +8,7 @@
 # the redroid phone, as on Harsha's real call. The phone is not in the LiveKit room, so §41.8 meeting titles are
 # not answered (Risi speaks times only). Signalling goes to the pilot LiveKit on 127.0.0.1:7880 (no hairpin).
 # Like Harsha, the caller speaks the next clip only after Risi's ANSWER has finished (a new final "call risi
-# turn:" line in the pilot log, then 2.5 s of Risi silence; 25 s cap), never right after the holding line.
+# turn:" line in the pilot log, then 2.5 s of Risi silence; 45 s cap), never right after the holding line.
 #
 #   PDT_SETUP=<setup dir> scripts/pilot-call-test
 #
@@ -27,6 +27,8 @@ WORK="$(mktemp -d)"; chmod 700 "$WORK"; trap 'rm -rf -- "${WORK:?}"' EXIT
 die() { echo "PCT FAIL $*" | tee -a "$OUT/result"; exit 1; }
 curl -sf --max-time 3 http://127.0.0.1:8230/health >/dev/null || die "risime-tts is not up"
 A shell true >/dev/null 2>&1 || die "the phone ($SERIAL) isn't connected: run pilot-device-test --only setup --keep first"
+# The app in the foreground (its socket answers Risi's calendar_check; backgrounded, the read timed out, 15 Oct).
+A shell am start -W -n ai.risicloud.risime.debug/ai.risicloud.risime.MainActivity >/dev/null 2>&1 || true; sleep 3
 
 # ---------------------------------------------------------------- the clips (synthetic voice)
 say() { curl -sf --max-time 30 -o "$WORK/$1.wav" -H 'Content-Type: application/json' \

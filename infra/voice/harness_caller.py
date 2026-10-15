@@ -112,13 +112,14 @@ class Caller:
             await asyncio.sleep(0.05)
         return False
 
-    async def wait_answer(self, turn_log=None, quiet_s=2.5, cap_s=25.0):
+    async def wait_answer(self, turn_log=None, quiet_s=2.5, cap_s=45.0):
         """Like a person on the phone: wait until Risi's ANSWER has finished, not just its holding
         line. With `turn_log` (the server's log), the answer is done when a new "call risi turn:"
         line with a final status appears (a turn is recorded when its answer was spoken; replaced
         and barged turns are not answers); then >= quiet_s of Risi silence. Without it: Risi's
         audio, then quiet_s of silence, and while all Risi said since is short (< 3 s, a holding
-        line) more audio is awaited. Capped at cap_s from the end of the clip."""
+        line) more audio is awaited. Capped at cap_s from the end of the clip (45 s: Risi's tool budget is
+        25 s and a long answer is spoken after it; at 25 s the caller talked over answers, 15 Oct)."""
         t0 = time.monotonic()
         heard_from = self.loud_frames
         pos = getattr(self, "log_pos", None) if turn_log else None
@@ -166,7 +167,7 @@ async def main():
     ap.add_argument("--barge", default=None)
     ap.add_argument("--rounds", type=int, default=1)
     ap.add_argument("--wait-answer", action="store_true",
-                    help="after each clip wait until Risi's answer has finished (2.5 s quiet, 25 s cap)")
+                    help="after each clip wait until Risi's answer has finished (2.5 s quiet, 45 s cap)")
     ap.add_argument("--turn-log", default=None,
                     help="the server log: with --wait-answer, a new final 'call risi turn:' line ends the answer")
     ap.add_argument("wavs", nargs="+")

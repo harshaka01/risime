@@ -67,6 +67,29 @@ defmodule RisiMe.Agent.CallRisi.SpokenTest do
                "You have nothing on your calendar Sunday the 18th. I couldn't reach Google Calendar (network)."
     end
 
+    test "device test 15 Oct: the phone didn't answer: never 'nothing scheduled', said first" do
+      late = "I couldn't reach your phone calendar (it didn't answer in time)."
+      r = ev("reminder", "Call Shakya", {~D[2026-10-16], 10, 0}, 0)
+      r = %{r | end: nil}
+      {text, _} = Spoken.render(facts(~D[2026-10-15], ~D[2026-10-17], [r], [late]))
+
+      assert text ==
+               late <>
+                 " No promises or reminders today. Tomorrow: a reminder, Call Shakya, at 10 am."
+
+      {empty, _} = Spoken.render(facts(~D[2026-10-18], ~D[2026-10-19], [], [late]))
+      assert empty == late <> " You have no promises, reminders or follow-ups Sunday the 18th."
+
+      # A phrasing that drops the unread line, or calls the day free, is not used.
+      refute Spoken.checked("Tomorrow you have a reminder to call Shakya at 10 am.", text)
+      refute Spoken.checked("You have nothing scheduled for today. " <> late, text)
+
+      assert Spoken.checked(
+               "I couldn't reach your phone calendar in time. You have no promises or reminders today, and tomorrow a reminder to call Shakya at 10 am.",
+               text
+             )
+    end
+
     test "a week: free days listed once, at most 8 items then the chat" do
       evs = for h <- 8..17, do: ev("busy", nil, {~D[2026-10-16], h, 0}, 30)
       {text, _} = Spoken.render(facts(~D[2026-10-15], ~D[2026-10-19], evs))
