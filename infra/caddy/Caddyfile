@@ -6,6 +6,9 @@
 {
 	# No admin API on the network; local only (default 127.0.0.1:2019, kept explicit).
 	admin 127.0.0.1:2019
+	# Harsha 2026-10-15: a reload hung on "eternal grace period" (open WebSockets: LiveKit, Phoenix);
+	# old connections get 10 s, then the reload completes.
+	grace_period 10s
 }
 
 risime.risicloud.ai {
