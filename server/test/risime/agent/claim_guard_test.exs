@@ -8,6 +8,10 @@ defmodule RisiMe.Agent.ClaimGuardTest do
 
   alias RisiMe.Agent.ClaimGuard
 
+  defmodule Runs do
+    def record(row), do: send(:persistent_term.get({__MODULE__, :test}), {:run, row})
+  end
+
   setup do
     prev = Application.get_env(:risime, :risi_claim_results)
     prev_runs = Application.get_env(:risime, :risi_claim_runs)
@@ -16,10 +20,6 @@ defmodule RisiMe.Agent.ClaimGuardTest do
     Application.put_env(:risime, :risi_claim_results, fn rid ->
       :persistent_term.get({__MODULE__, rid}, [])
     end)
-
-    defmodule Runs do
-      def record(row), do: send(:persistent_term.get({__MODULE__, :test}), {:run, row})
-    end
 
     :persistent_term.put({Runs, :test}, me)
     Application.put_env(:risime, :risi_claim_runs, Runs)

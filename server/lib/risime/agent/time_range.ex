@@ -242,9 +242,10 @@ defmodule RisiMe.Agent.TimeRange do
       today = ctx.now |> Clock.local(ctx.tz) |> NaiveDateTime.to_date()
 
       draft =
-        if ScheduleIntent.day_named?(q, today),
-          do: Map.put(draft, "date", Date.to_iso8601(ScheduleIntent.range(q, today).from)),
-          else: draft
+        case relative_day(q, today) do
+          %Date{} = d -> Map.put(draft, "date", Date.to_iso8601(d))
+          nil -> draft
+        end
 
       case parse(q) do
         %{start: %Time{} = s, end: %Time{} = e} ->
@@ -268,17 +269,22 @@ defmodule RisiMe.Agent.TimeRange do
 
   defp hhmm(%Time{} = t), do: Calendar.strftime(t, "%H:%M")
 
+  # The model's day, unless the words say "today" / "tomorrow" (unambiguous) or the model gave none.
   defp day(q, args, ctx) do
     today = ctx.now |> Clock.local(ctx.tz) |> NaiveDateTime.to_date()
 
-    if ScheduleIntent.day_named?(q, today) do
-      {:ok, ScheduleIntent.range(q, today).from}
-    else
-      case local_start(args, ctx) do
-        %NaiveDateTime{} = s -> {:ok, NaiveDateTime.to_date(s)}
-        _ -> :error
-      end
+    case {relative_day(q, today), local_start(args, ctx)} do
+      {%Date{} = d, _} -> {:ok, d}
+      {nil, %NaiveDateTime{} = s} -> {:ok, NaiveDateTime.to_date(s)}
+      _ -> :error
     end
+  end
+
+  @relative ~r/\b(?:today|tonight|tomorrow|day\s+after\s+tomorrow)\b/iu
+
+  defp relative_day(q, today) do
+    if Regex.match?(@relative, q) and ScheduleIntent.day_named?(q, today),
+      do: ScheduleIntent.range(q, today).from
   end
 
   defp local_start(args, ctx) do
