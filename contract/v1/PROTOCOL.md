@@ -11961,7 +11961,7 @@ Amends §41.5 ("never confirmed by voice in v1"). Server-only, no wire change. B
      **Add**: the same write path, the same `write_id`, and the card shows as done on the phone as today. A change
      ("make it 10 to 11") updates the draft, and Risi reads it back again. A no, or silence, leaves the card for the
      user to tap.
-  4. **Where a voice add goes:** the phone's own `calendar_add` (§25.3) runs only after its user's tap or typed
+  4. **Where a voice add goes (Harsha confirmed 2026-10-15 21:34 SLT):** the phone's own `calendar_add` (§25.3) runs only after its user's tap or typed
      request, so a voice yes cannot write to the phone's calendar. On a call, an add with voice confirm on goes to the
      caller's **Risi Calendar** (`risi_calendar_add`). A phone-calendar add still needs the tap on the card.
 - **Claim guard (every output path: chat answers, Call Risi speech, spoken @Risi, cards):** Risi says
