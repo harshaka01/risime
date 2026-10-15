@@ -54,10 +54,10 @@ bash -c "$ENVLOAD; exec '$REL/bin/risime' eval 'RisiMe.Release.migrate()'"
 
 ln -sfn "$REL" "$RUNROOT/current.new" && mv -T "$RUNROOT/current.new" "$RUNROOT/current"
 # The Call Risi media worker (decision 090) runs from ~/risime-voice (RISI_VOICE_WORKER): ship this tag's
-# copy with it (until 15 Oct nothing did, and the pilot ran a stale worker). RISI_KEEP_WORKER=1 keeps the running one. Atomic; each new call
+# copy with it (until 15 Oct nothing did, and the pilot ran a stale worker). RISI_KEEP_WORKER=1 or a file ~/risime-voice/KEEP keeps the running one. Atomic; each new call
 # spawns the new file, running calls keep theirs. The previous copy stays as .prev.
 VW="$HOME/risime-voice"
-if [ "${RISI_KEEP_WORKER:-0}" != 1 ] && [ -d "$VW" ] && [ -f "$RUN/infra/voice/risi_voice_worker.py" ] \
+if [ "${RISI_KEEP_WORKER:-0}" != 1 ] && [ ! -e "$HOME/risime-voice/KEEP" ] && [ -d "$VW" ] && [ -f "$RUN/infra/voice/risi_voice_worker.py" ] \
    && ! cmp -s "$RUN/infra/voice/risi_voice_worker.py" "$VW/risi_voice_worker.py"; then
   if "$VW/venv/bin/python" -I -m py_compile "$RUN/infra/voice/risi_voice_worker.py" 2>/dev/null; then
     cp -p "$VW/risi_voice_worker.py" "$VW/risi_voice_worker.py.prev" 2>/dev/null || true
