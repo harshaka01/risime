@@ -3,6 +3,20 @@
 Harsha's requests, picked up after each release in the order he sets; never in parallel with a release.
 Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is ON for everyone or not shipped.
 
+## 15 Oct 12:45 + 14:00 P0 Risi intelligence (Harsha), order: brain fix 1–7 + A + B, then C, D, E
+- **Brain fix (in progress):** spoken answers from tool results, dates and follow-ups, phone titles (§41.8, v1.52;
+  app half in the next APK), Risi's own items in every calendar answer, a true "what can you do", no stuck turns,
+  merged fragments; A) "One moment…" then hold, speech merges, interrupt only by button/"Risi, stop", ignore
+  thinking aloud ("Was that for me?"), "Still checking…" after 4 s; B) promises/Ledger/notes/Risi Calendar always
+  available. Server hotfix; "Risi brain: try now" when his conversation works end to end.
+- **C) Voice quality (in progress):** gapless streamed TTS; 3 candidate voices (Kokoro vs Orpheus/Chatterbox) to rate
+  on the Voices page; use his pick.
+- **D) Open-domain answers:** model knowledge + weather (Open-Meteo, no key) + web search (self-hosted SearXNG,
+  outbound only the query); a decision; "what can you do" lists them.
+- **E) Voice notes in any language** (Whisper large-v3): original transcript + Translate to en/si/ta for everyone,
+  plus a "Translate to…" picker for any language.
+- Each ships as a server hotfix when green; one line to Harsha per item.
+
 ## 15 Oct 04:43 order (Harsha): nothing else until these are done
 - **P0-1 Official calls:** a) long call got items but no summary → map-reduce, a 30-min gate case (in progress);
   b) live line ≤ 2 s (VAD 2–4 s chunks, 0.5 s overlap, fastest en model, GPU priority, p50/p95 in ci.md);
