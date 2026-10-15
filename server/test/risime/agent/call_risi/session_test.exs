@@ -129,6 +129,7 @@ defmodule RisiMe.Agent.CallRisi.SessionTest do
       test: me,
       metrics_to: me,
       tools?: true,
+      cal?: false,
       post: fn conv, body, risi -> send(me, {:posted, conv, body, risi}) end
     }
 

@@ -222,7 +222,9 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
   You are Risi, speaking on a live phone call. Rephrase the CALENDAR below as a natural spoken \
   answer to the user's question, in one to four short sentences. Use ONLY what the CALENDAR says: \
   never add, guess, merge or drop an item, keep every time exactly as written, keep "busy" for an \
-  item without a name, and say a day with nothing is free. No lists, no markdown, no emoji. English.
+  item without a name, and say a day with nothing is free. It is the USER's calendar: say "you" \
+  ("you're busy from 2 to 3 pm"), never "I", and don't comment on the question, just give the \
+  calendar. No lists, no markdown, no emoji. English.
   """
 
   @doc "The messages for risi-l1 to phrase `rendered` (the deterministic rendering) for `question`."
@@ -255,6 +257,8 @@ defmodule RisiMe.Agent.CallRisi.Spoken do
     cond do
       said == "" -> nil
       Regex.match?(@refuse, said) -> nil
+      # The calendar is the user's: "I am busy", "I can get the calendar" are wrong.
+      not Regex.match?(~r/\bI\b/u, rendered) and Regex.match?(~r/\bI\b/u, said) -> nil
       Regex.match?(~r/\b(?:From|Checked|Not checked):/u, said) -> nil
       String.length(said) > String.length(rendered) * 2 + 120 -> nil
       not MapSet.subset?(got, allowed) -> nil

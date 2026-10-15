@@ -105,6 +105,8 @@ defmodule RisiMe.Agent.CallRisi.SpokenTest do
              ])
 
       refute Spoken.checked(nil, r)
+      # The harness (risi-l1, 15 Oct): "I am busy" / "I can get the calendar information".
+      refute Spoken.checked("Today I am busy from 2 to 3 pm; tomorrow at 5 pm Call Ruwan.", r)
     end
 
     test "clock and span phrases" do

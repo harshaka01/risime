@@ -81,10 +81,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
            last_user: nil,
            # v1.52 §41.8: the caller's phone can send its meeting titles for a voice answer;
            # `cal_wait` is the one open request `{id, brain pid}` (titles never stored here).
-           cal?:
-             Map.get_lazy(args, :cal?, fn ->
-               CallRisi.PhoneCalendar.capable?(args.user_id, args.device_id)
-             end),
+           cal?: Map.get_lazy(args, :cal?, fn -> cal_capable?(args) end),
            cal_wait: nil,
            barge_ins: 0,
            ended?: false
@@ -349,6 +346,13 @@ defmodule RisiMe.Agent.CallRisi.Session do
         pieces: Map.put(st.pieces, seq, {st.turn.utt, text, kind, store}),
         turn: turn
     }
+  end
+
+  # A failed device lookup (even an exit from the pool) means "don't ask": times only.
+  defp cal_capable?(args) do
+    CallRisi.PhoneCalendar.capable?(args.user_id, args.device_id)
+  catch
+    _, _ -> false
   end
 
   # §41.8: the stored line of an answer that had the phone's titles: times only, marked.

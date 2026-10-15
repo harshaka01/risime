@@ -178,8 +178,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
         try do
           now |> Clock.local(Clock.user_tz(ctx.user_id)) |> NaiveDateTime.to_date()
-        rescue
-          _ -> DateTime.to_date(now)
+        catch
+          _, _ -> DateTime.to_date(now)
         end
     end
   end
@@ -194,8 +194,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
           %{asker: ctx.user_id, device_id: ctx.device_id, conv: ctx.conv}
           |> RisiMe.Agent.Tools.allowed()
           |> Enum.map(& &1.name)
-        rescue
-          _ -> []
+        catch
+          _, _ -> []
         end
     end
   end
@@ -304,8 +304,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
           nil
       end
     end
-  rescue
-    _ -> nil
+  catch
+    _, _ -> nil
   end
 
   # The phone's events for this answer (at most the 2 s since the request), or an error.
@@ -471,8 +471,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       end
 
     Spoken.checked(said, rendered, titles) || rendered
-  rescue
-    _ -> rendered
+  catch
+    _, _ -> rendered
   end
 
   # Speaks `text` piece by piece; with `stored`, the transcript keeps `stored` instead (once).
@@ -511,8 +511,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       try do
         tz = RisiMe.Agent.Clock.user_tz(ctx.user_id)
         {RisiMe.Agent.Clock.local(now, tz), tz}
-      rescue
-        _ -> {now, "UTC"}
+      catch
+        _, _ -> {now, "UTC"}
       end
 
     "It is now #{Calendar.strftime(local, "%A %d %B %Y, %H:%M")} (#{tz}). Use this for the time and date; " <>
