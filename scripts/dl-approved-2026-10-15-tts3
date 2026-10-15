@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Harsha 2026-10-15 20:26 SLT: add Chatterbox-Turbo (MIT) and Dia2 (Apache-2.0) to the TTS lab; retry Orpheus.
+# Everything waits for the night window (22:00-06:00 SLT = 16:30-00:30 UTC), 10 MB/s, resumable, pauses for
+# scripts/nightly-release / release gates (PAUSE file). Token from .env HF_TOKEN, never printed or logged.
+# Files (from the HF API, inference files only): chatterbox-turbo (t3_turbo_v1, s3gen, s3gen_meanflow, ve, tokenizer, conds.pt),
+# Dia2-1B (model.safetensors + config/tokenizer; 1B chosen over 2B) + kyutai/mimi (its codec, CC-BY-4.0),
+# Orpheus (safetensors + config/tokenizer; gated, runs LAST and is skipped if the token is not authorised).
+# Each file is checked against the API size and, for LFS files, sha256. Log: ~/risime-eval-data/dl/downloads-2026-10-15-tts3.log
+set -u
+cd "$(dirname "$0")/.."
+RATE="${DL_RATE:-10M}"; PAUSE_FILE="${DL_PAUSE_FILE:-$HOME/risime-eval-data/dl/PAUSE}"
+L="$HOME/risime-eval-data/dl/downloads-2026-10-15-tts3.log"; B="$HOME/risime-eval-models"
+mkdir -p "$(dirname "$L")"
+log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$L"; }
+tok() { grep '^HF_TOKEN=' .env | grep -v '^HF_TOKEN=$' | tail -1 | cut -d= -f2- | tr -d "\"' \r"; }
+night() { local h; h=$((10#$(date -u +%H%M))); [ "$h" -ge 1630 ] || [ "$h" -lt 30 ]; }
+busy() { pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null || [ -e "$PAUSE_FILE" ] || ! night; }
+get() { # repo dir file size sha256
+  local url="https://huggingface.co/$1/resolve/main/$3" dest="$B/$2/$3"
+  mkdir -p "$(dirname "$dest")"
+  if [ -f "$dest" ] && [ "$(stat -c %s "$dest")" = "$4" ]; then log "have $1/$3"; return 0; fi
+  log "start $1/$3 ($4 bytes)"
+  while :; do
+    while busy; do sleep 60; done
+    curl -fL --retry 5 --retry-delay 10 -C - --limit-rate "$RATE" -s -H @<(printf 'Authorization: Bearer %s\n' "$(tok)") -o "$dest" "$url" &
+    local pid=$! stop=0
+    while kill -0 "$pid" 2>/dev/null; do sleep 10
+      if busy; then kill "$pid"; wait "$pid" 2>/dev/null; stop=1; log "paused $1/$3"; break; fi
+    done
+    [ "$stop" = 1 ] && continue
+    if ! wait "$pid"; then log "FAIL $1/$3"; return 1; fi
+    break
+  done
+  local got; got=$(stat -c %s "$dest")
+  if [ "$got" != "$4" ]; then log "SIZE MISMATCH $1/$3 got $got want $4"; return 1; fi
+  if [ "$5" != "-" ]; then
+    if [ "$(sha256sum "$dest" | cut -d' ' -f1)" != "$5" ]; then log "SHA256 MISMATCH $1/$3"; rm -f "$dest"; return 1; fi
+    log "done $1/$3 $got bytes sha256 ok"
+  else log "done $1/$3 $got bytes size ok"; fi
+}
+# repo dir file size sha256 (from https://huggingface.co/api/models/<repo>?blobs=true on 2026-10-15)
+MANIFEST=$(cat <<'EOM'
+ResembleAI/chatterbox-turbo chatterbox-turbo added_tokens.json 418 -
+ResembleAI/chatterbox-turbo chatterbox-turbo conds.pt 169454 b1852099306fd6a7814eb9d0bd10186caba7249596cc23868f78a0eefbfa5033
+ResembleAI/chatterbox-turbo chatterbox-turbo merges.txt 456318 -
+ResembleAI/chatterbox-turbo chatterbox-turbo s3gen.safetensors 1056484620 2b78103c654207393955e4900aac14a12de8ef25f4b09424f1ef91941f161d4e
+ResembleAI/chatterbox-turbo chatterbox-turbo s3gen_meanflow.safetensors 1064875036 d65cb687a2ed581ee6cc297e919ffefa63386944f42364ae13b78a594945514f
+ResembleAI/chatterbox-turbo chatterbox-turbo special_tokens_map.json 470 -
+ResembleAI/chatterbox-turbo chatterbox-turbo t3_turbo_v1.safetensors 1915480052 fcf1f8c1d651bb7e3acd69ee5be269b4ac10c02980b7708213d598bc9f7cdf87
+ResembleAI/chatterbox-turbo chatterbox-turbo t3_turbo_v1.yaml 8457 -
+ResembleAI/chatterbox-turbo chatterbox-turbo tokenizer_config.json 3878 -
+ResembleAI/chatterbox-turbo chatterbox-turbo ve.safetensors 5695784 f0921cab452fa278bc25cd23ffd59d36f816d7dc5181dd1bef9751a7fb61f63c
+ResembleAI/chatterbox-turbo chatterbox-turbo vocab.json 999186 -
+nari-labs/Dia2-1B dia2-1b added_tokens.json 1156 -
+nari-labs/Dia2-1B dia2-1b config.json 1760 -
+nari-labs/Dia2-1B dia2-1b dia2_assets.json 125 -
+nari-labs/Dia2-1B dia2-1b merges.txt 466391 -
+nari-labs/Dia2-1B dia2-1b model.safetensors 4305028488 c398c607b159f024dfb76c6102244afe53b01daf18676af8408a3a0bb97d1c76
+nari-labs/Dia2-1B dia2-1b special_tokens_map.json 7923 -
+nari-labs/Dia2-1B dia2-1b tokenizer.json 3532285 -
+nari-labs/Dia2-1B dia2-1b tokenizer_config.json 13337 -
+nari-labs/Dia2-1B dia2-1b vocab.json 800662 -
+kyutai/mimi mimi config.json 1117 -
+kyutai/mimi mimi model.safetensors 384649828 bac7e85083dcded655d24eaadde7e6eea34c0da1b35fa2d284e641bd2b942a5e
+kyutai/mimi mimi preprocessor_config.json 234 -
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft config.json 898 -
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft generation_config.json 180 -
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft model-00001-of-00004.safetensors 4948557560 8feb9137e2a243d33827c2196ec81270179ec6e7acf8972a37f84b5eb6852450
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft model-00002-of-00004.safetensors 4932808960 69df9510f4b3e8d883b51e5d19f5f5b669d99ba9990f9e0e16f4fedd3d73709e
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft model-00003-of-00004.safetensors 3322130968 d24f6a0f618bd4aa09a23216fe55d086a6db92ee896f98740972702f265f026b
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft model-00004-of-00004.safetensors 1928478848 a1deaa1b3f38d5b9efe22f012dbb5c3f29e15f31b15dcf95e471a85bb03d2d21
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft model.safetensors.index.json 20978 -
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft special_tokens_map.json 350 -
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft tokenizer.json 22849547 fc3fecb199b4170636dbfab986d25f628157268d37b861f9cadaca60b1353bce
+canopylabs/orpheus-3b-0.1-ft orpheus-3b-0.1-ft tokenizer_config.json 5407399 -
+EOM
+)
+orpheus_ok() { [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(tok)" https://huggingface.co/canopylabs/orpheus-3b-0.1-ft/resolve/main/config.json)" = 200 ]; }
+until [ -n "$(tok)" ]; do log "waiting for HF_TOKEN in .env"; sleep 600; done
+while read -r repo dir f size sha; do
+  case "$repo" in canopylabs/*) continue;; esac
+  get "$repo" "$dir" "$f" "$size" "$sha"
+done <<<"$MANIFEST"
+if orpheus_ok; then
+  while read -r repo dir f size sha; do
+    case "$repo" in canopylabs/*) get "$repo" "$dir" "$f" "$size" "$sha";; esac
+  done <<<"$MANIFEST"
+else log "SKIP orpheus: token is not in the authorised list for the gated repo (HTTP 403); accept the terms at huggingface.co/canopylabs/orpheus-3b-0.1-ft with the account of the token, then rerun this script"; fi
+log "ALL FINISHED"
