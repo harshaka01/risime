@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.50 (Release 0.3)
+# RisiMe Wire Protocol — v1.52 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -11795,6 +11795,7 @@ the metadata `{"c": conv, "m": "audio", "k": "risi"}`, starts Risi's voice sessi
 - **Risi's token** is minted inside the server (never through REST) with the §20.2 claims except
   `canPublish: true`, `canPublishSources: ["microphone"]`, `canSubscribe: true`, `canPublishData: false`
   (`livekit_token_claims_call_risi.json`). Risi subscribes only to the caller's microphone track.
+  **v1.52:** `canPublishData: true` on both tokens of a `k: "risi"` room (§41.8).
 - Risi joins within 10 s; otherwise the session ends and the phone leaves (§41.3). Risi leaves when the caller
   leaves, at `max_s`, when the switch turns off (reason `switch_off`), or on an error (reason `error`).
 
@@ -11868,6 +11869,84 @@ Posted by Risi (§24.11 envelope, `risi` object) once the call ends (`envelope_r
   every new example.
 - **Android (JVM):** decoders of every new example; the button gating (chat bar and contact sheet); no
   `E2EEOptions` only for this room; fail closed; the 12-s timeout; the history lines; parity with the flag off.
+
+### 41.8 Meeting titles over the call's data channel (v1.52)
+Proposal `contract/proposals/2026-10-15-call-risi-calendar-titles.md` (applied; Harsha 15 Oct, P0 RISI INTELLIGENCE
+item 3). The phone is present during a Risi call, so Risi asks it for the event titles of the range a voice answer
+needs, over the call's LiveKit data channel, for **that spoken answer only**: never stored on the server.
+**Additive:** without the capability every call is byte-identical to v1.50.
+
+**Capability.** The device capability **`"call_risi_cal"`** in `mls.capabilities` (`device_put_call_risi_cal.json`)
+is valid only together with `call_risi`; the server drops it otherwise. The phone advertises it once it implements
+this section. Without it the server never asks, a voice answer speaks times only (from the §25 calendar tool) and,
+once per call, Risi adds: "I can see the times; the titles stay on your phone."
+
+**Tokens.** In a `k: "risi"` room only, **both** tokens get `canPublishData: true`:
+- Risi's token: `livekit_token_claims_call_risi_v152.json` (§41.2's claims with that one change);
+- the caller's token (`start` with `risi_call`, and the starter's `join` refresh): §20.2 with that one change.
+
+No other room changes: every other token keeps `canPublishData: false`.
+
+**Request (Risi → phone).** A **reliable** LiveKit data packet with topic **`"risi.cal"`**, destined to the
+caller's identity only (`call_risi_cal_request.json`):
+```json
+{"t": "cal_req", "id": "<uuid-v4>", "from": "2026-10-15T00:00:00+05:30", "to": "2026-10-17T00:00:00+05:30"}
+```
+`from`/`to` are the range the voice turn needs: RFC 3339 (the user's offset), `to` after `from`, at most 8 days apart.
+
+**Reply (phone → Risi).** Within **2 s**, the same topic, reliable, to `risi_identity` only
+(`call_risi_cal_reply.json`):
+```json
+{"t": "cal", "id": "<same>", "ok": true,
+ "events": [{"start": "2026-10-15T10:00:00+05:30", "end": "2026-10-15T10:30:00+05:30", "all_day": false,
+             "title": "Call with Shakya", "busy": true}]}
+```
+On a failure (`call_risi_cal_reply_error.json`): `{"t": "cal", "id": "<same>", "ok": false, "reason": "no_permission"}`.
+- `reason`: `no_permission` (no calendar permission) | `no_calendars` | `off` (the user's setting below) | `error`.
+- `events`: at most 100, ordered by `start`; the instances overlapping [`from`, `to`) with the §29 exclusions
+  (deleted, cancelled, declined); all-day events on the phone's own dates. `start`/`end` RFC 3339.
+- `title`: at most 200 characters, or `null` for a private or untitled event.
+- The phone reads only the calendars the §29 client tool may read.
+
+The phone **must**:
+- answer only while the Risi call is up (the call screen's call, connected) and the request came from `risi_identity`;
+- ignore any other topic or sender, and any malformed request;
+- never send anything on `risi.cal` without a request.
+
+**The user's control.** The setting **"Risi can say my meeting titles on calls"** is **on by default**, under
+Settings → Risi and as a line in the first-call sheet (§41.4).
+- **Off:** the phone replies `ok: false, reason: "off"`; Risi says times only, and says so once per call.
+- The §44.5 "Only times / Yes" choice is unchanged: it still governs what the server may store and what the
+  Risi chat card shows.
+
+**Root decision, recorded:** default on. The user is asking aloud for their own calendar on a call with Risi, and the
+titles are used for one spoken answer and then dropped. Harsha can switch the default to off.
+
+**Server (normative).**
+- The titles live only in the call session's memory, for the one answer being composed, and are dropped after it.
+- They are never written to the database, Cassandra, the learning log (it records `titles_n` only), logs, telemetry
+  or the `answer` card.
+- In the `risi_call_transcript` line of that answer each title is replaced with the time-only wording (e.g.
+  "10:00–10:30 busy"), and the line gets **`"titles_spoken": true`** (`envelope_risi_call_risi_transcript_titles.json`).
+  The phone shows a small note under that line: **"Meeting titles were said aloud, not saved."** The transcript's
+  `body` carries the same time-only text.
+- No reply within 2 s → speak times only, and say so once per call.
+- Never say "I can't see your calendar" when the §25 read succeeded.
+
+**Honesty (decision 048).** LiveKit data travels with DTLS between the phone and RisiMe's SFU, then over loopback to
+Risi's worker: the same path and the same honest label as the call audio (§41.0, "Not end-to-end encrypted: audio is
+processed by Risi on RisiMe's server").
+
+**Examples:** `device_put_call_risi_cal.json`, `livekit_token_claims_call_risi_v152.json`,
+`call_risi_cal_request.json`, `call_risi_cal_reply.json`, `call_risi_cal_reply_error.json`,
+`envelope_risi_call_risi_transcript_titles.json`.
+
+**Gate.**
+- **Server:** the request is sent only with the capability; after the 2-s timeout Risi speaks times only; titles
+  never persisted (the learning-log row, the transcript line and the card are checked); the transcript line carries
+  `titles_spoken`; parity without the capability; both tokens' data grant only in a `k: "risi"` room.
+- **Android (JVM):** decoders for every new example; a reply only to `risi_identity`, only on request, only while
+  the call is up; the setting off gives `reason: "off"`; at most 100 events.
 
 ## Changelog
 - **v1.48** (2026-10-14, decision 090): §41 Call Risi, a voice call in the caller's own Risi chat that Risi
@@ -12221,6 +12300,14 @@ body: "I need your calendar to do that. Update RisiMe to allow it here, or turn 
   `device_put_risi_fixit.json`.
 
 ## Changelog
+- **v1.52** (2026-10-15, Harsha P0 RISI INTELLIGENCE item 3; proposal 2026-10-15-call-risi-calendar-titles;
+  **v1.51 reserved** for the Private-transcribe proposal, not applied yet): §41.8 meeting titles from the phone during
+  a Call Risi, over the room's LiveKit data channel (topic `risi.cal`), for the spoken answer only and never stored:
+  capability `call_risi_cal` (only with `call_risi`), `canPublishData: true` on both tokens of a `k: "risi"` room
+  only, the reliable `cal_req` request to the caller's identity and its `cal` reply (≤ 100 events, title ≤ 200 or
+  `null`, reasons `no_permission` | `no_calendars` | `off` | `error`) within 2 s, the setting "Risi can say my meeting
+  titles on calls" (default on), the transcript line's `titles_spoken: true` with time-only text. Additive; without
+  the capability every call is byte-identical to v1.50.
 - **v1.50** (2026-10-15, P0-1b; proposal 2026-10-15-live-call-latency): §36.12 fast call-transcription sessions
   (flag `RISI_LIVE_FAST`, default `off`): optional `Session.chunk.mode: "vad"` and `overlap_ms`; the phone cuts
   1–4 s chunks at pauses with 0.5 s overlap; the server allows 40/min (burst 8, 4 queued), sends chunks at `live`

@@ -1,6 +1,6 @@
 # Proposal 2026-10-15: meeting titles from the phone during a Risi call (§41.8)
 
-**Status:** root proposal, to be applied as **v1.52** (§41.8; v1.51 stays reserved for the Private transcribe
+**Status:** applied as **v1.52** (§41.8, 2026-10-15; v1.51 stays reserved for the Private transcribe
 proposal). Additive. With the capability absent, every call is byte-identical to v1.50.
 
 **Why (Harsha, 15 Oct 12:45 SLT, P0 RISI INTELLIGENCE item 3):** "During a call, the PHONE is present. Fetch event
