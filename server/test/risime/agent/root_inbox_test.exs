@@ -64,6 +64,13 @@ defmodule RisiMe.Agent.RootInboxTest do
     end
   end
 
+  test "a release notice catches no reply (Harsha 15 Oct)", _ctx do
+    {:ok, _} = RootInbox.post("rel", "nightly.11 is ready.", [], "release")
+    [{_, body, _}] = posts()
+    assert body =~ "New release: nightly.11 is ready."
+    assert RootInbox.fetch_new() == []
+  end
+
   test "a command comes as its own message, to long-press and copy (Harsha 15 Oct)", _ctx do
     b64 =
       %{"text" => "Please run this.", "topic" => "cmd", "options" => ["Done"], "sudo" => "ls -la"}

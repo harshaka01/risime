@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Root → Harsha in HIS Risi chat (Harsha 2026-10-15 15:31 SLT; RisiMe.Agent.RootInbox), with a push.
-#   scripts/risi-notify "<text>" [--options "A|B|C"] [--topic <slug>] [--kind ask|try|p0] [--sudo "<command>"]
+#   scripts/risi-notify "<text>" [--options "A|B|C"] [--topic <slug>] [--kind ask|try|p0|release|done] [--sudo "<command>"]
 # Use ONLY when blocked on Harsha (a decision, a sudo command, a test on his phone), when something is ready to try
 # (--kind try: "Try now: <what to test>") and for P0 incidents (--kind p0). One message per topic (a new post on the
 # same --topic supersedes the open one; the same text again is refused). No progress chatter. Plain words, one question.
@@ -21,7 +21,7 @@ while [ $# -gt 0 ]; do
     *) [ -z "$text" ] || { echo "refused: one text only (quote it)"; exit 2; }; text="$1"; shift;;
   esac
 done
-[ -n "$text" ] || { echo 'usage: scripts/risi-notify "<text>" [--options "A|B|C"] [--topic <slug>] [--kind ask|try|p0] [--sudo "<cmd>"]'; exit 2; }
+[ -n "$text" ] || { echo 'usage: scripts/risi-notify "<text>" [--options "A|B|C"] [--topic <slug>] [--kind ask|try|p0|release|done] [--sudo "<cmd>"]'; exit 2; }
 b64=$(TEXT="$text" OPTIONS="$options" TOPIC="$topic" KIND="$kind" SUDO="$sudo" python3 -I -c '
 import base64, json, os
 o = [x.strip() for x in os.environ["OPTIONS"].split("|") if x.strip()]

@@ -30,7 +30,14 @@ defmodule RisiMe.Agent.RootInbox do
   alias RisiMe.Repo
 
   @table "risi_root_questions"
-  @prefix %{"ask" => "Root needs you:", "try" => "Try now:", "p0" => "P0:"}
+  @prefix %{
+    "ask" => "Root needs you:",
+    "try" => "Try now:",
+    "p0" => "P0:",
+    # Harsha 15 Oct: new releases and finished work.
+    "release" => "New release:",
+    "done" => "Done:"
+  }
   @ack "Got it, I've passed that to root."
   @reply_window_s 30 * 60
   @max_chips 3
@@ -106,7 +113,10 @@ defmodule RisiMe.Agent.RootInbox do
               kind: kind,
               text: text,
               options: options,
-              posted_at: now
+              posted_at: now,
+              # A release or done notice asks nothing: never catches a reply.
+              answered_at: if(kind in ~w(release done), do: now),
+              delivered_at: if(kind in ~w(release done), do: now)
             }
           ])
 
