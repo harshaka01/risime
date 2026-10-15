@@ -23,6 +23,8 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
 - **Call Risi blocker:** the pilot has no `/livekit` Caddy route and no LIVEKIT_URL, so rooms answer 503 (group calls
   too). Harsha runs the Caddy block (docs/status/admin-console.md A); then root sets LIVEKIT_URL, restarts LiveKit
   (loopback candidate), one headless call, "try now".
+- **Word-by-word live lines** (Harsha 07:48): partial lines that fill in as words arrive, < 2 s, English first
+  (a wire change: contract first). After the summary/correction items (P0-1c).
 - The release-speed item (0 below) follows these.
 
 0. **15 Oct, before any other work: release speed** (Harsha 21:55). Release ≤ 10 min from "release" to APK on
