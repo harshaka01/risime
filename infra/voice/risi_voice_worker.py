@@ -13,6 +13,7 @@ Commands (Elixir -> worker):
   {"cmd": "join", "url", "token", "caller", "tts_url", "tts_key"?, "eot_ms"?, "barge_ms"?, "min_speech_ms"?}
   {"cmd": "say", "seq", "utt", "text", "voice", "speed"?}     queue a sentence for utterance `utt`
   {"cmd": "stop_speaking"}                                    drop everything queued and playing
+  {"cmd": "cal_req", "id", "from", "to"}     contract v1.52 §41.8: ask the caller's phone for its events
   {"cmd": "leave"}
 Events (worker -> Elixir):
   {"ev": "joined"} / {"ev": "caller_joined"} / {"ev": "caller_left"} / {"ev": "left", "reason"}
@@ -22,7 +23,15 @@ Events (worker -> Elixir):
   {"ev": "first_audio", "utt", "seq", "after_end_ms", "tts_first_ms"}   first Risi frame of a turn
   {"ev": "said", "seq", "utt", "ms", "interrupted": bool}
   {"ev": "idle"}                                              nothing queued or playing any more
+  {"ev": "cal", "id", "ok", "events"? | "reason"?}           the phone's reply to a cal_req (v1.52 §41.8)
   {"ev": "error", "code"}
+
+Meeting titles (contract v1.52 §41.8): `cal_req` is published as a reliable data packet on topic
+"risi.cal" ({"t": "cal_req", "id", "from", "to"}) to the caller's identity only. A packet comes back
+as {"ev": "cal", ...} only when it is on "risi.cal", from the caller, a {"t": "cal"} reply to an id
+this worker sent and has not seen answered; everything else is dropped. When the request can't be
+sent (no caller in the room, a publish error) the worker answers {"ev": "cal", "id", "ok": false,
+"reason": "error"} at once. Packets are never logged or written anywhere.
 """
 
 import asyncio
@@ -58,6 +67,41 @@ PREROLL_WINS = 10  # 320 ms kept before the speech start
 TAIL_MS = 700
 ECHO_RATIO = 0.35
 BARGE_KEEP_WINS = 94  # 3 s kept while Risi speaks (a barge-in run may start that far back)
+CAL_TOPIC = "risi.cal"  # contract v1.52 §41.8
+CAL_MAX_BYTES = 64 * 1024  # 100 events with 200-char titles fit well within this
+CAL_PENDING_MAX = 8
+CAL_REASONS = ("no_permission", "no_calendars", "off", "error")
+
+
+def cal_packet(msg):
+    """The request packet for a `cal_req` command, or None when the command is malformed."""
+    rid, frm, to = msg.get("id"), msg.get("from"), msg.get("to")
+    if not all(isinstance(v, str) and 0 < len(v) <= 64 for v in (rid, frm, to)):
+        return None
+    return {"t": "cal_req", "id": rid, "from": frm, "to": to}
+
+
+def cal_event(payload, pending):
+    """The Port event for a reply packet (bytes) to one of the `pending` ids, or None to drop it."""
+    if not isinstance(payload, (bytes, bytearray)) or len(payload) > CAL_MAX_BYTES:
+        return None
+    try:
+        msg = json.loads(bytes(payload).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(msg, dict) or msg.get("t") != "cal" or msg.get("id") not in pending:
+        return None
+    ev = {"ev": "cal", "id": msg["id"]}
+    if msg.get("ok") is True and isinstance(msg.get("events"), list):
+        ev["ok"] = True
+        ev["events"] = [e for e in msg["events"][:100] if isinstance(e, dict)]
+    elif msg.get("ok") is False and msg.get("reason") in CAL_REASONS:
+        ev["ok"] = False
+        ev["reason"] = msg["reason"]
+    else:
+        ev["ok"] = False
+        ev["reason"] = "error"
+    return ev
 
 
 def now_ms():
@@ -145,6 +189,7 @@ class Worker:
         # beat ECHO_RATIO x Risi's own recent output level.
         self.speak_until = 0.0
         self.out_levels = collections.deque()  # (t_ms, rms) of Risi's frames, last ~1.5 s
+        self.cal_pending = collections.OrderedDict()  # v1.52 §41.8: request ids sent, not yet answered
 
     # ---- control
 
@@ -159,6 +204,8 @@ class Worker:
                     self.say_q.put_nowait((self.gen, msg))
                 elif cmd == "stop_speaking":
                     self.stop_speaking()
+                elif cmd == "cal_req":
+                    await self.cal_req(msg)
                 elif cmd == "leave":
                     await self.leave(msg.get("reason", "leave"))
                     return
@@ -178,6 +225,7 @@ class Worker:
         self.room = rtc.Room()
         self.room.on("track_subscribed", self.on_track)
         self.room.on("participant_disconnected", self.on_left)
+        self.room.on("data_received", self.on_data)
         self.room.on("disconnected", lambda *_: self.port.send({"ev": "left", "reason": "disconnected"}))
         await self.room.connect(msg["url"], msg["token"], rtc.RoomOptions(auto_subscribe=True))
         self.source = rtc.AudioSource(SR, 1, queue_size_ms=200)
@@ -205,6 +253,49 @@ class Worker:
     def on_left(self, participant):
         if self.allowed(participant):
             self.port.send({"ev": "caller_left"})
+
+    # ---- meeting titles (contract v1.52 §41.8)
+
+    def caller_identity(self):
+        if self.room is None or self.caller is None:
+            return None
+        for p in self.room.remote_participants.values():
+            if p.identity.startswith(self.caller):
+                return p.identity
+        return None
+
+    async def cal_req(self, msg):
+        packet = cal_packet(msg)
+        if packet is None:
+            return
+        rid = packet["id"]
+        to = self.caller_identity()
+        if to is None:
+            self.port.send({"ev": "cal", "id": rid, "ok": False, "reason": "error"})
+            return
+        self.cal_pending[rid] = now_ms()
+        while len(self.cal_pending) > CAL_PENDING_MAX:
+            self.cal_pending.popitem(last=False)
+        try:
+            await self.room.local_participant.publish_data(
+                json.dumps(packet, separators=(",", ":")), reliable=True,
+                destination_identities=[to], topic=CAL_TOPIC)
+        except Exception:
+            self.cal_pending.pop(rid, None)
+            self.port.send({"ev": "cal", "id": rid, "ok": False, "reason": "error"})
+
+    def on_data(self, packet):
+        # Only the caller's replies on "risi.cal" to a request this worker sent; drop the rest.
+        if getattr(packet, "topic", None) != CAL_TOPIC:
+            return
+        p = getattr(packet, "participant", None)
+        if p is None or self.caller is None or not p.identity.startswith(self.caller):
+            return
+        ev = cal_event(packet.data, self.cal_pending)
+        if ev is None:
+            return
+        self.cal_pending.pop(ev["id"], None)
+        self.port.send(ev)
 
     async def leave(self, reason):
         self.stop_speaking()
