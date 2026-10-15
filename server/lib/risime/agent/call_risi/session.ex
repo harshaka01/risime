@@ -89,6 +89,11 @@ defmodule RisiMe.Agent.CallRisi.Session do
            cal?: Map.get_lazy(args, :cal?, fn -> cal_capable?(args) end),
            cal_wait: nil,
            barge_ins: 0,
+           # Harsha 2026-10-16 (made-up words): the next utterance began while Risi was speaking
+           # (a barge-in: it must be louder than Risi's echo), and the last one was unclear
+           # ("Sorry, I didn't catch that." at most once in a row).
+           barged?: false,
+           unclear?: false,
            # Device test 15 Oct: the caller started speaking before Risi was audible: Risi's
            # pieces wait (`held`, in order) until the words arrive (or `@listen_ms`).
            listen: nil,
@@ -105,7 +110,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   @impl true
   def handle_info({port, {:data, data}}, %{media: port} = st) when is_port(port) do
     case Jason.decode(data) do
-      {:ok, ev} -> media(ev, st)
+      {:ok, ev} -> media(ev, heard_start(ev, st))
       _ -> {:noreply, st}
     end
   end
@@ -113,7 +118,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   def handle_info({port, {:exit_status, _}}, %{media: port} = st) when is_port(port),
     do: finish(st, :error)
 
-  def handle_info({:call_risi_media, ev}, st), do: media(ev, st)
+  def handle_info({:call_risi_media, ev}, st), do: media(ev, heard_start(ev, st))
 
   def handle_info({:brain, utt, ev}, %{turn: %{utt: utt}} = st), do: brain(ev, st)
   def handle_info({:brain, _old, _ev}, st), do: {:noreply, st}
@@ -132,11 +137,16 @@ defmodule RisiMe.Agent.CallRisi.Session do
     end
   end
 
-  def handle_info({:side_stt, held, utt, r}, st) do
+  def handle_info({:side_stt, held, utt, r, audio}, st) do
+    # Harsha 2026-10-16: words Whisper made up from noise or echo while Risi was checking never
+    # join or replace the question (an unsure one is dropped too: Risi is busy with the question).
     text =
       case r do
         {:ok, %{text: t} = x} when is_binary(t) ->
-          if x[:speech] == false, do: "", else: String.trim(t)
+          case CallRisi.Hearing.judge(x, audio) do
+            {:ok, heard} -> heard
+            _ -> ""
+          end
 
         _ ->
           ""
@@ -157,6 +167,12 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   @impl true
   def handle_cast({:end, reason}, st), do: finish(st, reason)
+
+  # Each utterance starts with `speech_start`: whether Risi was speaking then (its echo window).
+  defp heard_start(%{"ev" => "speech_start", "speaking" => s}, st) when is_boolean(s),
+    do: %{st | barged?: s}
+
+  defp heard_start(_ev, st), do: st
 
   defp media(%{"ev" => "joined"}, st), do: {:noreply, %{st | joined?: true}}
 
@@ -189,7 +205,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   # P0 2026-10-15 (Harsha's 2nd call): while Risi is checking (a tool turn, no answer yet) the
   # user's speech never cancels the question: barge-in only stops the holding line.
   defp media(%{"ev" => "barge_in"}, st) do
-    st = %{st | barge_ins: st.barge_ins + 1}
+    st = %{st | barge_ins: st.barge_ins + 1, barged?: true}
 
     if holding?(st) do
       Media.impl().command(st.media, %{"cmd" => "stop_speaking"})
@@ -205,13 +221,16 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   # While holding, an utterance is transcribed on the side and merged into the question
   # (`{:side_stt, …}`): no new turn, no cancel (unless it changes the request or says "stop").
-  defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64}, st)
+  defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64} = ev, st)
        when is_map(st.turn) and st.turn.brain_done? == false and
               st.turn.route not in [nil, "chat", "capabilities", "write_status"] do
     st = release(st, true)
     me = self()
     held = st.turn.root
-    wav = b64 |> Base.decode64!() |> wav16k()
+    pcm = Base.decode64!(b64)
+    wav = wav16k(pcm)
+    audio = %{pcm: pcm, speech_ms: ev["speech_ms"], during_tts?: st.barged?}
+    st = %{st | barged?: false}
 
     Task.start(fn ->
       r =
@@ -221,7 +240,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
           _, _ -> {:error, :failed}
         end
 
-      send(me, {:side_stt, held, utt, r})
+      send(me, {:side_stt, held, utt, r, audio})
     end)
 
     {:noreply, st}
@@ -255,7 +274,8 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
     st = cancel_turn(st, :replaced)
     wav = wav16k(pcm)
-    ctx = brain_ctx(st, utt)
+    ctx = brain_ctx(st, utt) |> Map.merge(%{speech_ms: ev["speech_ms"], during_tts?: st.barged?})
+    st = %{st | barged?: false}
     {:ok, pid} = Task.start_link(fn -> Brain.run(ctx, wav, prefix) end)
 
     turn =
@@ -339,6 +359,9 @@ defmodule RisiMe.Agent.CallRisi.Session do
     {:noreply, st}
   end
 
+  defp brain({:heard, :ok}, st), do: {:noreply, %{st | unclear?: false}}
+  defp brain({:heard, {:unclear, _}}, st), do: {:noreply, %{st | unclear?: true}}
+  defp brain({:heard, _}, st), do: {:noreply, st}
   defp brain({:route, route}, st), do: {:noreply, put_in(st.turn.route, route)}
   defp brain({:decided, d}, st), do: {:noreply, %{st | turn: Map.put(st.turn, :decided, d)}}
   defp brain({:first_token, ms}, st), do: {:noreply, put_in(st.turn.first_token_ms, ms)}
@@ -568,6 +591,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
       write: st.write,
       write_ask: st.write_ask,
       once: st.once,
+      unclear_last?: st.unclear?,
       cal?: st.cal?,
       caps: Map.get(st.args, :caps)
     }

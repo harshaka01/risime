@@ -414,14 +414,26 @@ defmodule RisiMe.Agent.Speech.Http do
   end
 
   defp segments(list) when is_list(list) do
-    for %{"start" => s, "text" => t} <- list,
+    for %{"start" => s, "text" => t} = seg <- list,
         is_number(s),
         is_binary(t),
         String.trim(t) != "",
-        do: %{offset_ms: round(s * 1000), text: String.trim(t)}
+        do: Map.merge(%{offset_ms: round(s * 1000), text: String.trim(t)}, scores(seg))
   end
 
   defp segments(_), do: []
+
+  # Whisper's own per-segment scores (the Call Risi hearing gate, `CallRisi.Hearing`).
+  defp scores(seg) do
+    for {k, key} <- [
+          {"avg_logprob", :avg_logprob},
+          {"no_speech_prob", :no_speech_prob},
+          {"compression_ratio", :compression_ratio}
+        ],
+        is_number(seg[k]),
+        into: %{},
+        do: {key, seg[k]}
+  end
 
   defp probability(%{"routing" => %{"probability" => p}}) when is_number(p), do: p
   defp probability(%{"language_probability" => p}) when is_number(p), do: p

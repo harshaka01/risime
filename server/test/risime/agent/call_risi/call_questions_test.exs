@@ -45,6 +45,28 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
     @impl true
     def compare(_, _), do: {:error, :failed}
     @impl true
+    # A turn with `"noise": true` is Whisper's text made up from noise (call-5): the service's
+    # own scores say so (no_speech_prob 0.9, avg_logprob -1.1).
+    def transcribe(<<_hdr::binary-size(44), "noise:", text::binary>>, _opts) do
+      {:ok,
+       %{
+         text: text,
+         language: "en",
+         model: "fake-asr",
+         elapsed_ms: 10,
+         speech: true,
+         segments: [
+           %{
+             offset_ms: 0,
+             text: text,
+             avg_logprob: -1.1,
+             no_speech_prob: 0.9,
+             compression_ratio: 1.1
+           }
+         ]
+       }}
+    end
+
     def transcribe(<<_hdr::binary-size(44), script::binary>>, _opts) do
       [lang, text] = String.split(script, ":", parts: 2)
       {:ok, %{text: text, language: lang, model: "fake-asr", elapsed_ms: 10, speech: text != ""}}
@@ -283,6 +305,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call-2"))
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call"))
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call-3"))
+    assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-16-call-5"))
 
     results = for c <- cases, do: {c["id"], run_case(c)}
     failed = for {id, errs} <- results, errs != [], do: {id, errs}
@@ -341,7 +364,7 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
       |> Enum.flat_map_reduce(nil, fn {t, utt}, pending ->
         if t["continues"], do: Process.sleep(t["after_ms"] || 1_000)
         flush_runs()
-        lang = t["stt_lang"] || c["stt_lang"] || "en"
+        lang = if t["noise"], do: "noise", else: t["stt_lang"] || c["stt_lang"] || "en"
 
         ev(pid, %{
           "ev" => "utterance",

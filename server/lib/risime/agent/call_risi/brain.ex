@@ -35,6 +35,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
   alias RisiMe.Agent.CallRisi.{
     Fillers,
+    Hearing,
     LLMStream,
     PhoneCalendar,
     Sentences,
@@ -83,18 +84,34 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     # v1 calls are English-first (the start reply's `lang`): naming the language skips the service's
     # detection pass (~250 ms measured). An admin's manual model for it still applies (SpeechRoutes).
     case RisiMe.Agent.Speech.transcribe(wav, language: Map.get(ctx, :lang, "en")) do
-      {:ok, %{text: text} = r} ->
+      {:ok, %{text: _} = r} ->
         ms = System.monotonic_time(:millisecond) - t0
-        text = String.trim(prefix <> " " <> text)
+        prefix = String.trim(prefix)
+
+        # Harsha 2026-10-16: words nobody said (Whisper on noise, silence or echo) are never
+        # answered, and never replace the question they arrived after (`prefix`).
+        {heard, outcome} =
+          case Hearing.judge(r, hearing_audio(ctx, wav)) do
+            {:ok, h} -> {h, :ok}
+            {why, code} -> {"", {why, code}}
+          end
+
+        report(ctx, {:heard, outcome})
+        text = String.trim(prefix <> " " <> heard)
         report(ctx, {:stt, %{text: text, lang: r.language, model: r.model, ms: ms}})
 
         cond do
-          text == "" or r[:speech] == false ->
-            report(ctx, {:done, %{status: :no_speech, request_id: nil}})
-
-          true ->
+          text != "" ->
             lang_note(ctx, r.language)
             answer(ctx, text, r.language)
+
+          # Unsure what was said: one "Sorry, I didn't catch that." in a row, then silence.
+          match?({:unclear, _}, outcome) and Map.get(ctx, :unclear_last?) != true ->
+            say(ctx, Hearing.unclear_line(), :answer)
+            report(ctx, {:done, %{status: :ok, request_id: nil}})
+
+          true ->
+            report(ctx, {:done, %{status: :no_speech, request_id: nil}})
         end
 
       {:error, _} ->
@@ -102,6 +119,17 @@ defmodule RisiMe.Agent.CallRisi.Brain do
         say(ctx, "Sorry, I didn't catch that. Could you say it again?", :answer)
         report(ctx, {:done, %{status: :stt_failed, request_id: nil}})
     end
+  end
+
+  # The utterance's audio facts for the hearing gate (the PCM after the WAV header).
+  defp hearing_audio(ctx, wav) do
+    pcm =
+      case wav do
+        <<_hdr::binary-size(44), pcm::binary>> -> pcm
+        _ -> nil
+      end
+
+    %{pcm: pcm, speech_ms: Map.get(ctx, :speech_ms), during_tts?: Map.get(ctx, :during_tts?)}
   end
 
   # Harsha's rule: Sinhala or Tamil speech gets one line (once a call), then the answer in English.

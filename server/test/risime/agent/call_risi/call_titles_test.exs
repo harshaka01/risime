@@ -239,7 +239,7 @@ defmodule RisiMe.Agent.CallRisi.CallTitlesTest do
     refute inspect(row) =~ "Nadeesha"
 
     # The next turn's model history: times only.
-    utter(pid, 2, "thanks")
+    utter(pid, 2, "Okay, that sounds great.")
     assert_receive {:llm, [%{"content" => "You are Risi, the user's assistant" <> _} | _] = msgs}
     refute inspect(msgs) =~ "Nadeesha"
     heard(pid, says(2))
