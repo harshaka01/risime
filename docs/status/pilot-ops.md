@@ -54,3 +54,8 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
 - `scripts/risi-notify` posts root's question in that user's Risi chat; `scripts/risi-inbox [--install]` fetches the
   replies into `docs/status/inbox.md` (timer `risime-inbox.timer`, not installed yet: root installs it).
 - Off: remove the line from `.env` and restart: `risi-notify` refuses and nothing is intercepted.
+- 10:16 UTC: the test account signed in (debug build of v0.3.0-nightly.10, dev OTP, Harsha 15:31 "OPTION 2"):
+  user `0c0e548c-6572-4b53-8fb8-981442301c28` now exists on the pilot (+94770000995). Undo: delete the user and the
+  allowlist row (the row's command is above). `RISI_DEV_USERS` in `.env` was NOT changed and the server was NOT restarted
+  (the edit was blocked by a permission check). To do it by hand: append `,0c0e548c-6572-4b53-8fb8-981442301c28` to the
+  `RISI_DEV_USERS=` line in `.env`, then `systemctl --user restart risime.service`. Undo: remove that id, then restart.

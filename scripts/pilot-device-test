@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+# REAL-DEVICE test against the LIVE pilot (Harsha 15 Oct 15:00 SLT: "REAL-DEVICE TEST before every 'try now'"):
+# one redroid phone on spark2 with the app, signed in as the pilot TEST account (+94770000995, allowlisted; dev OTP
+# from the pilot's sms=log server log, never printed), its own phone calendar (a local calendar with events today,
+# tomorrow, the 18th and later this week), Risi skills → Calendar allowed, then the 10 chat questions typed in its
+# Risi chat; each answer is read back from the device screen (uiautomator) and screenshotted.
+#
+#   scripts/pilot-device-test [--apk <debug apk>] [--keep] [--only chat|setup]
+#   (setup keeps the signed-in phone; then PDT_SETUP=<its dir> scripts/pilot-device-test --only chat, so a re-run
+#   needs no new OTP: the pilot rate-limits codes per phone)
+#
+# The phone reaches the pilot by its real TLS name: the redroid's /system/etc/hosts maps risime.risicloud.ai to the
+# Docker bridge gateway (the host's Caddy on *:443), so nothing hairpins through the public address. The release APK
+# only offers RisiCloud (Keycloak) sign-in; this test uses the debug build of the same tag (Harsha 15 Oct 15:31:
+# "OPTION 2", dev OTP sign-in for +94770000995 only). Call Risi: see scripts/pilot-call-test (headless caller).
+#
+# Writes ~/risime-logs/pilot-device-test/<UTC time>/: transcript.md (question → answer verbatim), qNN.png, qNN.xml,
+# result. Prints "PDT PASS|FAIL …" lines. Exit 1 when any check fails. Own redroid: -pdt on 127.0.0.1:5771.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"
+APK="${PDT_APK:-$HOME/risime-pdt-wt/android/app/build/outputs/apk/debug/app-debug.apk}"
+KEEP=0; ONLY=""
+while [ $# -gt 0 ]; do case "$1" in
+  --apk) APK="$(realpath "$2")"; shift 2;; --keep) KEEP=1; shift;; --only) ONLY="$2"; shift 2;;
+  *) sed -n '2,18p' "$0"; exit 2;; esac; done
+PHONE="+94770000995"; EMAIL="pilot-device-test@example.com"
+NAME="risime-redroid${PDT_INSTANCE:--pdt}"; PORT="${PDT_PORT:-5771}"; SERIAL="127.0.0.1:$PORT"
+IMAGE="${REDROID_IMAGE:-redroid/redroid:14.0.0_64only-latest@sha256:0a611199ba2e0b5d60af39b3327a517f6407231f4352114ed3bd3cbfe2be69aa}"
+PILOT_LOG="$HOME/risime-logs/server.log"
+OUT="${PDT_OUT:-$HOME/risime-logs/pilot-device-test/$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$OUT"
+WORK="$(mktemp -d)"
+ADB="$("$REPO/scripts/android-target" adb)/adb"
+A() { "$ADB" -s "$SERIAL" "$@"; }
+FAILS=0
+pass() { echo "PDT PASS $*" | tee -a "$OUT/result"; }
+fail() { echo "PDT FAIL $*" | tee -a "$OUT/result"; FAILS=$((FAILS + 1)); }
+die() { echo "PDT FAIL $*" | tee -a "$OUT/result"; A exec-out screencap -p > "$OUT/fail.png" 2>/dev/null || true; exit 1; }
+cleanup() {
+  rm -rf -- "${WORK:?}"
+  [ "$KEEP" = 1 ] || { "$ADB" disconnect "$SERIAL" >/dev/null 2>&1 || true; docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+}
+trap cleanup EXIT
+
+# ---------------------------------------------------------------- preflight: the live pilot
+[ -f "$APK" ] || die "no APK at $APK"
+BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* 2>/dev/null | sort -V | tail -1)"
+PKG="$("$BT/aapt2" dump badging "$APK" | sed -n "1s/^package: name='\([^']*\)'.*/\1/p")"
+VN="$("$BT/aapt2" dump badging "$APK" | sed -n "1s/.*versionName='\([^']*\)'.*/\1/p")"
+CLS=ai.risicloud.risime
+curl -sf -m 5 -o /dev/null http://127.0.0.1:4000/health || die "pilot 127.0.0.1:4000 /health not ok"
+SRV="$(cat "$HOME/risime-run/CURRENT" 2>/dev/null || readlink "$HOME/risime-run/current")"
+echo "==> pilot $SRV; app $PKG $VN ($(sha256sum "$APK" | cut -c1-12)); out $OUT"
+{ echo "pilot=$SRV"; echo "app=$PKG $VN"; echo "apk_sha256=$(sha256sum "$APK" | cut -d' ' -f1)"; echo "start=$(date -u +%FT%TZ)"; } > "$OUT/result"
+GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')"
+
+# ---------------------------------------------------------------- the phone
+if [ "$ONLY" != chat ]; then
+  printf '127.0.0.1       localhost\n::1             ip6-localhost\n%s      risime.risicloud.ai\n' "$GW" > "$OUT/hosts"; chmod 644 "$OUT/hosts"
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  # As scripts/android-target start, plus the hosts file. Only 127.0.0.1 is published (rule 6).
+  docker run -d --name "$NAME" --privileged -p "127.0.0.1:$PORT:5555" -v "$OUT/hosts:/system/etc/hosts:ro" "$IMAGE" \
+    androidboot.redroid_width=720 androidboot.redroid_height=1280 androidboot.redroid_dpi=320 androidboot.redroid_gpu_mode=guest >/dev/null
+  b=""; for _ in $(seq 1 120); do "$ADB" connect "$SERIAL" >/dev/null 2>&1 || true; b="$(A shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"; [ "$b" = 1 ] && break; sleep 2; done
+  [ "$b" = 1 ] || die "redroid did not boot"
+  A root >/dev/null 2>&1 || true; sleep 2; "$ADB" connect "$SERIAL" >/dev/null 2>&1 || true
+  for _ in $(seq 1 20); do A shell true >/dev/null 2>&1 && break; sleep 1; done
+  A shell settings put global stay_on_while_plugged_in 7 >/dev/null 2>&1 || true
+  A shell settings put system screen_off_timeout 1800000 >/dev/null 2>&1 || true
+  A shell locksettings set-disabled true >/dev/null 2>&1 || true
+  A shell "setprop persist.sys.timezone Asia/Colombo; service call alarm 3 s16 Asia/Colombo" >/dev/null 2>&1 || true
+  A shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+  A install "$APK" >/dev/null || die "install $APK"
+  for p in POST_NOTIFICATIONS RECORD_AUDIO READ_CALENDAR WRITE_CALENDAR; do A shell pm grant "$PKG" "android.permission.$p" 2>/dev/null || true; done
+  A shell pm disable-user com.android.inputmethod.latin >/dev/null 2>&1 || true
+  A logcat -G 16M >/dev/null 2>&1 || true
+  echo "    device time: $(A shell date | tr -d '\r')"
+fi
+
+# ---------------------------------------------------------------- UI helpers (as scripts/risi-chat-test)
+dump() { A shell rm -f /sdcard/ui.xml >/dev/null 2>&1; A shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; A exec-out cat /sdcard/ui.xml > "$WORK/ui.xml" 2>/dev/null || : > "$WORK/ui.xml"; }
+has() { dump; grep -qF -- "$1" "$WORK/ui.xml"; }
+wait_for() { for _ in $(seq 1 "${2:-30}"); do has "$1" && return 0; sleep 1; done; echo "    timeout waiting for: $1"; return 1; }
+node_xy() {
+  dump
+  python3 -I - "$WORK/ui.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
+try: nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError: nodes = []
+def hit(n):
+    t, d = n.get('text') or '', n.get('content-desc') or ''
+    if want.startswith('~'): return want[1:] in t or want[1:] in d
+    if want.startswith('^'): return t == want[1:]
+    return t == want or d == want or (want.endswith('*') and (t.startswith(want[:-1]) or d.startswith(want[:-1])))
+for n in nodes:
+    if hit(n):
+        x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds'))); print((x1 + x2) // 2, (y1 + y2) // 2); break
+PY
+}
+tap() { local b; b="$(node_xy "$1")"; [ -n "$b" ] || { echo "    no UI node: $1"; return 1; }; A shell input tap $b; }
+clear_field() { A shell "for i in \$(seq 1 80); do input keyevent KEYCODE_DEL KEYCODE_FORWARD_DEL; done" >/dev/null 2>&1 || true; }
+hide_keyboard() { local st; st="$(A shell dumpsys input_method 2>/dev/null || true)"; [[ "$st" == *"mInputShown=true"* ]] && A shell input keyevent KEYCODE_BACK; sleep 0.5; }
+# `input text` through the device shell: spaces as %s, the whole string single-quoted for the remote sh.
+typ() { local s; s="$(printf '%s' "$1" | sed -e 's/ /%s/g' -e "s/'/'\\\\''/g")"; A shell "input text '$s'"; }
+type_into() { hide_keyboard; tap "$1" || return 1; sleep 0.5; clear_field; typ "$2"; }
+on_list() { dump; grep -qF -e 'content-desc="Refresh friends"' -e 'text="Add friend"' "$WORK/ui.xml"; }
+dismiss_prompts() { has "Not now" && { tap "Not now" || true; }; has "Later" && { tap "Later" || true; }
+  grep -qF 'Risi listens in Official' "$WORK/ui.xml" && { tap "OK" || true; }; true; }
+back_to_list() { for _ in 1 2 3 4 5 6; do on_list && return 0; A shell input keyevent KEYCODE_BACK; sleep 1; done; A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null 2>&1; sleep 2; on_list; }
+otp() { grep -a "\[DEV OTP\] $PHONE:" "$PILOT_LOG" | tail -1 | grep -oE "\[DEV OTP\] \\$PHONE: [0-9]{6}" | grep -oE '[0-9]{6}$' || true; }
+shot() { A exec-out screencap -p > "$OUT/$1.png" 2>/dev/null || true; cp "$WORK/ui.xml" "$OUT/$1.xml" 2>/dev/null || true; }
+texts() { python3 -I - "$WORK/ui.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+try: nodes = list(ET.parse(sys.argv[1]).iter('node'))
+except ET.ParseError: nodes = []
+for n in nodes:
+    t = (n.get('text') or '').strip()
+    if t: print(t.replace('\n', ' / '))
+PY
+}
+
+# ---------------------------------------------------------------- sign in (dev OTP, the test number only)
+sign_in() {
+  A shell am start -W -n "$PKG/$CLS.MainActivity" >/dev/null
+  wait_for "Server:" 40 || return 1
+  if ! has "Server: https://risime.risicloud.ai"; then
+    tap "Server:*" || return 1; sleep 1
+    tap "Server URL" || tap "http://*" || return 1; sleep 0.5
+    clear_field; typ "https://risime.risicloud.ai"; sleep 0.5; hide_keyboard
+    tap "Use this server" || { tap "Server URL" || true; A shell input keyevent KEYCODE_ENTER; }
+    sleep 3
+  fi
+  for _ in $(seq 1 30); do has 'text="Phone number"' && break; has "Developer sign-in (OTP)" && tap "Developer sign-in (OTP)"; sleep 1; done
+  wait_for 'text="Phone number"' 5 || return 1
+  local before; before="$(grep -ac "\[DEV OTP\] $PHONE:" "$PILOT_LOG" || true)"
+  type_into "Phone number" "$PHONE"; type_into "Work email" "$EMAIL"; hide_keyboard; tap "Send code" || return 1
+  wait_for "6-digit code" 30 || return 1
+  local code=""; for _ in $(seq 1 30); do [ "$(grep -ac "\[DEV OTP\] $PHONE:" "$PILOT_LOG" || true)" -gt "$before" ] && { code="$(otp)"; break; }; sleep 1; done
+  [ -n "$code" ] || return 1
+  type_into "6-digit code" "$code"; unset code; sleep 1; has "Verify" && tap "Verify" || true
+  for _ in $(seq 1 60); do on_list && break; dismiss_prompts; sleep 1; done
+  on_list || return 1
+  dismiss_prompts
+}
+
+# ---------------------------------------------------------------- the phone's calendar
+seed_calendar() {
+  local uri='content://com.android.calendar/calendars?caller_is_syncadapter=true&account_name=pdt&account_type=LOCAL'
+  A shell content insert --uri "'$uri'" --bind account_name:s:pdt --bind account_type:s:LOCAL --bind name:s:Personal \
+    --bind calendar_displayName:s:Personal --bind calendar_access_level:i:700 --bind ownerAccount:s:pdt \
+    --bind visible:i:1 --bind sync_events:i:1 --bind calendar_timezone:s:Asia/Colombo --bind calendar_color:i:-16776961 >/dev/null || return 1
+  local cid; cid="$(A shell content query --uri content://com.android.calendar/calendars --projection _id:account_name | grep 'account_name=pdt' | sed -n 's/.*_id=\([0-9]*\).*/\1/p' | head -1)"
+  [ -n "$cid" ] || return 1
+  # Events in Sri Lanka time: today, tomorrow, later this week, the 18th (this month, or next if past).
+  python3 -I - <<'PY' > "$OUT/calendar.tsv"
+import datetime as d
+tz = d.timezone(d.timedelta(hours=5, minutes=30)); now = d.datetime.now(tz); t = now.date()
+def at(day, h, m=0): return d.datetime(day.year, day.month, day.day, h, m, tzinfo=tz)
+e18 = t.replace(day=18) if t.day <= 18 else (t.replace(day=1) + d.timedelta(days=32)).replace(day=18)
+week_end = t + d.timedelta(days=6 - t.weekday())  # Sunday
+mid = t + d.timedelta(days=2) if t + d.timedelta(days=2) <= week_end else t + d.timedelta(days=1)
+ev = [(at(t, 17, 30), 30, "Rise standup with Shakya"), (at(t, 19), 60, "Dinner with the CodeGen team"),
+      (at(t + d.timedelta(days=1), 10, 30), 60, "Sprint planning"), (at(t + d.timedelta(days=1), 15), 60, "Dentist appointment"),
+      (at(mid, 9), 120, "Site visit in Kandy"), (at(e18, 14), 60, "Board meeting prep")]
+for s, mins, title in ev:
+    e = s + d.timedelta(minutes=mins)
+    print(f"{int(s.timestamp()*1000)}\t{int(e.timestamp()*1000)}\t{title}\t{s:%a %d %b %H:%M}-{e:%H:%M}")
+PY
+  while IFS=$'\t' read -r s e title human; do
+    A shell content insert --uri content://com.android.calendar/events --bind calendar_id:i:"$cid" \
+      --bind title:s:"'$title'" --bind dtstart:l:"$s" --bind dtend:l:"$e" --bind eventTimezone:s:Asia/Colombo \
+      --bind availability:i:0 >/dev/null </dev/null || return 1
+    echo "    event: $human  $title"
+  done < "$OUT/calendar.tsv"
+  local n; n="$(A shell content query --uri content://com.android.calendar/events --projection _id:title --where "calendar_id=$cid" | grep -c 'Row:' || true)"
+  [ "$n" = "$(wc -l < "$OUT/calendar.tsv")" ]
+}
+
+# ---------------------------------------------------------------- Risi chat and skills
+open_risi_chat() {
+  back_to_list || return 1
+  for _ in $(seq 1 90); do [ -n "$(node_xy '^Risi')" ] && break; sleep 1; done
+  tap "^Risi" || return 1
+  wait_for 'text="Ask Risi…"' 60
+}
+# Settings → Risi skills → $@ on (READ/WRITE_CALENDAR already granted, so no Android prompt). Each switch is tapped
+# only once it is fully on screen; its state is read back.
+skill_state() {  # <name> -> "<checked> <x> <y> <onscreen>"
+  dump
+  python3 -I - "$WORK/ui.xml" "$1" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+nodes = list(ET.parse(sys.argv[1]).iter('node'))
+idx = next((i for i, n in enumerate(nodes) if (n.get('text') or '') == sys.argv[2]), None)
+if idx is not None:
+    for n in nodes[idx:idx + 30]:
+        if n.get('checkable') == 'true':
+            x1, y1, x2, y2 = map(int, re.findall(r'\d+', n.get('bounds')))
+            print(n.get('checked'), (x1 + x2) // 2, (y1 + y2) // 2, 1 if 150 < y1 and y2 < 1150 else 0); break
+PY
+}
+skills_on() {
+  back_to_list || return 1
+  tap "More options" || tap "Menu" || return 1; sleep 1
+  tap "Settings" || return 1; sleep 2
+  for _ in $(seq 1 8); do [ -n "$(node_xy 'Risi skills')" ] && break; A shell input swipe 360 1000 360 400 300; sleep 1; done
+  tap "Risi skills" || return 1; sleep 3
+  dump; shot skills-before
+  local name st ok
+  for name in "$@"; do
+    ok=""
+    for _ in $(seq 1 12); do
+      st="$(skill_state "$name")"
+      if [ -z "$st" ] || [ "${st##* }" = 0 ]; then A shell input swipe 360 900 360 600 400; sleep 1; continue; fi
+      read -r checked x y _ <<<"$st"
+      [ "$checked" = true ] && { ok=1; break; }
+      A shell input tap "$x" "$y"; sleep 3
+      for _ in 1 2 3; do has 'text="Allow"' && tap "Allow"; has 'text="While using the app"' && tap "While using the app"; sleep 1; done
+    done
+    dump; shot "skills-$name"
+    if [ -n "$ok" ]; then pass "Risi skills: $name on"; else fail "Risi skills: $name couldn't be switched on"; fi
+  done
+  back_to_list
+}
+
+QUESTIONS=(
+  "What's on my calendar today?"
+  "What's on my calendar tomorrow?"
+  "What's on my calendar today and tomorrow?"
+  "Anything on the 18th?"
+  "What about this week?"
+  "Did I promise anything today or tomorrow?"
+  "What did I promise?"
+  "What can you do?"
+  "What's the capital of Japan?"
+  "We see but have I promised you should be able to read what I promised and let me know"
+)
+BAD_RE="Connect it|can.t see|couldn.t read your calendar|I don.t have access|still busy|connect your calendar"
+
+# Sends $1 in the open Risi chat, waits for Risi's answer to settle, prints the answer (screen text below the question).
+ask() {
+  local q="$1" tag="$2" i prev="" cur="" stable=0
+  tap "Ask Risi…" || tap "~Ask Risi" || return 1; sleep 0.5
+  typ "$q"; sleep 0.5
+  tap "Send" || { sleep 1; tap "Send"; } || return 1
+  local t0; t0="$(date +%s)"
+  for i in $(seq 1 150); do
+    sleep 2; dump
+    cur="$(texts | python3 -I -c '
+import sys
+q = sys.argv[1]; lines = [l.rstrip("\n") for l in sys.stdin]
+idx = max((i for i, l in enumerate(lines) if l == q), default=-1)
+out = []
+for l in lines[idx + 1:]:
+    if l == "👍": break
+    out.append(l)
+print("\n".join(out))' "$q")"
+    if [ -n "$cur" ] && ! grep -qE 'Risi is typing|Thinking|Checking your calendar…' <<<"$cur" && [ "$cur" = "$prev" ]; then
+      stable=$((stable + 1)); [ "$stable" -ge 2 ] && break
+    else stable=0; fi
+    prev="$cur"
+  done
+  shot "$tag"
+  echo "$(( $(date +%s) - t0 ))" > "$WORK/secs"
+  printf '%s\n' "$cur"
+}
+
+# ---------------------------------------------------------------- run
+if [ "$ONLY" != chat ]; then
+  echo "==> sign in as the test account (dev OTP, not printed)"
+  sign_in || die "sign-in on the pilot"
+  dump; shot signed-in; pass "signed in on the pilot as the test account (real UI)"
+  seed_calendar || die "phone calendar: couldn't insert the local calendar and events"
+  pass "phone calendar: $(wc -l < "$OUT/calendar.tsv") events in a local calendar"
+  skills_on Calendar Reminders || fail "Risi skills screen didn't open"
+fi
+[ "$ONLY" = setup ] && { KEEP=1; echo "==> setup done (device kept; next: --only chat with PDT_SETUP=$OUT)"; exit 0; }
+[ "$ONLY" = chat ] && { cp "${PDT_SETUP:?PDT_SETUP=<the setup run dir>}/calendar.tsv" "$OUT/"; "$ADB" connect "$SERIAL" >/dev/null 2>&1 || true; }
+
+open_risi_chat || die "the Risi chat didn't open"
+T="$OUT/transcript.md"
+{ echo "# Pilot device test $(date -u +%FT%TZ)"; echo; echo "pilot $SRV, app $PKG $VN, phone redroid (Asia/Colombo), test account $PHONE"; echo
+  echo "Phone calendar:"; sed 's/^[0-9]*\t[0-9]*\t\([^\t]*\)\t\(.*\)$/- \2 \1/' "$OUT/calendar.tsv"; echo; } > "$T"
+echo "==> setup: a reminder"
+a="$(ask "Remind me tomorrow at 10 to call Shakya" q00)"
+{ echo "## Q0 (setup) Remind me tomorrow at 10 to call Shakya"; echo; echo '```'; echo "$a"; echo '```'; echo; } >> "$T"
+for i in "${!QUESTIONS[@]}"; do
+  n=$((i + 1)); q="${QUESTIONS[$i]}"; tag="$(printf 'q%02d' "$n")"
+  echo "==> Q$n: $q"
+  a="$(ask "$q" "$tag")" || { fail "Q$n couldn't be sent"; continue; }
+  secs="$(cat "$WORK/secs")"
+  printf '%s\n' "$a" | sed 's/^/    | /'
+  { echo "## Q$n $q  (${secs} s)"; echo; echo '```'; echo "$a"; echo '```'; echo; } >> "$T"
+  verdict=PASS; why=""
+  if [ -z "$a" ]; then verdict=FAIL; why="no answer on screen"
+  elif grep -qiE "$BAD_RE" <<<"$a"; then verdict=FAIL; why="says: $(grep -oiE "$BAD_RE" <<<"$a" | head -1)"; fi
+  case "$n" in
+    1) for w in "Rise standup" "Dinner"; do grep -qi "$w" <<<"$a" || { verdict=FAIL; why+=" misses '$w'"; }; done ;;
+    2) for w in "Sprint planning" "Dentist"; do grep -qi "$w" <<<"$a" || { verdict=FAIL; why+=" misses '$w'"; }; done ;;
+    3) for w in "Rise standup" "Dinner" "Sprint planning" "Dentist"; do grep -qi "$w" <<<"$a" || { verdict=FAIL; why+=" misses '$w'"; }; done ;;
+    4) grep -qi "Board meeting" <<<"$a" || { verdict=FAIL; why+=" misses 'Board meeting prep'"; } ;;
+    5) for w in "Site visit" "Board meeting"; do grep -qi "$w" <<<"$a" || { verdict=FAIL; why+=" misses '$w'"; }; done ;;
+    6|7|10) grep -qi "Shakya" <<<"$a" || { verdict=FAIL; why+=" misses the reminder to call Shakya"; } ;;
+    9) grep -qi "Tokyo" <<<"$a" || { verdict=FAIL; why+=" no Tokyo"; } ;;
+  esac
+  if [ "$n" -le 5 ] && grep -qE '^From:' <<<"$a" && ! grep -qiE 'standup|dinner|sprint|dentist|site visit|board' <<<"$a"; then verdict=FAIL; why+=" only 'From: …' with no events"; fi
+  echo "**$verdict**${why:+ ($why)}" >> "$T"; echo >> "$T"
+  if [ "$verdict" = PASS ]; then pass "Q$n $q (${secs} s)"; else fail "Q$n $q:$why"; fi
+done
+A logcat -d > "$OUT/logcat.txt" 2>/dev/null || true
+grep -qE "FATAL EXCEPTION|ANR in $PKG" "$OUT/logcat.txt" && fail "crash/ANR in logcat" || pass "no crash/ANR"
+echo "==> transcript: $T"
+echo "end=$(date -u +%FT%TZ)" >> "$OUT/result"
+[ "$FAILS" = 0 ] && { echo "PDT OK"; exit 0; } || { echo "PDT FAIL $FAILS check(s)"; exit 1; }
