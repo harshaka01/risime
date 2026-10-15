@@ -616,6 +616,60 @@ defmodule RisiMe.Agent.SpeechHttpTest do
       refute Map.get(r, :deferred)
     end
 
+    test "P0-1b en_prompt: sent as prompt on English only; a repeating answer is redone without" do
+      cfg = Application.get_env(:risime, :risi_speech_http)
+      Application.put_env(:risime, :risi_speech_http, Keyword.put(cfg, :fast_en_model, "none"))
+      {:ok, n} = Agent.start_link(fn -> 0 end)
+
+      rec =
+        stub(fn conn, body ->
+          case conn.request_path do
+            "/v1/audio/detect" ->
+              detected(conn, "en")
+
+            _ ->
+              i = Agent.get_and_update(n, &{&1, &1 + 1})
+
+              text =
+                if field(body, "prompt"),
+                  do: "Thank you. Thank you. Thank you.",
+                  else: "on Friday."
+
+              assert i < 2
+              Req.Test.json(conn, %{"text" => text, "language" => "en"})
+          end
+        end)
+
+      assert {:ok, %{text: "on Friday."}} =
+               Http.transcribe("a", fast: true, defer_langs: ["si", "ta"], en_prompt: "the quote")
+
+      bodies = for {"/v1/audio/transcriptions", b, _} <- Agent.get(rec, & &1), do: b
+      assert Enum.map(Enum.reverse(bodies), &field(&1, "prompt")) == ["the quote", nil]
+
+      # A good prompted answer is kept (one request); Sinhala/Tamil never get it.
+      stub(fn conn, body ->
+        case conn.request_path do
+          "/v1/audio/detect" ->
+            detected(conn, "en")
+
+          _ ->
+            assert field(body, "prompt") == "we will send the quote"
+            Req.Test.json(conn, %{"text" => "on Friday.", "language" => "en"})
+        end
+      end)
+
+      assert {:ok, %{text: "on Friday."}} =
+               Http.transcribe("a",
+                 fast: true,
+                 defer_langs: ["si", "ta"],
+                 en_prompt: "we will send the quote"
+               )
+
+      assert Http.prompt_suspicious?("see see see", "x")
+      assert Http.prompt_suspicious?("we will send the quote", "we will send the quote")
+      refute Http.prompt_suspicious?("on Friday at ten", "we will send the quote")
+    end
+
     test "no speech at detection: nothing is transcribed" do
       rec =
         stub(fn conn, _ ->

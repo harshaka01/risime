@@ -301,6 +301,35 @@ defmodule RisiMe.Agent.CallTranscribeFastTest do
     end
   end
 
+  test "P0-1b English context: off by default; on, a continuing piece gets the previous line" do
+    fast!("on")
+    w = transcribe_world!()
+    sid = start_on!(w)
+    _ = await_post(w.og, "call_transcribe")
+    say!(w, :a, sid, 0, 0, "en:We will send the quote")
+    assert_receive {:fake_speech_opts, _, opts}
+    refute opts[:en_prompt]
+    _ = await_post(w.og, "call_transcript")
+    say!(w, :a, sid, 1, 3_500, "en:on Friday.")
+    assert_receive {:fake_speech_opts, "en:on Friday.", opts}
+    refute opts[:en_prompt]
+
+    w = transcribe_world!(timing: [fast_en_prompt: true])
+    sid = start_on!(w)
+    _ = await_post(w.og, "call_transcribe")
+    say!(w, :a, sid, 0, 0, "en:We will send the quote")
+    _ = await_post(w.og, "call_transcript")
+    # Continues the line (starts before it ended): the line is the prompt.
+    say!(w, :a, sid, 1, 2_500, "en:on Friday.")
+    assert_receive {:fake_speech_opts, "en:on Friday.", opts}
+    assert opts[:en_prompt] == "We will send the quote"
+    _ = await_post(w.og, "call_transcript")
+    # After a pause of more than 1 s: no prompt.
+    say!(w, :a, sid, 2, 8_000, "en:see you")
+    assert_receive {:fake_speech_opts, "en:see you", opts}
+    refute opts[:en_prompt]
+  end
+
   test "Session.chunk/1 of a stored row follows its fast column" do
     assert Session.chunk(%Session{fast: true})["mode"] == "vad"
     assert Session.chunk(%Session{fast: false}) == Session.chunk()

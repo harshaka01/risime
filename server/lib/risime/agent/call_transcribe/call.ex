@@ -320,6 +320,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       # Fast sessions: the speaker's last words and line end (the overlap de-duplication).
       tail: [],
       tail_end: nil,
+      last_text: nil,
       # v1.50 §36.12: Sinhala/Tamil chunks waiting to be joined (audio in memory only).
       pending: [],
       pend_ms: 0,
@@ -759,7 +760,7 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
               opts ++ [fast: true, priority: "live", defer_langs: @joined ++ ["en"]]
 
             Map.get(rt, :fast) ->
-              opts ++ [fast: true, priority: "live", defer_langs: @joined]
+              opts ++ [fast: true, priority: "live", defer_langs: @joined] ++ en_prompt(p, meta)
 
             true ->
               opts
@@ -967,7 +968,8 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
     p = %{
       p
       | tail: Overlap.tail(p.tail, text),
-        tail_end: max_dt(p.tail_end || meta.end, meta.end)
+        tail_end: max_dt(p.tail_end || meta.end, meta.end),
+        last_text: if(String.trim(text) != "", do: text, else: p.last_text)
     }
 
     rt = %{rt | parts: Map.put(rt.parts, meta.speaker, p)}
@@ -1058,6 +1060,27 @@ defmodule RisiMe.Agent.CallTranscribe.Call do
       p.pend_ms >= t.join_min_ms and meta.duration_ms < t.join_cut_ms -> flush(rt, user)
       true -> rt
     end
+  end
+
+  # P0-1b English context (timing `fast_en_prompt`, off by default: on the bench it raised WER,
+  # see docs/status/ci.md): the speaker's previous line as the prompt of a piece that continues it
+  # (its line ended ≤ 1 s before); the last 200 characters, cut at a word.
+  defp en_prompt(p, meta) do
+    t = CallTranscribe.timing()
+    last = p.last_text
+
+    if t.fast_en_prompt and is_binary(last) and p.tail_end != nil and
+         DateTime.diff(meta.start, p.tail_end, :millisecond) <= t.fast_en_prompt_gap_ms do
+      [en_prompt: last |> String.slice(-200, 200) |> cut_word()]
+    else
+      []
+    end
+  end
+
+  defp cut_word(text) do
+    if String.length(text) < 200,
+      do: text,
+      else: text |> String.split(" ", parts: 2) |> List.last()
   end
 
   # The chunk follows the speaker's waiting si/ta chunks without a pause.

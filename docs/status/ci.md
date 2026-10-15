@@ -44,3 +44,22 @@ transcription; English stays per chunk.** Same bench, live pilot service:
 
 `beam_size 1` for English was not tried: the speech service has no per-request beam size (one env for all
 requests), so it needs a service change and an image rebuild.
+
+**English previous-line context (P0-1b follow-up, 2026-10-15): tried, left off.** The speaker's previous line as
+Whisper's initial prompt (`prompt` field; the speech service has always accepted it, so no image rebuild is
+needed), only for an English piece that continues that line (gap ≤ 1 s). Same bench, en, 3 speakers, live service:
+
+| English piece prompt | p50 speech→line | p95 | end-of-utterance p50 / p95 | WER |
+|---|---|---|---|---|
+| none (shipped) | 2.9 s | 4.6 s | 1.7 / 2.7 s | **0.070** (12-s chunks: 0.053) |
+| own previous line, any gap | 2.7 s | 4.5 s | 1.9 / 2.5 s | 0.404 |
+| own + other speakers' last lines, any gap | 2.7 s | 4.5 s | 1.8 / 2.5 s | 0.316 |
+| own previous line, only when continuing (≤ 1 s) | 2.7 s | 4.5 s | 1.9 / 2.5 s | 0.289 |
+| the same + guard (redo without prompt on repeats/echo) | 2.8 s | 4.6 s | 2.5 / 2.6 s | 0.105 |
+
+The prompt makes large-v3 hallucinate on near-silent tails ("Thank you. Thank you. …") and loop on the opening
+phrase ("and so my fellow Americans" ×3). The remaining loss without a prompt comes from the 4-s forced cut
+mid-word (the last word comes out wrong, e.g. "ask" → "and") and the clip's noisy tail. The server code is in place
+behind the timing switch `fast_en_prompt` (default **false**), so it can be re-tested on real conversation clips.
+The likely real fix is on the phone: cut a 4-s piece at the quietest 20-ms frame of its last second rather than at
+exactly 4 s (needs an APK).
