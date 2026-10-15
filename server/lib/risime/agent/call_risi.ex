@@ -192,10 +192,21 @@ defmodule RisiMe.Agent.CallRisi do
 
   @doc """
   Risi's participant token for `room` (minted inside the server, never through REST): subscribe,
-  publish the microphone only, no data, not hidden (proposal §41.2).
+  publish the microphone only, not hidden (proposal §41.2), and data since v1.52 §41.8 (the
+  `risi.cal` requests to the caller; `livekit_token_claims_call_risi_v152.json`).
   """
   def risi_claims(api_key, room, now) do
-    claims = RisiMe.Calls.LiveKit.participant_claims(api_key, risi_identity(), room, "audio", now)
+    claims =
+      RisiMe.Calls.LiveKit.participant_claims(
+        api_key,
+        risi_identity(),
+        room,
+        "audio",
+        now,
+        false,
+        true
+      )
+
     # A 30-min call outlives the 600-s token only for reconnects; Risi doesn't reconnect in v1.
     put_in(claims, ["video", "canPublishSources"], ["microphone"])
   end

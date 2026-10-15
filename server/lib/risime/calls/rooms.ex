@@ -216,7 +216,8 @@ defmodule RisiMe.Calls.Rooms do
       cond do
         me.identity in present ->
           if media == "video", do: grant(config, room, me.identity, me.screen?, :refresh)
-          {:ok, token_reply(config, room, me, media)}
+          # v1.52 §41.8: the Call Risi starter's refresh keeps its data grant.
+          {:ok, token_reply(config, room, me, media, risi_room?(r))}
 
         max(r.num_participants, length(present)) >= LiveKit.max_participants(media) ->
           {:error, :call_full}
@@ -363,8 +364,9 @@ defmodule RisiMe.Calls.Rooms do
   defp risi_room?(_room), do: false
 
   defp risi_reply(config, room, me, max_s) do
+    # v1.52 §41.8: the caller may publish data in a Call Risi room (its `risi.cal` replies).
     config
-    |> token_reply(room, me, "audio")
+    |> token_reply(room, me, "audio", true)
     |> Map.put(:max_participants, 2)
     |> Map.put(:risi_call, %{
       state: "joining",
@@ -375,9 +377,12 @@ defmodule RisiMe.Calls.Rooms do
     })
   end
 
-  defp token_reply(config, room, me, media) do
+  defp token_reply(config, room, me, media, data? \\ false) do
     now = System.os_time(:second)
-    {token, exp} = LiveKit.participant_token(config, me.identity, room, media, now, me.screen?)
+
+    {token, exp} =
+      LiveKit.participant_token(config, me.identity, room, media, now, me.screen?, data?)
+
     RoomMemory.minted(room, me.identity)
 
     %{

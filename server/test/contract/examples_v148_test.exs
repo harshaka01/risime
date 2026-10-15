@@ -129,13 +129,15 @@ defmodule RisiMe.Contract.ExamplesV148Test do
     end
   end
 
-  test "livekit_token_claims_call_risi.json is exactly Risi's minted claims" do
+  test "livekit_token_claims_call_risi.json is Risi's minted claims (data on since v1.52)" do
     ex = example("livekit_token_claims_call_risi.json")
     [u, d] = String.split(ex["sub"], "/")
     Application.put_env(:risime, :risi_user_id, u)
     Application.put_env(:risime, :risi_device_id, d)
 
-    assert CallRisi.risi_claims(ex["iss"], ex["video"]["room"], ex["nbf"]) == ex
+    # v1.52 §41.8 turned `canPublishData` on (livekit_token_claims_call_risi_v152.json); nothing else.
+    assert CallRisi.risi_claims(ex["iss"], ex["video"]["room"], ex["nbf"]) ==
+             put_in(ex, ["video", "canPublishData"], true)
   end
 
   test "the group_call payloads carry with: risi (§41.3)" do

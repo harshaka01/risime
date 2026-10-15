@@ -158,6 +158,11 @@ defmodule RisiMeWeb.CallRisiRoomsTest do
       assert claims["sub"] == RisiMe.Agent.CallRisi.risi_identity()
       assert claims["video"]["canPublishSources"] == ["microphone"]
       assert claims["video"]["room"] == reply["room"]
+      # v1.52 §41.8: both tokens of a Call Risi room may publish data (the `risi.cal` packets).
+      assert claims["video"]["canPublishData"] == true
+      {:ok, mine} = LiveKit.verify(reply["token"], lk.api_secret)
+      assert mine["video"]["canPublishData"] == true
+      assert mine["video"]["canPublishSources"] == ["microphone"]
 
       # Nobody else may join a Call Risi room (b is a member with a group_calls device).
       join = body |> Map.delete("risi_call") |> Map.put("action", "join")
@@ -260,6 +265,9 @@ defmodule RisiMeWeb.CallRisiRoomsTest do
           r = FakeLiveKit.room(reply["room"])
           assert Jason.decode!(r.metadata) == %{"c" => id, "m" => "audio"}
           assert r.max_participants == 32
+          # v1.52 §41.8: data stays off outside a Call Risi room.
+          {:ok, claims} = LiveKit.verify(reply["token"], ctx.livekit.api_secret)
+          assert claims["video"]["canPublishData"] == false
         end
       end
 

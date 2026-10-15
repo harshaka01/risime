@@ -158,14 +158,14 @@ defmodule RisiMe.Agent.CallRisi.PiecesTest do
              16_000::little-32, _::binary>> = wav
   end
 
-  test "Risi's token claims: microphone only, no data, not hidden" do
+  test "Risi's token claims: microphone only, data (v1.52 §41.8), not hidden" do
     c = CallRisi.risi_claims("APIk", "room1", 1000)
     assert c["sub"] == CallRisi.risi_identity()
     assert c["video"]["room"] == "room1"
     assert c["video"]["canPublish"] == true
     assert c["video"]["canSubscribe"] == true
     assert c["video"]["canPublishSources"] == ["microphone"]
-    assert c["video"]["canPublishData"] == false
+    assert c["video"]["canPublishData"] == true
     refute Map.has_key?(c["video"], "hidden")
     refute Map.has_key?(c["video"], "roomAdmin")
   end

@@ -149,7 +149,7 @@ defmodule RisiMe.Devices do
                          group_calls call_switch screen_share tabs risi_tools risi_skills
                          risi_ledger risi_events risi_notes google_calendar files pdf_export
                          risi_items call_transcribe voice add_to_call call_risi risi_send risi_fixit
-                         risi_calendar_v2)
+                         risi_calendar_v2 call_risi_cal)
 
   defp capabilities(%{"capabilities" => caps}) when is_list(caps) do
     if length(caps) <= 32 and Enum.all?(caps, &is_binary/1) do
@@ -184,6 +184,10 @@ defmodule RisiMe.Devices do
         if "group_calls" in caps and "risi_tools" in caps,
           do: caps,
           else: caps -- ["call_risi"]
+
+      # v1.52 §41.8: `call_risi_cal` (meeting titles over the call's data channel), only with
+      # `call_risi`.
+      caps = if "call_risi" in caps, do: caps, else: caps -- ["call_risi_cal"]
 
       {:ok, caps}
     else

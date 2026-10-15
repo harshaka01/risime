@@ -79,8 +79,11 @@ defmodule RisiMe.Calls.LiveKit do
   The claims of a participant token (`livekit_token_claims.json`, `livekit_token_claims_v123.json`):
   `iss` the API key, `sub` the identity, `name` empty, no metadata, `nbf` now, `exp` now + 600 s,
   and the `video` grant (sources per `sources/2`).
+
+  `data?` (v1.52 §41.8) is true only in a Call Risi room (`k: "risi"`): both the caller's and Risi's
+  tokens get `canPublishData: true` there, for the `risi.cal` packets. Every other room keeps `false`.
   """
-  def participant_claims(api_key, identity, room, media, now, screen? \\ false) do
+  def participant_claims(api_key, identity, room, media, now, screen? \\ false, data? \\ false) do
     sources = sources(media, screen?)
 
     %{
@@ -95,22 +98,23 @@ defmodule RisiMe.Calls.LiveKit do
         "canSubscribe" => true,
         "canPublish" => true,
         "canPublishSources" => sources,
-        "canPublishData" => false,
+        "canPublishData" => data? == true,
         "canUpdateOwnMetadata" => false
       }
     }
   end
 
-  @doc "A signed participant token. Returns `{token, exp_unix}`."
+  @doc "A signed participant token (`data?` as in `participant_claims/7`). Returns `{token, exp_unix}`."
   def participant_token(
         %{api_key: key, api_secret: secret},
         identity,
         room,
         media,
         now,
-        screen? \\ false
+        screen? \\ false,
+        data? \\ false
       ) do
-    claims = participant_claims(key, identity, room, media, now, screen?)
+    claims = participant_claims(key, identity, room, media, now, screen?, data?)
     {sign(claims, secret), claims["exp"]}
   end
 
