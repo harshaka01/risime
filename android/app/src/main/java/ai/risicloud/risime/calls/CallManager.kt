@@ -106,6 +106,9 @@ interface CallAppPort {
 
     /** v1.52 §41.8: the reply to a live Call Risi's data packet (calls/risi/CallRisiCal.kt), or null to ignore it. */
     suspend fun risiCallData(topic: String?, from: String?, payload: ByteArray, risiIdentity: String): ByteArray? = null
+
+    /** v1.53 §41.10: a new on-device recogniser for a live Call Risi (calls/risi/OnDeviceCallStt.kt), null without one. */
+    fun risiCallSttEngine(): ai.risicloud.risime.calls.risi.CallSttEngine? = null
 }
 
 /**
@@ -487,6 +490,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         me, device, scope, trackedSfu, groupPort, marks,
         serverNow = { port.serverNow() }, log = log,
         risiData = { topic, from, payload, risi -> port.risiCallData(topic, from, payload, risi) },
+        risiSttEngine = { port.risiCallSttEngine() },
     )
 
     private fun newMachine(me: String, device: String) = CallStateMachine(

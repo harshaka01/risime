@@ -888,7 +888,50 @@ class ContractExamplesTest {
         )
     }
 
-    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + callRisiV148 + v149 + callRisiCalV152 + mapOf(
+    /** v1.53 §41.10 the caller's speech recognised on the phone (net/Protocol153.kt, calls/risi/CallRisiStt.kt). */
+    private val sttV153: Map<String, (String) -> Any> by lazy {
+        fun same(bytes: ByteArray, s: String) = require(ProtocolJson.parseToJsonElement(bytes.decodeToString()) == ProtocolJson.parseToJsonElement(s)) { "re-encodes differently" }
+        mapOf(
+            "device_put_call_risi_stt.json" to { s ->
+                ProtocolJson.decodeFromString<DevicePut>(s).also { d ->
+                    val caps = d.mls!!.capabilities!!
+                    require(CallRisiStt153.CAPABILITY in caps && DeviceMls.CAP_CALL_RISI in caps)
+                }
+            },
+            "call_risi_stt_partial.json" to { s ->
+                ProtocolJson.decodeFromString<SttPartial>(s).also {
+                    require(it.t == CallRisiStt153.T_PARTIAL && it.seq == 7L && it.text == "do I have anything")
+                    same(CallRisiStt153.partial(it.seq, it.text), s)
+                }
+            },
+            "call_risi_stt_final.json" to { s ->
+                ProtocolJson.decodeFromString<SttFinal>(s).also {
+                    require(it.t == CallRisiStt153.T_FINAL && it.seq == 7L && it.conf == 0.91 && it.lang == "en" && it.duringRisi == null)
+                    same(CallRisiStt153.final(it.seq, it.text, it.conf!!.toFloat(), duringRisi = false), s)
+                }
+            },
+            "call_risi_stt_off.json" to { s ->
+                ProtocolJson.decodeFromString<SttOff>(s).also {
+                    require(it.reason == CallRisiStt153.OFF_UNAVAILABLE)
+                    same(CallRisiStt153.off(it.reason), s)
+                }
+            },
+            "call_risi_stt_mode.json" to { s ->
+                ProtocolJson.decodeFromString<SttMode>(s).also {
+                    require(it.mode == CallRisiStt153.MODE_PHONE)
+                    require(CallRisiStt153.parseIncoming(s.encodeToByteArray()) == CallRisiStt153.Incoming.Mode(CallRisiStt153.MODE_PHONE))
+                }
+            },
+            "call_risi_stt_speaking.json" to { s ->
+                ProtocolJson.decodeFromString<SttSpeaking>(s).also {
+                    require(it.on)
+                    require(CallRisiStt153.parseIncoming(s.encodeToByteArray()) == CallRisiStt153.Incoming.Speaking(true))
+                }
+            },
+        )
+    }
+
+    private val decoders: Map<String, (String) -> Any> = calendarV129 + notesV130 + google131 + basicMessaging134 + risiP0V135 + brainV136 + transcribeV139 + voiceV141 + actionItemsV142 + actionItemsV143 + addToCallV145 + callRisiV148 + v149 + callRisiCalV152 + sttV153 + mapOf(
         // v1.32 §32: an ops alert is a text envelope whose risi kind this build does not render specially; it must still decode.
         "envelope_risi_ops_alert.json" to { s -> ProtocolJson.decodeFromString<RisiTextEnvelope>(s).also { require(it.risi!!.kind == "ops_alert" && it.body.isNotEmpty()) } },
         // v1.32 §25.3 calendar_add: verified, and the top-level error code + detail.

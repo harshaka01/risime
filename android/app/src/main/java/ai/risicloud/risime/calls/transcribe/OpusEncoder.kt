@@ -100,6 +100,9 @@ object CallMicTap {
 
     @Volatile var sink: Sink? = null
 
+    /** v1.53 §41.10: the Call Risi on-device recogniser's tap (the same capture; never a second microphone). */
+    @Volatile var sttSink: Sink? = null
+
     /** Debug only: an injected source feeds the tap instead of the microphone. */
     @Volatile var injecting: Boolean = false
         private set
@@ -108,6 +111,7 @@ object CallMicTap {
     fun onMicrophone(data: ByteArray, rate: Int, channels: Int) {
         if (injecting) return
         sink?.onPcm(data, data.size, rate, channels)
+        sttSink?.onPcm(data, data.size, rate, channels)
     }
 
     /** Debug builds only (the caller checks `BuildConfig.DEBUG`): start or stop an injected source. */
@@ -119,5 +123,6 @@ object CallMicTap {
     fun onInjected(data: ByteArray, length: Int, rate: Int, channels: Int) {
         if (!injecting || !ai.risicloud.risime.BuildConfig.DEBUG) return
         sink?.onPcm(data, length, rate, channels)
+        sttSink?.onPcm(data, length, rate, channels)
     }
 }
