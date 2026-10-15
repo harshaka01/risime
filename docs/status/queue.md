@@ -95,3 +95,9 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
   of the missing message is unknown: check the app's handling of 4 Risi posts in the same second.
 - Deferred from the 23:14Z call (not hearing): the empty "Fri 16 Oct:" card during a call, the brief
   BadBooleanError, one 4.8-s chat turn, side-talk replies, the "for two" → 2 pm write.
+- **Harsha 2026-10-16 ~05:00 SLT, if he switches to voice 2 (Chatterbox-Turbo):**
+  - pre-render the greeting and every filler line in Chatterbox-Turbo, cached so they play at once;
+  - stream answers sentence by sentence;
+  - Kokoro only as the fallback when GPU memory is short;
+  - report call reply-start p50/p95 after the switch.
+  - Build it ready (behind the pick settings) right after the hearing hotfix, so a "Root: switch to 2" ships in minutes.
