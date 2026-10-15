@@ -48,6 +48,9 @@ defmodule RisiMeWeb.Router do
   scope "/admin", RisiMeWeb.Admin do
     pipe_through [:admin_browser, :admin_required]
 
+    # Harsha's call-voice pick (2026-10-15): signed, 24-h sample links posted in his Risi chat.
+    get "/voice-samples/:token", VoiceSampleController, :show
+
     live_session :admin, on_mount: RisiMeWeb.Admin.LiveAuth do
       live "/", SpeechLive, :index
       live "/speech", SpeechLive, :index

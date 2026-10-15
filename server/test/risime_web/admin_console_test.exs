@@ -396,6 +396,104 @@ defmodule RisiMeWeb.AdminConsoleTest do
                ["setting_set"]
     end
 
+    test "Rate for Call Risi (item C): the samples and voices show; a pick is checked, saved, audit-logged",
+         %{conn: conn} do
+      {a, _} = admin("ratevoice@example.com")
+      alias RisiMe.Agent.TTS.CallVoice
+      alias RisiMeWeb.Admin.VoicesLive
+
+      html = conn |> admin_conn(a.id) |> get("/admin/voices") |> html_response(200)
+      assert html =~ "Rate for Call Risi"
+      assert html =~ "Prepare the samples"
+      assert html =~ "Emma (Kokoro, British English, female)"
+      assert html =~ "Chatterbox (built-in voice, English)"
+      assert html =~ "design review with Ruwan"
+
+      ok = fn ms -> {:ok, %{first_audio_ms: ms, total_ms: ms + 40, load_ms: 0, src: "data:"}} end
+
+      rows =
+        for v <- CallVoice.lineup(), do: Map.merge(v, %{results: [nil, nil, nil], rated: nil})
+
+      rows =
+        for r <- rows do
+          case r.id do
+            "kokoro:bf_emma" -> %{r | results: [ok.(120), ok.(110), ok.(130)]}
+            "kokoro:am_michael" -> %{r | results: [ok.(1900), ok.(2000), ok.(2100)]}
+            "chatterbox:default" -> %{r | results: [ok.(900), ok.(950), ok.(1000)]}
+            _ -> r
+          end
+        end
+
+      installed = [
+        %{
+          id: "kokoro",
+          name: "Kokoro",
+          module: nil,
+          status: :ok,
+          voices:
+            for(
+              v <- ~w(af_heart bf_emma af_bella am_michael),
+              do: %{id: "kokoro:" <> v, name: v, languages: ["en"]}
+            )
+        },
+        %{
+          id: "chatterbox",
+          name: "Chatterbox",
+          module: nil,
+          status: :ok,
+          voices: [%{id: "chatterbox:default", name: "c", languages: ["en"]}]
+        }
+      ]
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          admin_id: a.id,
+          installed: installed,
+          rate: rows,
+          rate_state: :done,
+          rate_pending: [],
+          test: nil,
+          flash: %{}
+        }
+      }
+
+      # Not live-capable: rateable, never picked.
+      for {v, why} <- [
+            {"chatterbox:default", "resident Kokoro"},
+            {"kokoro:am_michael", "too slow for live calls (measured 2000 ms)"},
+            {"kokoro:af_bella", "play the samples first"}
+          ] do
+        {:noreply, s} = VoicesLive.handle_event("rate_pick", %{"v" => v}, socket)
+        assert {:error, msg} = s.assigns.notice
+        assert msg =~ why
+      end
+
+      assert RisiMe.Agent.CallRisi.voice("en") == "kokoro:af_heart"
+
+      {:noreply, s} =
+        VoicesLive.handle_event(
+          "rate_vote",
+          %{"v" => "chatterbox:default", "score" => "up"},
+          socket
+        )
+
+      assert Enum.find(s.assigns.rate, &(&1.id == "chatterbox:default")).rated == "up"
+
+      {:noreply, s} = VoicesLive.handle_event("rate_pick", %{"v" => "kokoro:bf_emma"}, socket)
+      assert {:ok, msg} = s.assigns.notice
+      assert msg =~ "Emma"
+      assert RisiMe.Agent.CallRisi.voice("en") == "kokoro:bf_emma"
+      assert Enum.find(s.assigns.rate, &(&1.id == "kokoro:bf_emma")).now?
+
+      assert Repo.all(
+               from e in AuditEntry,
+                 where: e.actor_id == ^a.id,
+                 order_by: e.at,
+                 select: {e.action, e.target}
+             ) == [{"tts_rating", "chatterbox:default"}, {"setting_set", "tts_voice_en"}]
+    end
+
     test "Call Risi length (v1.48 §41.6): shown, bounded, saved, reset, audit-logged", %{
       conn: conn
     } do

@@ -125,6 +125,11 @@ defmodule RisiMe.Agent.CallRisi do
   @doc "The configuration (`config :risime, :risi_call_risi_config`)."
   def config, do: Application.get_env(:risime, :risi_call_risi_config, [])
 
+  @doc """
+  The engines Call Risi may speak with besides Kokoro (resident and streamed): `[]` by default.
+  """
+  def live_engines, do: Keyword.get(config(), :live_engines, [])
+
   @doc "The runs recorder (tests may replace it)."
   def runs, do: Application.get_env(:risime, :risi_call_runs, RisiMe.Agents.Runs)
 
@@ -134,8 +139,21 @@ defmodule RisiMe.Agent.CallRisi do
   """
   def voice(lang) do
     case RisiMe.Agent.TTS.voice_for(lang) do
-      {:manual, "kokoro:" <> _ = id} -> id
-      _ -> RisiMe.Agent.TTS.Kokoro.default_voice()
+      {:manual, "kokoro:" <> _ = id} ->
+        id
+
+      # Harsha's call-voice pick (2026-10-15): a lab engine's voice only when that engine is listed
+      # as live (`:live_engines`, RISI_CALL_LIVE_ENGINES; it is then pinned resident in the TTS lab
+      # and the media worker falls back to Kokoro if the lab can't answer).
+      {:manual, id} when is_binary(id) ->
+        [engine | _] = String.split(id, ":", parts: 2)
+
+        if engine in live_engines(),
+          do: id,
+          else: RisiMe.Agent.TTS.Kokoro.default_voice()
+
+      _ ->
+        RisiMe.Agent.TTS.Kokoro.default_voice()
     end
   rescue
     _ -> RisiMe.Agent.TTS.Kokoro.default_voice()

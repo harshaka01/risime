@@ -25,6 +25,7 @@ defmodule RisiMeWeb.Admin.VoicesLive do
   alias RisiMe.Admin.Settings
   alias RisiMe.Agent.CallRisi
   alias RisiMe.Agent.TTS
+  alias RisiMe.Agent.TTS.CallVoice
 
   @labels %{
     "si" => "Sinhala",
@@ -49,6 +50,9 @@ defmodule RisiMeWeb.Admin.VoicesLive do
       |> assign(:test_lang, "any")
       |> assign(:notice, nil)
       |> assign(:auto, RisiMe.Agent.VoiceAuto.status(:tts))
+      |> assign(:rate, rate_rows())
+      |> assign(:rate_state, nil)
+      |> assign(:rate_pending, [])
       |> load_choices()
 
     if connected?(socket), do: send(self(), :load_installed)
@@ -163,6 +167,63 @@ defmodule RisiMeWeb.Admin.VoicesLive do
     end
   end
 
+  # "Rate for Call Risi" (item C, 2026-10-15): every voice speaks every sample, one after another.
+  def handle_event("rate_prepare", _params, socket) do
+    if socket.assigns.rate_state == :running do
+      {:noreply, socket}
+    else
+      Admin.audit(socket.assigns.admin_id, "tts_test", "call_risi_voices", nil, "samples")
+      rows = rate_rows()
+      queue = for r <- rows, i <- 0..(length(CallVoice.samples()) - 1), do: {r.id, i}
+
+      {:noreply,
+       socket
+       |> assign(rate: rows, rate_state: :running, rate_pending: queue, notice: nil)
+       |> next_sample()}
+    end
+  end
+
+  def handle_event("rate_vote", %{"v" => id, "score" => score}, socket)
+      when score in ["up", "down"] do
+    case Enum.find(socket.assigns.rate, &(&1.id == id)) do
+      %{rated: nil, results: results} = row ->
+        latency =
+          case Enum.find(results, &match?({:ok, _}, &1)) do
+            {:ok, a} -> %{a | first_audio_ms: CallVoice.first_ms(results)}
+            _ -> %{}
+          end
+
+        RisiMe.Agent.TTS.Ratings.rate(socket.assigns.admin_id, id, score, latency)
+        {:noreply, put_row(socket, %{row | rated: score})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("rate_pick", %{"v" => id}, socket) do
+    ids = socket |> voices() |> Enum.map(& &1.id)
+
+    notice =
+      case Enum.find(socket.assigns.rate, &(&1.id == id)) do
+        nil ->
+          {:error, "Not saved."}
+
+        row ->
+          case CallVoice.pick(id, row.results, socket.assigns.admin_id, ids) do
+            :ok -> {:ok, "Call Risi now speaks with #{row.name} (new calls, within 5 s)."}
+            {:error, :not_installed} -> {:error, "#{row.name} is not installed."}
+            {:error, reason} -> {:error, "#{row.name} can't be picked: #{live_text(reason)}."}
+          end
+      end
+
+    rows =
+      for r <- socket.assigns.rate,
+          do: %{r | now?: r.id == RisiMe.Agent.CallRisi.voice("en")}
+
+    {:noreply, socket |> assign(notice: notice, rate: rows) |> load_choices()}
+  end
+
   def handle_event("refresh", _params, socket) do
     send(self(), :load_installed)
     {:noreply, assign(socket, :installed, :loading)}
@@ -178,6 +239,63 @@ defmodule RisiMeWeb.Admin.VoicesLive do
 
   def handle_async(:speak, {:exit, _}, socket),
     do: {:noreply, assign(socket, test: {:error, :failed}, pending: [])}
+
+  def handle_async(:rate_speak, {:ok, {id, i, result}}, socket) do
+    socket =
+      case Enum.find(socket.assigns.rate, &(&1.id == id)) do
+        nil -> socket
+        row -> put_row(socket, %{row | results: List.replace_at(row.results, i, result)})
+      end
+
+    {:noreply, next_sample(socket)}
+  end
+
+  def handle_async(:rate_speak, {:exit, _}, socket),
+    do: {:noreply, socket |> assign(:rate_pending, []) |> next_sample()}
+
+  defp next_sample(socket) do
+    case socket.assigns.rate_pending do
+      [] ->
+        assign(socket, :rate_state, :done)
+
+      [{id, i} | rest] ->
+        installed =
+          if is_list(socket.assigns.installed),
+            do: socket.assigns.installed,
+            else: RisiMe.Agent.TTS.installed()
+
+        socket
+        |> assign(rate_pending: rest, installed: installed)
+        |> start_async(:rate_speak, fn -> {id, i, CallVoice.speak(id, i, installed)} end)
+    end
+  end
+
+  # One row per voice: `results` holds one slot per sample (nil until it has been spoken).
+  defp rate_rows do
+    n = length(CallVoice.samples())
+    for v <- CallVoice.lineup(), do: Map.merge(v, %{results: List.duplicate(nil, n), rated: nil})
+  end
+
+  defp put_row(socket, row),
+    do:
+      assign(
+        socket,
+        :rate,
+        Enum.map(socket.assigns.rate, &if(&1.id == row.id, do: row, else: &1))
+      )
+
+  @doc false
+  def live_text(:ok), do: "fits live calls"
+  def live_text(:unmeasured), do: "play the samples first"
+  def live_text({:too_slow, ms}), do: "too slow for live calls (measured #{ms} ms)"
+
+  def live_text({:not_streamed, ms}),
+    do:
+      "measured #{ms} ms, but Call Risi streams only from the resident Kokoro service, so this " <>
+        "engine can't speak live calls yet"
+
+  def live_text({:cannot_run, e}), do: "can't run now: #{error_text(e)}"
+  def live_text(other), do: inspect(other)
 
   defp next_voice(socket, installed) do
     case socket.assigns.pending do
@@ -291,6 +409,100 @@ defmodule RisiMeWeb.Admin.VoicesLive do
         class={["flash", elem(@notice, 0) == :error && "bad", elem(@notice, 0) == :ok && "ok"]}
       >
         {elem(@notice, 1)}
+      </div>
+
+      <div class="card" id="rate-call-risi">
+        <div class="row" style="justify-content:space-between">
+          <strong>Rate for Call Risi</strong>
+          <button
+            class="btn primary"
+            phx-click="rate_prepare"
+            disabled={@rate_state == :running}
+          >
+            {cond do
+              @rate_state == :running -> "Preparing… #{length(@rate_pending)} to go"
+              @rate_state == :done -> "Speak the samples again"
+              true -> "Prepare the samples"
+            end}
+          </button>
+        </div>
+        <p class="muted">
+          The same Risi answers in each voice. Listen, rate each voice 👍 or 👎, and tap
+          <em>Use for Call Risi</em>
+          on the one you want: new calls speak with it within 5 seconds (audit-logged). Live calls
+          need the first audio within {CallVoice.budget_ms()} ms (p50); a voice outside that can be
+          rated but not picked.
+        </p>
+        <ol class="muted">
+          <li :for={s <- CallVoice.samples()}>{s}</li>
+        </ol>
+        <table>
+          <tr>
+            <th>Voice</th>
+            <th :for={{_, n} <- Enum.with_index(CallVoice.samples(), 1)}>Sample {n}</th>
+            <th>First audio</th>
+            <th>Rate</th>
+            <th>Call Risi</th>
+          </tr>
+          <tr :for={r <- @rate}>
+            <td>
+              <strong>{r.name}</strong>
+              <span :if={r.now?} class="ok"> · now</span>
+              <div class="muted">{r.why}</div>
+            </td>
+            <td :for={res <- r.results}>
+              <%= case res do %>
+                <% nil -> %>
+                  <span class="muted">{if @rate_state == :running, do: "…", else: "-"}</span>
+                <% {:ok, a} -> %>
+                  <audio controls preload="none" src={a.src}></audio>
+                <% {:error, e} -> %>
+                  <span class="bad">{error_text(e)}</span>
+              <% end %>
+            </td>
+            <td>
+              {seconds(CallVoice.first_ms(r.results))} s
+              <div class={[
+                "muted",
+                match?({:too_slow, _}, CallVoice.live(r.id, r.results)) && "bad"
+              ]}>
+                {live_text(CallVoice.live(r.id, r.results))}
+              </div>
+            </td>
+            <td>
+              <%= cond do %>
+                <% r.rated -> %>
+                  <span class="muted">{if r.rated == "up", do: "👍", else: "👎"} saved</span>
+                <% Enum.any?(r.results, &match?({:ok, _}, &1)) -> %>
+                  <button class="btn" phx-click="rate_vote" phx-value-v={r.id} phx-value-score="up">
+                    👍
+                  </button>
+                  <button
+                    class="btn"
+                    phx-click="rate_vote"
+                    phx-value-v={r.id}
+                    phx-value-score="down"
+                  >
+                    👎
+                  </button>
+                <% true -> %>
+                  <span class="muted">-</span>
+              <% end %>
+            </td>
+            <td>
+              <%= cond do %>
+                <% r.now? -> %>
+                  <strong class="ok">in use</strong>
+                <% CallVoice.live(r.id, r.results) == :ok -> %>
+                  <button class="btn primary" phx-click="rate_pick" phx-value-v={r.id}>
+                    Use for Call Risi
+                  </button>
+                <% true -> %>
+                  <span class="muted">-</span>
+              <% end %>
+            </td>
+          </tr>
+        </table>
       </div>
 
       <div class="card">
@@ -501,6 +713,7 @@ defmodule RisiMeWeb.Admin.VoicesLive do
   def error_text(:no_memory), do: "refused: not enough free memory to load the model now"
   def error_text(:paused), do: "paused: live speech needs the machine now"
   def error_text(:busy), do: "busy: another test is using the voice lab"
+  def error_text(:pinned), do: "skipped: the voice lab is holding Call Risi's voice"
   def error_text(:downloading), do: "downloading tonight"
   def error_text(:review_pending), do: "waiting for its code review"
   def error_text(:not_installed), do: "not installed"

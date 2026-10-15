@@ -78,6 +78,27 @@ defmodule RisiMe.Agent.TTS do
           "(no cloning). No Sinhala or Tamil among its 23 languages."
     },
     %{
+      id: "chatterbox-turbo",
+      name: "Chatterbox-Turbo",
+      languages: ~w(en),
+      licence: "MIT (Resemble AI)",
+      production: :yes,
+      note:
+        "Chatterbox's fast English model (350M GPT-2 backbone, 2-step decoder). PerTh watermark on every " <>
+          "output, as Chatterbox. Its built-in stock voice only (no cloning). Console test only."
+    },
+    %{
+      id: "dia2",
+      name: "Dia2",
+      languages: ~w(en),
+      licence: "Apache-2.0 (Nari Labs); Mimi codec CC-BY-4.0 (Kyutai)",
+      production: :yes,
+      note:
+        "Streaming dialogue model (1B). No named voices: the stock speaker is the model's own voice for a " <>
+          "fixed seed, made at load, no recording of a person. CC-BY needs \"Mimi by Kyutai\" attribution. " <>
+          "Console test only."
+    },
+    %{
       id: "indicf5",
       name: "IndicF5",
       languages: ~w(ta),

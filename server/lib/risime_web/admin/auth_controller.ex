@@ -61,12 +61,15 @@ defmodule RisiMeWeb.Admin.AuthController do
 
       if Admin.admin?(user.id) do
         Admin.audit(user.id, "sign_in", "admin console")
+        back = get_session(conn, "admin_return_to")
+        to = if RisiMeWeb.Admin.RequireAdmin.return_to?(back), do: back, else: "/admin"
 
         conn
         |> configure_session(renew: true)
+        |> delete_session("admin_return_to")
         |> put_session("admin_user_id", user.id)
         |> put_session("admin_at", System.os_time(:second))
-        |> redirect(to: "/admin")
+        |> redirect(to: to)
       else
         Logger.info("admin console: sign-in refused (not an admin)")
         conn |> configure_session(drop: true) |> Session.forbidden()

@@ -246,7 +246,11 @@ if config_env() != :test do
       worker:
         System.get_env("RISI_VOICE_WORKER", Path.expand("~/risime-voice/risi_voice_worker.py")),
       livekit_url: System.get_env("RISI_LIVEKIT_WORKER_URL", "ws://127.0.0.1:7880"),
-      max: String.to_integer(System.get_env("RISI_CALL_RISI_MAX", "2"))
+      max: String.to_integer(System.get_env("RISI_CALL_RISI_MAX", "2")),
+      # Harsha's call-voice pick (2026-10-15): a TTS-lab engine Call Risi may speak with (pinned in the
+      # lab with TTS_LAB_PIN), e.g. RISI_CALL_LIVE_ENGINES=chatterbox-turbo. Default none: Kokoro only.
+      live_engines:
+        String.split(System.get_env("RISI_CALL_LIVE_ENGINES", ""), [",", " "], trim: true)
     ] ++ if(key = System.get_env("TTS_API_KEY"), do: [tts_key: key], else: [])
 
   config :risime, :risi_call_risi_config, call_risi
@@ -258,6 +262,8 @@ if config_env() != :test do
   config :risime, :risi_tts_engines, [
     RisiMe.Agent.TTS.Kokoro,
     RisiMe.Agent.TTS.Chatterbox,
+    RisiMe.Agent.TTS.ChatterboxTurbo,
+    RisiMe.Agent.TTS.Dia2,
     RisiMe.Agent.TTS.IndicF5,
     RisiMe.Agent.TTS.IndicParler,
     RisiMe.Agent.TTS.Orpheus

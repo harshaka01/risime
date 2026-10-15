@@ -20,7 +20,23 @@ defmodule RisiMeWeb.Admin.RequireAdmin do
         conn |> configure_session(drop: true) |> Session.forbidden()
 
       true ->
-        conn |> Phoenix.Controller.redirect(to: "/admin/sign-in") |> halt()
+        conn
+        |> remember_sample_link()
+        |> Phoenix.Controller.redirect(to: "/admin/sign-in")
+        |> halt()
     end
   end
+
+  # A voice-sample link (2026-10-15) opened before signing in comes back after the sign-in.
+  defp remember_sample_link(conn) do
+    if return_to?(conn.request_path),
+      do: put_session(conn, "admin_return_to", conn.request_path),
+      else: conn
+  end
+
+  @doc "True for a path the sign-in may return to (a voice-sample link only)."
+  def return_to?(path) when is_binary(path),
+    do: Regex.match?(~r|\A/admin/voice-samples/[A-Za-z0-9_\-.]{1,600}\z|, path)
+
+  def return_to?(_), do: false
 end

@@ -136,7 +136,8 @@ defmodule RisiMe.Agent.TTS.Lab do
     "paused" => :paused,
     "busy" => :busy,
     "downloading" => :downloading,
-    "review_pending" => :review_pending
+    "review_pending" => :review_pending,
+    "pinned" => :pinned
   }
 
   defp error_of(status, body) do
@@ -222,4 +223,14 @@ end
 defmodule RisiMe.Agent.TTS.Orpheus do
   @moduledoc "Orpheus 3B (Canopy Labs; Apache-2.0 + Llama 3.2 licence) through `RisiMe.Agent.TTS.Lab`."
   use RisiMe.Agent.TTS.Lab, id: "orpheus", name: "Orpheus"
+end
+
+defmodule RisiMe.Agent.TTS.ChatterboxTurbo do
+  @moduledoc "Chatterbox-Turbo (Resemble AI, MIT; PerTh watermark) through `RisiMe.Agent.TTS.Lab`."
+  use RisiMe.Agent.TTS.Lab, id: "chatterbox-turbo", name: "Chatterbox-Turbo"
+end
+
+defmodule RisiMe.Agent.TTS.Dia2 do
+  @moduledoc "Dia2 1B (Nari Labs, Apache-2.0; Mimi codec CC-BY-4.0) through `RisiMe.Agent.TTS.Lab`."
+  use RisiMe.Agent.TTS.Lab, id: "dia2", name: "Dia2"
 end
