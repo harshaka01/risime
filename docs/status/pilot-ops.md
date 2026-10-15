@@ -47,3 +47,10 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
   no flag, env or restart change. Not in `RISI_DEV_USERS` (Flags reads it from the application env at boot, so the
   canary switches CALENDAR_V2 / CALL_RISI / LIVE_FAST would not apply to this account without a change).
 - Remove: `scripts/risi-rpc 'RisiMe.Repo.delete_all(Ecto.Query.where(RisiMe.Accounts.AllowlistEntry, phone: "+94770000995"))'`.
+
+## 2026-10-15 ~15:50 SLT: root inbox (risi role)
+- `.env`: added `RISI_ROOT_NOTIFY_USER` = the existing `RISI_DEV_USERS` entry (Harsha; value not printed). Read at
+  runtime by `RisiMe.Agent.RootInbox`; the service picks it up at its next start (the fast-lane deploy of this change).
+- `scripts/risi-notify` posts root's question in that user's Risi chat; `scripts/risi-inbox [--install]` fetches the
+  replies into `docs/status/inbox.md` (timer `risime-inbox.timer`, not installed yet: root installs it).
+- Off: remove the line from `.env` and restart: `risi-notify` refuses and nothing is intercepted.
