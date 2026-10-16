@@ -1,0 +1,29 @@
+# Risi Marketplace registry: systemd USER unit. Written for review; NOT installed or enabled.
+# To install later (no sudo needed, user unit):
+#   cp marketplace/rel/risi-registry.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now risi-registry
+# The release is built with: cd marketplace && MIX_ENV=prod mix release, then copied to ~/risi-registry-run/current.
+[Unit]
+Description=Risi Marketplace registry (risi_registry), loopback only
+After=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/risi-registry-run/current
+# Secrets (REGISTRY_DB_PASSWORD, SECRET_KEY_BASE, OIDC_*, ALLOW_LIST_SEED) live only in this file, mode 600.
+EnvironmentFile=%h/risi-registry-run/env
+Environment=MIX_ENV=prod
+Environment=PORT=4600
+# Golden rule 6: no Erlang distribution, and epmd (if anything starts it) on loopback only.
+Environment=RELEASE_DISTRIBUTION=none
+Environment=ERL_EPMD_ADDRESS=127.0.0.1
+ExecStart=%h/risi-registry-run/current/bin/risi_registry start
+ExecStop=%h/risi-registry-run/current/bin/risi_registry stop
+Restart=on-failure
+RestartSec=5
+MemoryMax=1G
+StandardOutput=append:%h/risi-registry-logs/registry.log
+StandardError=append:%h/risi-registry-logs/registry.log
+
+[Install]
+WantedBy=default.target
