@@ -241,6 +241,13 @@ official_run() {  # <tag> <items 0|1> <clip> <reps> <words regex> <label>
   no_leftovers "$label"
 }
 
+# Architect 2026-10-16 14:05: the Official action-items card is one line ("Risi · 1 action item ›") until tapped.
+expand_items() {
+  local t; dump
+  t="$(grep -oE 'text="Risi · ([0-9]+ action items?|No open action items|Couldn.t hear the action items clearly) ›"' "$WORK/ui-$DEV.xml" | head -1 | sed 's/^text="//; s/"$//')"
+  [ -n "$t" ] && { tap "$t" >/dev/null || true; sleep 1; }
+  return 0
+}
 # 4a. One action item: the action_items card with the item, on both phones.
 official_run cs1 1 en 4 'office|quote|friday|meet|revised' "official (1 item)"
 await_card "official (1 item)" 'cs1i|cs1s|cs1k|cs1d|cs1p|cs1r'
@@ -265,7 +272,7 @@ if [ "${CS_SECTION_S:-20}" != 0 ]; then
   pass "official (1 item): long-call path: $na section extractions and $nr reduce for one card (sections of ${CS_SECTION_S:-20} s)"
 fi
 for DEV in A B; do
-  ok=""; for _ in 1 2 3 4 5 6; do dump; grep -qF 'Send the revised quote cs1i' "$WORK/ui-$DEV.xml" && { ok=1; break; }; A shell input swipe 540 900 540 1300 300; sleep 1; done
+  ok=""; for _ in 1 2 3 4 5 6; do expand_items; dump; grep -qF 'Send the revised quote cs1i' "$WORK/ui-$DEV.xml" && { ok=1; break; }; A shell input swipe 540 900 540 1300 300; sleep 1; done
   [ -n "$ok" ] || fail "official (1 item): $DEV's card doesn't show the action item"
   csshot "1-item-$DEV"
 done
