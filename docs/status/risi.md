@@ -33,6 +33,12 @@ Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `script
 - **Gate:** `test/risime/agent/call_risi/golden/` = calls 1, 2, 3, 5 and 6 (this one), turn by turn; recorded
   decisions in plain mix test, `mix test --only llm_live test/risime/agent/call_risi/golden` live (GOLDEN_RECORD=1
   re-records). Live risi-l1: 5/5 calls, 0 turn failures. Call 6 is in eval/sets/call-risi (brain v3).
+- **Live:** v0.3.0-nightly.11-srv1 (0955184c, d52cf42e), srv2 (9c721be5: "you"/"Risi" is no recipient).
+  Device test (pilot-call-test calls 6 5 3 4, redroid, synthetic voice): no calendar misroute, no invented text,
+  pause-split merged, cancel honest; voice-yes adds calendar cards (call 3/4). **Open:** Whisper drops the
+  synthetic voice's contact names ("send a message to Ruwan" → "send a message too"), and the test account has
+  no friends, so the live card path (Tap Send) is covered only by the golden/unit tests. Every v3 turn says
+  "One moment…" (decisions take 1.2–2 s on risi-l1).
 - **Agent design:** owner = the Voice agent (call brain); learns from the learning-log decision rows and every
   bad call as a golden file (L1); measured by the golden calls (live pass rate) + live acceptance; AOA because
   understanding a spoken dialogue is reasoning, not exactness (dates, cards and sends stay deterministic tools).
