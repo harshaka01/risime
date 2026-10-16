@@ -27,7 +27,9 @@ Sent to the Risi chat (topic `keycloak-redirect`).
 **Question:** keep Kokoro as the call voice, or switch to 2 (Chatterbox-Turbo)? His 05:00 plan for a switch: cached
 greeting and fillers, streamed answers, Kokoro as the fallback.
 **Options:** keep Kokoro / "Root: switch to 2".
-**Default:** Kokoro (his pick "A, for now"); the switch is built ready after the hearing hotfix.
+**Default:** Kokoro (his pick "A, for now"). Note (16 Oct 07:10 SLT): calls can only use a lab voice once the
+gap-free worker ships, because that worker has the lab route and the Kokoro fallback, and it waits on Q-004. The pin
+(never stopped by the daytime rule) is ready.
 Chatterbox samples resent to the Risi chat.
 
 ### Q-003 · 2026-10-16 05:2x SLT · [harsha] · blocking: no
@@ -35,7 +37,7 @@ Chatterbox samples resent to the Risi chat.
 phone very likely has no on-device recogniser. Please make one Call Risi call after you install it.
 **Options:** Works / Problems.
 **Default:** the server's speech-to-text (now with the hallucination filters) is used wherever the phone can't
-recognise on the device. It goes to the Risi chat with the "try now".
+recognise on the device. Sent 07:12 SLT with the nightly.11 "try now" (topic `hotfix11-try`).
 
 ### Q-004 · 2026-10-16 05:2x SLT · [harsha] · blocking: no
 **Question:** test barge-in (interrupting Risi) on your phone, so the gap-free voice worker can ship.
@@ -51,6 +53,13 @@ risicloud-infra. Keycloak runs on another host (risicloud.ai = 203.189.69.77). W
 RisiCloud session?
 **Options:** a) send it to the RisiCloud session; b) give root the repo URL (and SSH access) and root makes the change.
 **Default:** a). Root changes nothing in RisiCloud.
+
+### Q-006 · 2026-10-16 07:10 SLT · [harsha] · blocking: no
+**Question:** "Voices: try now". Does Prepare the samples work on the Voices page?
+**Options:** Works / Problems.
+**Default:** none needed. Root tested it on the live node with the page's own code (not through the browser, which
+needs his Keycloak sign-in).
+Sent to the Risi chat (topic `voices-try`).
 
 ## Answered
 - ANSWERED: Kokoro "for now" (by Harsha, 2026-10-16 04:49 SLT). Question: voice pick 1–4 (topic `voice-pick`).

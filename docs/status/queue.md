@@ -115,3 +115,7 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
     `&1.due != nil and …`.
   - Empty "Fri 16 Oct:" card during a call: in `turn.ex` `finish`, skip `Audience.deliver` while a call runs and the
     body is only the head line and the footer.
+- **Release tooling (root):** `HOTFIX=` releases must never switch the pilot from a newer main `-srvN` build. On
+  16 Oct this was blocked by hand, with an uncommitted guard in `~/risime-hotfix-wt/scripts/run-server`. Put the
+  guard in main's run-server. The hotfix → main merge also conflicts every time: merge with `-s ours` plus
+  VERSION and the notes.
