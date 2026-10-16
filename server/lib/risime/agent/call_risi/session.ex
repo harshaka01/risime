@@ -8,7 +8,10 @@ defmodule RisiMe.Agent.CallRisi.Session do
   per turn (agent `voice_call`: timings only, never text or audio).
 
   Ends on: the caller leaving, Risi not joining in 10 s or the caller not arriving in 45 s, 30 min,
-  the switch turning off for the caller (checked every 10 s), or the worker exiting.
+  the switch turning off for the caller (checked every 10 s), or the worker exiting. P0 calls
+  (Harsha 2026-10-16): also when the caller's identity has been missing from the LiveKit room for
+  30 s (checked every 10 s through `ListParticipants`), so a phone that lost the call (a cellular call,
+  a killed app) never keeps a session, and a `risi_busy` slot, running. The transcript says `hangup`.
   """
   use GenServer, restart: :temporary
 
@@ -59,6 +62,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
         )
 
         Process.send_after(self(), :flag_check, @flag_every_ms)
+        Process.send_after(self(), :presence_check, presence_every_ms())
 
         {:ok,
          %{
@@ -117,6 +121,8 @@ defmodule RisiMe.Agent.CallRisi.Session do
            v3?: Map.get_lazy(args, :v3?, fn -> CallRisi.BrainV3.on_for?(args.user_id) end),
            dialogue: CallRisi.Dialogue.new(),
            risi_quiet_at: nil,
+           # P0 calls (2026-10-16): when the caller was first seen missing from the room (monotonic ms).
+           caller_gone_at: nil,
            ended?: false
          }}
 
@@ -147,6 +153,39 @@ defmodule RisiMe.Agent.CallRisi.Session do
   def handle_info(:join_timeout, %{joined?: false} = st), do: finish(st, :timeout)
   def handle_info(:caller_timeout, %{caller?: false} = st), do: finish(st, :timeout)
   def handle_info(:max_length, st), do: finish(st, :max_length)
+
+  # P0 calls (2026-10-16): the caller's presence in the room, off the session's process (a slow
+  # LiveKit never holds a turn). Only a definite "absent" counts; an unknown answer changes nothing.
+  def handle_info(:presence_check, %{ended?: false} = st) do
+    Process.send_after(self(), :presence_check, presence_every_ms())
+
+    if st.caller? do
+      me = self()
+      args = st.args
+      Task.start(fn -> send(me, {:presence, presence(args)}) end)
+    end
+
+    {:noreply, st}
+  end
+
+  def handle_info({:presence, :present}, st), do: {:noreply, %{st | caller_gone_at: nil}}
+
+  def handle_info({:presence, :absent}, %{ended?: false} = st) do
+    now = System.monotonic_time(:millisecond)
+    since = st.caller_gone_at || now
+
+    if now - since >= gone_ms() do
+      Logger.info(
+        "call_risi: caller not in the room for #{now - since} ms, ending call=#{st.args.call_id}"
+      )
+
+      finish(st, :hangup)
+    else
+      {:noreply, %{st | caller_gone_at: since}}
+    end
+  end
+
+  def handle_info({:presence, _unknown}, st), do: {:noreply, st}
 
   def handle_info(:flag_check, st) do
     if CallRisi.enabled_for?(st.args.user_id) do
@@ -1104,6 +1143,29 @@ defmodule RisiMe.Agent.CallRisi.Session do
     CallRisi.post_transcript(st.args, Enum.reverse(st.lines), st.started_at, reason)
     {:stop, :normal, %{st | ended?: true}}
   end
+
+  @doc false
+  # P0 calls (2026-10-16): `:present`, `:absent` (the room lists no identity of the caller) or `:unknown`.
+  def presence(args) do
+    case Application.get_env(:risime, :risi_call_presence) do
+      f when is_function(f, 1) ->
+        f.(args)
+
+      _ ->
+        with {:ok, cfg} <- RisiMe.Calls.LiveKit.config(),
+             {:ok, ps} <- RisiMe.Calls.LiveKit.api().list_participants(cfg, args.room) do
+          prefix = args.user_id <> "/"
+          if Enum.any?(ps, &String.starts_with?(&1.identity, prefix)), do: :present, else: :absent
+        else
+          _ -> :unknown
+        end
+    end
+  rescue
+    _ -> :unknown
+  end
+
+  defp presence_every_ms, do: Application.get_env(:risime, :risi_call_presence_ms, 10_000)
+  defp gone_ms, do: Application.get_env(:risime, :risi_call_gone_ms, 30_000)
 
   defp left_reason("port_closed"), do: :error
   defp left_reason("disconnected"), do: :hangup
