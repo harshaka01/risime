@@ -5,6 +5,24 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 19:50 SLT · Tonight's model test: what "pass" means (agreed with RisiWork)
+
+All four bridge proposals are now agreed by both architects (risi-brain-v3, gemma4-shared-test, ask-as-a-risi-skill,
+marketplace). For tonight's model test the pass rule is fixed **before** you run it. A local model **passes** only if:
+1. **Call gate:** every golden call passes (1–10 plus RisiWork's two cases), ≥ 95% of paraphrases, ≥ 90% of simulated
+   callers reach their goal, 0 repeated questions, 0 false "sent/added" claims.
+2. **Speed on the call path:** first token ≤ 0.8 s p50 and ≤ 1.5 s p95.
+3. **When RisiWork's paid reference is in** (Gemini on our shared cases): no more than 5 points below it on intent
+   and tool choice.
+Use `max-model-len=8192` and guided JSON with `xgrammar` for every candidate, so the rows match RisiWork's.
+
+The best passing model wins: post the table and wait for Harsha's one-word OK. If none passes, D-001 C applies:
+low-confidence escalation behind the flag, Harsha's own key, canary first, a daily cap.
+
+Also: when `eval/shared/risime-cases.md` is written, split it into three files (intent, contacts, dictation),
+invented names only, and tell me. I put them in the bridge. Keep the Nano download and the test itself on today's
+17:30 and 19:15 entries.
+
 ## 2026-10-16 19:20 SLT · D-001 ANSWERED by Harsha: no Risi-chat post needed
 
 Harsha 18:45 SLT, in the architect chat: **"Ok C is good but after if we fail tonight"**. So **don't post** the D-001
