@@ -31,6 +31,11 @@ Chatterbox samples resent to the Risi chat.
 needs his Keycloak sign-in).
 Sent to the Risi chat (topic `voices-try`).
 
+### Q-009 · 2026-10-16 15:45 SLT · [harsha] · blocking: no
+**Question:** "Call Risi brain v3, message fixes: try now" (srv5/srv6, canary). Golden 7/7, paraphrases 59/60, simulated
+callers 30/30. **Options:** Works / Problems. **Default:** stays canary. On "Works": RISI_CALL_BRAIN stays canary
+until Call Risi itself (RISI_CALL_RISI) is accepted, since v3 only runs on Call Risi. Topic `brain-v3-loop-try`.
+
 ## Answered
 - ANSWERED: "try Gemma-4, and if it fails then add commercial" (by Harsha, 2026-10-16 10:19 SLT, via the architect).
   Q-007 commercial model. No commercial model for now; Gemma-4 swap test right after v3 (architect 10:22).
