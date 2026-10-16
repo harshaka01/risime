@@ -119,3 +119,5 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
   16 Oct this was blocked by hand, with an uncommitted guard in `~/risime-hotfix-wt/scripts/run-server`. Put the
   guard in main's run-server. The hotfix → main merge also conflicts every time: merge with `-s ours` plus
   VERSION and the notes.
+
+- 2026-10-16 10:15 SLT (root): **next APK** = phone STT fixes on main (1c8c0111: mode packet no longer dropped before publishMic, non-blocking pipe, phone end-of-speech, `off` instead of silence, conf 0 → null; 2081 tests green) + the translate picker. Released after Call Risi brain v3 ships (the only server work until then, architect 09:40), so Harsha can test both in one call. Then accept or reject contract/proposals/2026-10-16-stt-fallback.md (`alive` → fall back on the first clear miss). If his next call still falls back: the `risi.stt:` lines in server.log (worker counters, deployed 10:10) and `adb logcat -s RisiMe` from his phone.
