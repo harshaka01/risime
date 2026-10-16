@@ -39,6 +39,12 @@ call turn?
 **Default:** risi-l1. The model is a setting, so a stronger one drops in without new code. v3 ships on risi-l1 if
 its real-call tests pass.
 
+### Q-008 · 2026-10-16 11:30 SLT · [harsha] · blocking: no
+**Question:** "Call Risi brain v3: try now" (srv3; RISI_CALL_BRAIN canary = Harsha + the test account). The 3 things to try are in the message.
+**Options:** Works / Problems.
+**Default:** v3 stays canary; the old brain answers everyone else and any turn where the model fails. Sent to the Risi
+chat (topic `brain-v3-try`).
+
 ## Answered
 - ANSWERED: Problems (by Harsha, 2026-10-16 09:25 SLT). Question Q-003 / `hotfix11-try` (on-phone English speech). His
   09:25 SLT call: the phone sent no finished text, so the server took over after 25 s ("no_final"); the message
