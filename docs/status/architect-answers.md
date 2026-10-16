@@ -5,6 +5,48 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 22:05 SLT · HARSHA: build the marketplace now, separable from RisiMe
+
+Harsha 21:53 SLT: **"if root has capacity build the marketplace now but in a different folder structure where we can
+take it out from risime project in the future and get a different root and architect to handle it"**.
+
+This replaces item 1 of the 22:00 entry (no more waiting for my question). Do it if capacity allows, **without slowing
+tonight's model test or the brain work**. If there's no capacity, say so in needs-you and it waits.
+
+**Separable by design. These rules make a later `git subtree split --prefix=marketplace` into its own repo trivial:**
+1. **Everything lives under one top-level folder `marketplace/`**: code, tests, docs, decisions, status, README and
+   its own CLAUDE.md. Nothing for it goes in `server/`, `android/`, `contract/`, `docs/` or `infra/` (one exception,
+   item 6).
+2. **Its own project:** a separate Elixir/Phoenix app (`marketplace/`, OTP app `:risi_registry`, module
+   `RisiRegistry`) with its own `mix.exs`, deps, config, and its own test gate
+   (`mix format --check-formatted && mix compile --warnings-as-errors && mix test`). It **never imports** from
+   `server/`, and RisiMe never imports from it. They meet only over HTTP, as the bridge contract says.
+3. **Its own data:** its own Postgres database (`risi_registry_dev` / `_test`), with no tables in RisiMe's databases.
+4. **Its own docs inside the folder:** `marketplace/docs/decisions/` (start at 001: "separable registry"),
+   `marketplace/STATUS.md`, and `marketplace/CONTRACT.md`, which points to the bridge's
+   `contracts/agent-connector.md` and `contracts/ask-skill.md` as the source of truth.
+5. **Its own session role:** a new role `marketplace` that owns only `marketplace/`, with its own lock and handoff like the other roles.
+   Use RisiMe's `web` session for it if that exists, otherwise a new session. It must be able to move to a separate
+   root and architect later without any change to RisiMe.
+6. **One exception, root-owned:** add the `marketplace` role row to CLAUDE.md's role table, and record decision 095
+   ("marketplace is a separable top-level project") in `docs/decisions/`. Nothing else outside `marketplace/`.
+7. **Runtime:** loopback only (127.0.0.1), its own port and systemd user unit, multi-arch images, epmd on 127.0.0.1
+   (golden rules 6–7). **No public route yet.** A public address (for example registry.risicloud.ai) needs Harsha's
+   DNS and a Caddy decision later.
+
+**Phase 0 scope**, per the bridge drafts (`agent-connector.md` 0.1 plus my review changes):
+- The registration record and status (proposed/active/suspended/delisted).
+- Owner keys with rotation, card fetch, RFC 8785 canonical form, JWS signature and `card_hash` check (the hash excludes the signature).
+- Status checked on every call and the card cached for 5 min.
+- Delisting with an audit row, plus an audit line with no content.
+- The sandbox runner skeleton with the injection, oversize, malformed and slow cases, plus "tries to make Risi call another tool".
+- A read-only discover/get/status API.
+- Seed it with RisiWork Ask as the first **Official** entry, as data only.
+
+**Not in phase 0:** Risi calling agents (that waits for the brain gate), the web page and the Verified tier (phase 1),
+paid agents, and Keycloak token exchange (Harsha must approve it).
+Post "Marketplace phase 0: started" or "no capacity" in needs-you. I'll tell RisiWork in the bridge.
+
 ## 2026-10-16 22:00 SLT · Agent connector + Ask contracts (bridge): one question for you, one rule
 
 RisiWork drafted `contracts/agent-connector.md` (the marketplace registry) and `contracts/ask-skill.md` in the bridge.
