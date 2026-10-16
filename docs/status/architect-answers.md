@@ -5,6 +5,65 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 15:35 SLT · Harsha's 15:2x call (4:57): better, but 6 gaps, plus his product decisions
+
+Harsha: "getting better". Make this call golden #9. His decisions (product owner) come first.
+
+**HARSHA'S DECISIONS:**
+A. **Risi sends Official (work) messages directly when he asks on a call.** No tap needed. Flow: Risi
+   reads it back ("I'll send Shenika: '…'. Send it?"), Harsha says yes, Risi sends.
+   - Official chats only. Private chats stay out of Risi's reach.
+   - The message is labelled "Sent by Risi for Harsha" (visible agents).
+   - Risi confirms "Sent." only after the server ack (claim guard).
+   - An "Undo" stays in his Risi chat for 2 min (delete-for-everyone).
+   - Messages about money, HR, legal matters or accusations still need a tap.
+   - This changes §41.9 ("a voice yes never sends to other people"). Root edits PROTOCOL.md (contract
+     owner) with a short decision note (Harsha 15:25).
+   - Start it as a per-user setting, default on for Harsha only (Settings → Risi: "Send work messages
+     when I confirm by voice").
+B. **Risi can read all his Official messages, his calendars, and his work chats.** Calls get these tools:
+   - `read_messages(person?, chat?, since?)`: "Did Shanika reply?" means the latest Official
+     messages from Shanika after Risi's message, summarised in one or two lines.
+   - `promises_by(person)`: promises other people made to him ("any promises by Shirazi or
+     Shanika?"), from the ledger by owner.
+   - Private chats are never read; if asked, Risi says it can't see Private.
+C. **Voice choice in the app:** Settings → About → Developer → "Risi call voice", listing every installed
+   voice with a ▶ sample and a "first audio" time. It is the same setting as the admin Voices page (per
+   user, live within 5 s).
+   - Harsha finds Kokoro robotic. Make **Chatterbox-Turbo** selectable now, pinned (kept loaded) while
+     anyone has it selected, falling back to Kokoro if it isn't ready.
+   - Play the fillers and greeting from pre-rendered audio for each voice.
+
+**Bugs in this call:**
+1. "Can you just send it by yourself?" → re-drafted the same card. A question about the open card is
+   answered, not re-drafted. With A it simply sends after the read-back.
+2. "Have you followed up with Ozzy about the computer delivery?" → "I couldn't read your calendar on
+   this phone… connect it in Settings → Risi skills". Wrong on two counts. It was a promises/messages
+   question, and **the Risi Calendar is always readable**. The phone calendar is an optional extra:
+   - Never tell him to connect anything when the Risi Calendar answered.
+   - Never claim it couldn't read "your calendar" when only the phone one failed.
+   - Never repeat the same failure line.
+3. Promises versus calendar are mixed up. "What did I promise today?" and "promises next week" answered
+   with calendar events, under a calendar filler. The ledger and the calendar are separate tools:
+   - A promises question reads the ledger (his own and others' to him).
+   - A calendar question reads the calendars.
+   - Name what you looked at ("No promises due today. Your calendar has…").
+4. "Did Shanika reply to me?" → drafted a message "Did she reply to me?". It's a read question (B). A
+   message is only drafted on a clear send request.
+5. "Whether you can tell me if somebody sent me a message" → it recited the capabilities list. It
+   should answer "Yes, ask me 'any new messages?' or 'did X reply?'", and offer to check now.
+6. **Speed:** Harsha wants faster answers. Measure p50/p95 from end of speech to first audio per turn type.
+   Then:
+   - stream TTS sentence by sentence;
+   - start the tool call and the filler together;
+   - cache the call's context pack;
+   - run the Gemma-4-26B-A4B swap test (still pending).
+   Post the numbers.
+
+Add golden #9 plus paraphrases for A (direct send), B (did X reply, promises by X), 2 and 3. Gate as
+before. Ship the server parts on the fast lane, and the Developer voice setting with the APK that's
+already due.
+
 ## 2026-10-16 15:20 SLT · Ship now: the APK, and the Gemma-4 test
 
 The v3 loop fixes are live on the server (golden 7/7, paraphrases 59/60, simulated callers 30/30). Good. Two
