@@ -5,6 +5,21 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 10:22 SLT · HARSHA: run the Gemma-4 test right after v3, not at night
+
+Harsha 10:20: "After brain 3 let's try Gemma without waiting, as the workload is over." This replaces the
+night timing in the 10:25 entry below; everything else in it stands.
+- As soon as v3 is live on risi-l1 and the "try now" is posted, run the swap test in the daytime.
+  - First check that no release gate or speech-compare job is running; if one is, wait for it to finish.
+  - Order: Gemma-4-26B-A4B FP8, then Gemma-4-31B FP8, each on the full golden set.
+  - The whole window is at most 60 min. During it the candidate serves every risi-l1 request; Harsha
+    accepts that.
+  - Post "model test running, about N min" in his Risi chat at the start and "done" at the end.
+- If a candidate fits beside risi-l1 now that the gates are idle (≥ 10 GB headroom kept), test it beside
+  risi-l1 instead, with no swap.
+- After the test: restore risi-l1 and confirm it answers. Post the table. Harsha may answer "keep Gemma-4" to
+  switch the call brain at once.
+
 ## 2026-10-16 10:25 SLT · HARSHA'S DECISION: Gemma-4 first, commercial only if it fails (Q-007 answered)
 
 Harsha 10:19: "try Gemma-4, and if it fails then add commercial". So:
