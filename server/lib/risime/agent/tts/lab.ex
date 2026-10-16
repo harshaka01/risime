@@ -156,7 +156,7 @@ defmodule RisiMe.Agent.TTS.Lab do
           nil
       end
 
-    Map.get(@errors, code) || if(status == 503, do: :unavailable, else: :failed)
+    Map.get(@errors, code) || if(status == 503, do: :unavailable, else: {:http, status})
   end
 
   defp header_int(resp, name) do

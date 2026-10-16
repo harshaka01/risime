@@ -67,8 +67,9 @@ defmodule RisiMe.Agent.TTS.Kokoro do
           {:ok,
            %{audio: wav(pcm), content_type: "audio/wav", first_audio_ms: first, total_ms: total}}
 
-        {:ok, _} ->
-          {:error, :failed}
+        # The status, not a bare :failed (16 Oct: the admin page showed only "failed").
+        {:ok, %{status: status}} ->
+          {:error, {:http, status}}
 
         {:error, %{reason: :timeout}} ->
           {:error, :timeout}

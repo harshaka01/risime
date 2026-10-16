@@ -249,7 +249,7 @@ defmodule RisiMe.Agent.TTS do
         try do
           e.module.synthesize(text, voice_id, Keyword.delete(opts, :installed))
         rescue
-          _ -> {:error, :failed}
+          e -> {:error, {:exception, e |> Exception.message() |> String.slice(0, 200)}}
         catch
           :exit, _ -> {:error, :timeout}
         end

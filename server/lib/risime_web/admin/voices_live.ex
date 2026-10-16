@@ -719,7 +719,11 @@ defmodule RisiMeWeb.Admin.VoicesLive do
   def error_text(:not_installed), do: "not installed"
   def error_text(:timeout), do: "timed out"
   def error_text(:too_large), do: "the audio is too long for the page"
-  def error_text(e), do: to_string(e)
+  def error_text(:unavailable), do: "the voice service isn't reachable"
+  def error_text({:http, status}), do: "the voice service answered HTTP #{status}"
+  def error_text({:exception, msg}), do: "error: #{msg}"
+  def error_text(e) when is_atom(e), do: to_string(e)
+  def error_text(e), do: inspect(e)
 
   defp options(voices, lang, choice) do
     vs = TTS.candidates(voices, lang)
