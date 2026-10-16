@@ -8,7 +8,7 @@
       "to": "Nimali",
       "tool": "message_draft"
     },
-    "ms": 1185
+    "ms": 1216
   },
   "cancel that.": {
     "decision": {
@@ -19,21 +19,21 @@
       "to": "",
       "tool": "cancel_open"
     },
-    "ms": 1219
+    "ms": 1243
   },
   "dictation| >> good morning, and i'm just testing whether you can send a message on behalf of me.": {
     "decision": {
       "text": "Good morning, and I'm just testing whether you can send a message on behalf of me.",
       "tool": "more"
     },
-    "ms": 910
+    "ms": 948
   },
   "dictation| >> no, just. cancel that and then start a new message i'll tell you the message and listen to my message first just say, good morning, nimali. how are you doing? and this is written by risi and then published by me.": {
     "decision": {
-      "text": "good morning, Nimali. How are you doing? And this is written by Risi and then published by me.",
+      "text": "Good morning, Nimali. How are you doing? And this is written by Risi and then published by me.",
       "tool": "restart"
     },
-    "ms": 1023
+    "ms": 1064
   },
   "how are you doing?": {
     "decision": {
@@ -45,19 +45,19 @@
       "to": "",
       "tool": "none"
     },
-    "ms": 1787
+    "ms": 1833
   },
   "no, no, no... i want to send a message to nimali. so you should ask, like, what is the message should be? and then i'll tell you...": {
     "decision": {
       "action": "tool",
-      "cancel_open": true,
       "confidence": 1,
-      "tab": "",
+      "request": "send a message to Nimali",
+      "tab": "private",
       "text": "",
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 1817
+    "ms": 1871
   },
   "rishi, what else can you do?": {
     "decision": {
@@ -68,20 +68,18 @@
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1422
+    "ms": 1293
   },
   "we see i'm asking to send a message to nimali. but the content should be, hey, how are you doing? this is a message just to make sure. receive and send a message to you.": {
     "decision": {
       "action": "tool",
-      "cancel_open": true,
-      "confidence": 0.9,
-      "request": "send a message to Nimali",
+      "confidence": 1,
       "tab": "private",
       "text": "hey, how are you doing? This is a message just to make sure. receive and send a message to you.",
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 2062
+    "ms": 1794
   },
   "what time do i have the next meeting?": {
     "decision": {
@@ -93,7 +91,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1760
+    "ms": 1733
   },
   "yes, send it.": {
     "decision": {
@@ -104,6 +102,6 @@
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1477
+    "ms": 1517
   }
 }

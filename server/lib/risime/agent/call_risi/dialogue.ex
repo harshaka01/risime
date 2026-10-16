@@ -195,6 +195,39 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
 
   def strip_lead(_), do: ""
 
+  @doc """
+  The message words of a one-shot request when the model left them out: what follows "saying",
+  "that says", "and say", "and tell her (that)", or the recipient's name and a comma or colon
+  ("Message Ruwan, call me."). nil when there are none.
+  """
+  def said_text(text, name) when is_binary(text) do
+    first =
+      name |> to_string() |> String.split() |> List.first() |> to_string() |> Regex.escape()
+
+    pats =
+      [
+        ~r/\b(?:saying|that says|to say|and say|and tell (?:her|him|them)(?: that)?)[,:]?\s+(.{2,})$/iu
+      ] ++
+        if(first != "",
+          do: [
+            Regex.compile!(
+              "^\\W*(?:message|text|tell|send)\\s+(?:to\\s+)?#{first}\\w*\\s*[,:]\\s+(.{2,})$",
+              "iu"
+            )
+          ],
+          else: []
+        )
+
+    Enum.find_value(pats, fn re ->
+      case Regex.run(re, String.trim(text)) do
+        [_, t] -> t |> String.trim() |> strip_lead() |> String.trim(" ")
+        _ -> nil
+      end
+    end)
+  end
+
+  def said_text(_, _), do: nil
+
   ## The pending task (architect 11:45: a task, not one slot)
 
   @doc "A new message task."

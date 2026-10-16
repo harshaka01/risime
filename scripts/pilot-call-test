@@ -15,6 +15,8 @@
 #   (call 5 = Harsha's 16 Oct 04:43 SLT call: his lines plus far voices, noise and silence that made Whisper invent words)
 #   (call 6 = Harsha's 16 Oct 03:55Z call 75ec8683: the message dialogue, brain v3: ask, dictate, cancel+redictate,
 #    a pause-split question, the answer to Risi's own question)
+#   (call 8 = Harsha's 16 Oct 10:20Z call 22e016e0: a long message dictated in pieces with pauses (no turn per
+#    pause, no "I'm listening" twice), its end signal, the one-line read-back; then "did David reply?")
 #
 # Writes <setup dir>/calls/: call1.json, call2.json (per-turn timings), the risi_call_transcript card from the phone
 # (callN-card.png/.xml/.txt) and the pilot's log lines of the call. Nothing secret is printed (OTP, token).
@@ -89,9 +91,17 @@ say c7b "Send it to David, please."
 say c7c "Hello?"
 say c7d "Tell her that I called her a couple of times and then she did not answer. And I'll call her back or call me back."
 say c7e "I just said it to you. Just tell her that I called her a couple of times, but she did not answer, and call me back."
+# Call 8 (Harsha 16 Oct 10:20Z, call 22e016e0; dictation mode): the dictated pieces are ONE clip with 1.5 s
+# pauses (the worker splits them into utterances, as his pauses did), then the end signal on its own.
+say c8a "I want to send David a long message. Take this down."
+say c8b1 "Hi David, I'm testing a long message from the call."
+say c8b2 "It comes in a few pieces, with pauses between them."
+say c8b3 "Please call me back after six."
+say c8c "Okay, that's it."
+say c8d "Did David reply to me?"
 say b1 "you know it will be fun, yeah I did not know I was going to promote, and I tend to come out, so do I"
 say b2 "it's fascinating, isn't it, bye bye, ready, you're on"
-for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c c5a c5b c5c c5f c6a c6b c6c c6d c6e c6f1 c6f2 c6g c6h c6i c7a c7b c7c c7d c7e; do
+for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c c5a c5b c5c c5f c6a c6b c6c c6d c6e c6f1 c6f2 c6g c6h c6i c7a c7b c7c c7d c7e c8a c8b1 c8b2 c8b3 c8c c8d; do
   "$PY" -I -c 'import sys, wave, numpy as np
 p = sys.argv[1]
 w = wave.open(p, "rb"); prm = w.getparams(); x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16); w.close()
@@ -122,6 +132,15 @@ o = wave.open(out, "wb"); o.setparams(p)
 o.writeframes(ws[0].readframes(ws[0].getnframes()))
 o.writeframes(b"\0" * (p.sampwidth * p.nchannels * (p.framerate - p.framerate // 10)))
 o.writeframes(ws[1].readframes(ws[1].getnframes())); o.close()' "$WORK/c6f.wav" "$WORK/c6f1.wav" "$WORK/c6f2.wav" || die "c6f clip"
+# Call 8's dictation: c8b1, 1.5 s, c8b2, 1.5 s, c8b3 (one clip).
+"$PY" -I -c 'import sys, wave
+out, *parts = sys.argv[1:]
+ws = [wave.open(p, "rb") for p in parts]; p = ws[0].getparams()
+o = wave.open(out, "wb"); o.setparams(p)
+for i, w in enumerate(ws):
+    if i: o.writeframes(b"\0" * (p.sampwidth * p.nchannels * (p.framerate * 3 // 2)))
+    o.writeframes(w.readframes(w.getnframes()))
+o.close()' "$WORK/c8b.wav" "$WORK/c8b1.wav" "$WORK/c8b2.wav" "$WORK/c8b3.wav" || die "c8b clip"
 "$PY" -I scripts/pilot_call_noise_clips.py "$WORK" || die "noise clips"
 
 # ---------------------------------------------------------------- a session for the test number (dev OTP, never printed)
@@ -196,6 +215,7 @@ for n in $CALLS; do case "$n" in
   5) call 5 c5a c5b c5req n_far1 n_noise c5f n_far2 n_silence ;;
   6) call 6 c6a c6b c6c c6d c6e c6f c6g c6h c6i ;;
   7) call 7 c7a c7b c7c c7d c7e ;;
+  8) call 8 c8a c8b c8c c8d ;;
 esac; done
 curl -s -o /dev/null "${H[@]}" -X POST "$API/auth/logout" || true
 echo "PCT DONE (out $OUT)"

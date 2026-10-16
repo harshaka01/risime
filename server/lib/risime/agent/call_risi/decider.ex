@@ -181,7 +181,8 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   }
 
   @dictation_system """
-  Risi is taking down a message that the user dictates on a phone call (speech-to-text: words \
+  Risi (the assistant; speech-to-text often writes its name as "a receipt", "Rishi", "Reese" or \
+  "RISD") is taking down a message that the user dictates on a phone call (speech-to-text: words \
   may be misheard; a long message comes in pieces with pauses). You get the message so far and \
   the user's newest words. Return JSON for the newest words only.
 
@@ -195,7 +196,9 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   - "instruction": not message text but words to Risi: a question to Risi ("who is it for?", \
   "did he message me?", "is Kamal in today?"), a correction of who it is for ("no, it's for \
   Ruwan"), "no", "cancel", "stop", "I'm not asking you to write anything", another request \
-  ("read…", "check my calendar", "remind me…"). Words to Risi are never message text.
+  ("read…", "check my calendar", "remind me…"). Words to Risi are never message text. For \
+  example: "Check if Ruwan answered." "Who's this going to?" "No, it's for Kamal instead." "Did \
+  he write back?" "Wait, ask me what it should say." are all instructions.
   - "noise": speech-to-text noise: a short odd sentence that has nothing to do with the message \
   or makes no sense, or the user thinking aloud.
 

@@ -40,6 +40,18 @@ Bhanu Senanayake → "Kasun Senaratne", Ozzy → "Kamal", Whisper's spellings �
   `:risi_call_brain` still read); the decision is `local_only` (no automatic fallback); `CallRisi.Escalate` behind
   `RISI_BRAIN_ESCALATE` (default **off**, `escalate: [model: nil, below: 0.5, daily_cap: 200]`, **no model set**);
   escalations and the caller's corrections (recipient, cancel, card change) are `voice_call_training` rows, labels only.
+- **Live:** v0.3.0-nightly.11-srv7 (fast lane 18:46Z, 21b05fcd). **Device test** (redroid pdt, srv7, 20:3xZ, after the
+  swap tests; `pilot-call-test` calls 7 and 8, call 8 from the patch `~/risime-logs/pilot-device-test/pilot-call-test-call8.patch`
+  for root): call 7 reaches the card as before; call 8 "I want to send David a long message. Take this down." → "Go
+  ahead, I'm listening. Say "that's it" when you're done." → three pieces with 1.5 s pauses, no turn and nothing said
+  between them → one read-back of the whole text → "Did David reply to me?" → "I don't see any Official messages from
+  David in the last 3 days." (read_messages, no draft); 0 `replaced` turns. Found: an instruction during dictation was
+  written to the transcript twice ("Hello." twice): fixed in 429edf41 (after srv7).
+- **Gate round 2 (root 16 Oct evening), live on risi-l1:** golden 11/11 calls; paraphrases 339/340 (every tool 20/20,
+  message-steps 19/20); shared RisiWork cases intent 10/10, contact 9/10 (N-04: "Tell Tharindi about the schedule"
+  read the calendar), dictation 10/10; simulated callers 30/30, 0 repeated questions. Decision latency: turn p50
+  1.5–1.65 s, p95 1.9–2.2 s; dictation check p50 0.7 s, p95 0.85 s. Shared D-08 is a yes now (root): "Can you just send it
+  by yourself?" after an Official "Send it?" read-back sends (unguarded text, the same ack rule; Private keeps the tap).
 - **Gate (one command):** `cd server && MIX_ENV=test mix test --only llm_live test/risime/agent/call_risi/golden`
   (golden calls, paraphrases per tool, the 30 shared RisiWork cases, simulated callers; each prints its decision
   latency). `PARA_SAMPLE=<n>` (first n per tool, fixed order) and `SIM_RUNS=<n>` (first n callers, round-robin over

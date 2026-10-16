@@ -10,7 +10,7 @@
         "to": "Nimali",
         "tool": "read_messages"
       },
-      "ms": 1614
+      "ms": 1655
     }
   },
   "para-read-messages-02": {
@@ -18,13 +18,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "did Nima Lee get back to me",
+        "request": "Did Nima Lee get back to me?",
         "tab": "private",
         "text": "",
         "to": "Nima Lee",
         "tool": "read_messages"
       },
-      "ms": 1647
+      "ms": 1683
     }
   },
   "para-read-messages-03": {
@@ -37,7 +37,7 @@
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1258
+      "ms": 1349
     }
   },
   "para-read-messages-04": {
@@ -50,7 +50,7 @@
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1331
+      "ms": 1371
     }
   },
   "para-read-messages-05": {
@@ -64,7 +64,7 @@
         "to": "Ruwan",
         "tool": "read_messages"
       },
-      "ms": 1549
+      "ms": 1605
     }
   },
   "para-read-messages-06": {
@@ -78,7 +78,7 @@
         "to": "Kamal",
         "tool": "read_messages"
       },
-      "ms": 1611
+      "ms": 1633
     }
   },
   "para-read-messages-07": {
@@ -87,26 +87,26 @@
         "action": "tool",
         "confidence": 1,
         "request": "Has Nimali replied yet?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "read_messages"
       },
-      "ms": 1596
+      "ms": 1589
     }
   },
   "para-read-messages-08": {
     "did ruvan send me anything?": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 0.95,
         "request": "Did Ruvan send me anything?",
         "tab": "",
         "text": "",
         "to": "Ruvan",
         "tool": "read_messages"
       },
-      "ms": 1573
+      "ms": 1633
     }
   },
   "para-read-messages-09": {
@@ -120,7 +120,7 @@
         "to": "Kamel",
         "tool": "read_messages"
       },
-      "ms": 1558
+      "ms": 1592
     }
   },
   "para-read-messages-10": {
@@ -134,7 +134,7 @@
         "to": "Nimali",
         "tool": "read_messages"
       },
-      "ms": 1583
+      "ms": 1608
     }
   },
   "para-read-messages-11": {
@@ -147,7 +147,7 @@
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1325
+      "ms": 1346
     }
   },
   "para-read-messages-12": {
@@ -155,13 +155,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Can you tell me if someone messaged me?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1529
+      "ms": 1261
     }
   },
   "para-read-messages-13": {
@@ -169,12 +168,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
+        "request": "What did Nimali say in my private chat?",
         "tab": "private",
         "text": "",
         "to": "Nimali",
         "tool": "read_messages"
       },
-      "ms": 1362
+      "ms": 1719
     }
   },
   "para-read-messages-14": {
@@ -182,13 +182,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "did Nimali reply to my earlier message?",
         "tab": "private",
         "text": "",
         "to": "Nimali Perera",
         "tool": "read_messages"
       },
-      "ms": 1800
+      "ms": 1376
     },
     "tell nimali the review moved to three.": {
       "decision": {
@@ -199,7 +198,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1523
+      "ms": 1572
     }
   },
   "para-read-messages-15": {
@@ -213,7 +212,7 @@
         "to": "Ruwan",
         "tool": "read_messages"
       },
-      "ms": 1655
+      "ms": 1684
     }
   },
   "para-read-messages-16": {
@@ -222,12 +221,12 @@
         "action": "tool",
         "confidence": 1,
         "request": "Check whether Nimali has answered me.",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "read_messages"
       },
-      "ms": 1655
+      "ms": 1636
     }
   },
   "para-read-messages-17": {
@@ -236,12 +235,12 @@
         "action": "tool",
         "confidence": 1,
         "request": "Is there any reply from Kamal?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "read_messages"
       },
-      "ms": 1599
+      "ms": 1605
     }
   },
   "para-read-messages-18": {
@@ -254,7 +253,7 @@
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1327
+      "ms": 1338
     }
   },
   "para-read-messages-19": {
@@ -267,7 +266,7 @@
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1323
+      "ms": 1350
     }
   },
   "para-read-messages-20": {
@@ -281,7 +280,7 @@
         "to": "Nimali",
         "tool": "read_messages"
       },
-      "ms": 1672
+      "ms": 1711
     }
   }
 }

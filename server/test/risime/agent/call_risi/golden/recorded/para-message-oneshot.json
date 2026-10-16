@@ -9,7 +9,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1513
+      "ms": 1525
     }
   },
   "para-message-oneshot-02": {
@@ -18,11 +18,11 @@
         "action": "tool",
         "confidence": 1,
         "tab": "private",
-        "text": "the parcel arrived.",
+        "text": "The parcel arrived.",
         "to": "Nima Lee",
         "tool": "message_draft"
       },
-      "ms": 1498
+      "ms": 1468
     }
   },
   "para-message-oneshot-03": {
@@ -35,7 +35,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1449
+      "ms": 1460
     }
   },
   "para-message-oneshot-04": {
@@ -48,7 +48,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1296
+      "ms": 1458
     }
   },
   "para-message-oneshot-05": {
@@ -56,13 +56,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Tell Nimali good evening",
+        "request": "Tell Nimali good evening instead.",
         "tab": "private",
         "text": "Good evening",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1511
+      "ms": 1825
     },
     "tell nimali good morning.": {
       "decision": {
@@ -73,7 +73,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1403
+      "ms": 1432
     }
   },
   "para-message-oneshot-06": {
@@ -87,44 +87,46 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1970
+      "ms": 1995
     },
     "send nimaali a message saying i'll call at five.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 1,
         "tab": "private",
         "text": "I'll call at five.",
         "to": "Nimaali",
         "tool": "message_draft"
       },
-      "ms": 1402
+      "ms": 1506
     }
   },
   "para-message-oneshot-07": {
     "tell ruvan that i left the keys with the guard.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 0.95,
+        "request": "Tell Ruvan that I left the keys with the guard.",
         "tab": "private",
         "text": "I left the keys with the guard.",
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1537
+      "ms": 1945
     }
   },
   "para-message-oneshot-08": {
     "let nimali know that the doctor's appointment is on monday.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 0.95,
+        "request": "Let Nimali know that the doctor's appointment is on Monday.",
         "tab": "private",
         "text": "The doctor's appointment is on Monday.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1552
+      "ms": 2029
     }
   },
   "para-message-oneshot-09": {
@@ -137,20 +139,20 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1449
+      "ms": 1481
     }
   },
   "para-message-oneshot-10": {
     "tell nee mali that i called her a couple of times and she did not answer.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 0.95,
         "tab": "private",
         "text": "I called you a couple of times and you did not answer.",
         "to": "Nee Mali",
         "tool": "message_draft"
       },
-      "ms": 1660
+      "ms": 1714
     }
   },
   "para-message-oneshot-11": {
@@ -163,7 +165,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1249
+      "ms": 1534
     }
   },
   "para-message-oneshot-12": {
@@ -176,7 +178,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1469
+      "ms": 1509
     }
   },
   "para-message-oneshot-13": {
@@ -189,7 +191,7 @@
         "to": "Nimalee",
         "tool": "message_draft"
       },
-      "ms": 1587
+      "ms": 1619
     }
   },
   "para-message-oneshot-14": {
@@ -197,13 +199,13 @@
       "decision": {
         "action": "reply",
         "confidence": 0.9,
-        "say": "I'm here. Did you want to send the message to Kamal?",
+        "say": "I'm here. The message to Kamal is ready for you to send.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1478
+      "ms": 2014
     },
     "tell kamal that the printer is fixed.": {
       "decision": {
@@ -214,7 +216,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1433
+      "ms": 1462
     }
   },
   "para-message-oneshot-15": {
@@ -222,13 +224,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Tell Nimali I'm stuck in traffic, start without me.",
+        "request": "Change it to: I'm stuck in traffic, start without me.",
         "tab": "private",
         "text": "I'm stuck in traffic, start without me.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 2047
+      "ms": 2109
     },
     "tell nimali i'm stuck in traffic.": {
       "decision": {
@@ -239,7 +241,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1499
+      "ms": 1502
     }
   },
   "para-message-oneshot-16": {
@@ -252,7 +254,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1506
+      "ms": 1533
     }
   },
   "para-message-oneshot-17": {
@@ -265,7 +267,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1493
+      "ms": 1528
     }
   },
   "para-message-oneshot-18": {
@@ -278,7 +280,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1492
+      "ms": 1529
     }
   },
   "para-message-oneshot-19": {
@@ -291,26 +293,31 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1460
+      "ms": 1485
     }
   },
   "para-message-oneshot-20": {
-    "dictation| >> send it.": {
-      "decision": {
-        "tool": "end"
-      },
-      "ms": 418
-    },
     "send a message to nimali saying thank you.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 1,
         "tab": "private",
-        "text": "",
+        "text": "thank you",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1134
+      "ms": 1182
+    },
+    "send it.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "confirm_open"
+      },
+      "ms": 1423
     }
   }
 }

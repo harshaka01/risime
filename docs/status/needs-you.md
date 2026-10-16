@@ -68,6 +68,32 @@ Caddy that answers only spark's IP with a shared header secret (weaker). Plus th
 (public, standard flow, PKCE S256, redirect https://risicloud.ai/marketplace/auth/callback).
 **Options:** A / B / later. **Default:** later; it stays on loopback.
 
+### Q-014 · 2026-10-17 04:50 SLT · [architect] · blocking: no · TRACE (04:25 items a–d), before any fix
+**Shakya Adikari** (Harsha's 04:0x call):
+- a) find_contact: one account (20ae82c3…), picked right ("Shakya Adhikari" → Shakya Adikari 0.93; Swan Adikari 0.67 second).
+- b) Memory is complete for him: his Official 1:1 (grp:757e3a6f…, Risi an active member) holds 459 rows. His last **texts**:
+  6 in the 3 days before the call, the latest at 16 Oct 16:29 SLT. Since then he sent only an **emoji reaction** (17:10 SLT),
+  which memory rightly doesn't keep. So nothing was lost; there is no later text from him on the server.
+- c) Harsha's last text in that same 1:1 was 16:35 SLT, 6 minutes after Shakya's, so `official_line` said "Not yet … hasn't
+  written since". True for "did he reply", wrong for "read me his last message" (04:20 item 4 / 04:25 fault 1).
+- d) **The limit cuts:** 584 memory rows in his 24 Official chats in 3 days; `messages(…, 300)` keeps the newest 300, so the
+  window really started 14 Oct 22:10 UTC and **5 of his 6 texts were outside it**. Must filter by sender in the query.
+**Shenika** ("I don't see any Official messages…"):
+- a) one account (fb81ee92…), picked right ("Shenika" 1.0; "Shanika" → Shenika 0.86; "Seneca" → Bhanu Senanayake 0.80 vs
+  Shenika 0.79, the near tie in item 9/10).
+- b) Her last **Official** text is 13 Oct 22:07 SLT (34 in memory, complete). Her two messages since yesterday (16 Oct 20:14 and
+  20:34 SLT) are in the **Private** 1:1 with Harsha, where Risi is not a member, by design. So "none in 3 days" was literally
+  true and useless; the 04:25 rule applies: say "Her recent messages are in your Private chat, which I can't read. Her last
+  Official one was on 13 Oct: …".
+- Not a memory or ingestion fault for either person. Memory intake overall is low (24 rows on 16 Oct) because Official
+  traffic is low; Harsha's inbox shows 36 group messages from others since 16:35 SLT, most in Official groups without memory
+  or in Private groups (not checked one by one; can do if wanted).
+**Also found:** during the call Risi **sent** a message to Shenika in Official (risi_call_sends `sent`, 04:01 SLT, labelled
+"Sent by Risi for Harsha"). Per 04:20 item 2 its text likely carried the instruction words. The 2-minute undo has passed.
+Harsha may want to check it in his Official chat with Shenika.
+**Fix order** (04:20): 4 (`last_from` vs `replied_since`, sender-filtered query, no 300 cut), 6, 7, 5 (30-day look-back + "in your
+Private chat" line), then 1, 2, 3, 9, 8, 10, 12, 11. The real-call replay gate comes first. Started.
+
 ## Answered
 - ANSWERED: "Ok C is good but after if we fail tonight" (by Harsha, 2026-10-16 18:45 SLT, in the architect chat; architect
   19:20). D-001 brain model. Local only through tonight's model tests; the escalation path is built behind a flag that is
