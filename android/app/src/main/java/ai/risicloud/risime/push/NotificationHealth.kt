@@ -8,6 +8,8 @@ package ai.risicloud.risime.push
 data class ChannelState(
     /** NotificationManager importance (0 = none/off, 3 = default, 4 = high). */
     val importance: Int,
+    /** P0 calls (2026-10-16): the channel has a sound (the user or the phone can set it to none: calls then show but never ring). */
+    val sound: Boolean = true,
 )
 
 data class HealthInputs(
@@ -71,7 +73,7 @@ fun healthChecks(i: HealthInputs): List<HealthCheck> {
     val msg = i.messagesChannel
     // A channel that doesn't exist yet is created at high importance on first use.
     val msgOk = notif && (msg == null || msg.importance >= IMPORTANCE_HIGH)
-    val callsOk = notif && (i.callsChannel == null || i.callsChannel.importance >= IMPORTANCE_HIGH)
+    val callsOk = notif && (i.callsChannel == null || (i.callsChannel.importance >= IMPORTANCE_HIGH && i.callsChannel.sound))
     val battery = i.ignoringBatteryOptimizations && !i.backgroundRestricted
     val pushOk = i.pushConfigured && i.currentTokenHash != null && i.currentTokenHash == i.registeredTokenHash
     return listOf(
@@ -99,10 +101,12 @@ fun healthChecks(i: HealthInputs): List<HealthCheck> {
                 !notif -> "Turn on notifications first."
                 i.callsChannel != null && i.callsChannel.importance == IMPORTANCE_NONE -> "The Calls category is turned off: calls can't ring."
                 callsOk -> "On: incoming calls ring."
+                i.callsChannel != null && i.callsChannel.importance >= IMPORTANCE_HIGH && !i.callsChannel.sound ->
+                    "The Calls category has no sound: calls show but don't ring. Tap Fix and choose a ringtone."
                 else -> "The Calls category won't ring on screen. Set it to \"Alert\" / high."
             },
             (if (!notif) HealthFix.APP_NOTIFICATIONS else HealthFix.CALLS_CHANNEL).takeIf { !callsOk },
-            state = channelState(notif, i.callsChannel), autoOpen = notif && i.callsChannel?.importance == IMPORTANCE_NONE,
+            state = callsChannelState(notif, i.callsChannel), autoOpen = notif && i.callsChannel?.importance == IMPORTANCE_NONE,
             hint = notif && i.callsChannel != null && i.callsChannel.importance in (IMPORTANCE_NONE + 1) until IMPORTANCE_HIGH,
         ),
         HealthCheck(
@@ -165,6 +169,13 @@ fun accountCheck(a: AccountInputs): HealthCheck {
         state = if (short) "short" else "ok",
     )
 }
+
+/** P0 calls (2026-10-16): a Calls channel without a sound is its own failing state ("muted"). */
+private fun callsChannelState(notif: Boolean, c: ChannelState?): String =
+    if (notif && c != null && c.importance >= IMPORTANCE_HIGH && !c.sound) "muted" else channelState(notif, c)
+
+/** P0 calls (2026-10-16): the calls channel would show a ring but not sound it (off, low importance or no sound). */
+fun callsChannelMuted(c: ChannelState?): Boolean = c != null && (c.importance < IMPORTANCE_HIGH || !c.sound)
 
 private fun channelState(notif: Boolean, c: ChannelState?): String = when {
     !notif -> "notifications_off"

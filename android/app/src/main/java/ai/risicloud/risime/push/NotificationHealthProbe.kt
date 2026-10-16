@@ -23,7 +23,7 @@ class NotificationHealthProbe(private val context: Context, private val c: AppCo
         runCatching { c.calls.notifications.ensureChannels() }
         val nm = context.getSystemService(NotificationManager::class.java)
         fun channel(id: String): ChannelState? =
-            if (Build.VERSION.SDK_INT < 26) null else nm.getNotificationChannel(id)?.let { ChannelState(it.importance) }
+            if (Build.VERSION.SDK_INT < 26) null else nm.getNotificationChannel(id)?.let { ChannelState(it.importance, sound = it.sound != null) }
         val pm = context.getSystemService(PowerManager::class.java)
         val am = context.getSystemService(ActivityManager::class.java)
         val token = runCatching { c.push.currentToken() }.getOrNull()

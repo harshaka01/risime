@@ -34,6 +34,12 @@ class RisiMeMessagingService : FirebaseMessagingService() {
         val c = (application as RisiMeApp).container
         // §16.8: the call push has its own handler: the phoneCall service starts at once (never the inbox worker).
         if (ai.risicloud.risime.net.PushPayload.fromData(message.data)?.isCall == true) {
+            // P0 calls (2026-10-16): the call push is sent high priority; FCM may deliver it as normal
+            // (an app it judges unused, a restricted bucket), which can't start the ring in time.
+            if (pushDowngraded(message.priority, message.originalPriority)) {
+                Log.w("RisiMe", "RisiMe push: the call push was downgraded by FCM (sent high, delivered normal)")
+                c.calls.notePushDowngraded()
+            }
             c.calls.onCallPush()
             return
         }
@@ -64,6 +70,9 @@ class RisiMeMessagingService : FirebaseMessagingService() {
         c.scope.launch { c.push.register(token, c.sessionStore.current()?.user?.phoneVerified ?: false) }
     }
 }
+
+/** P0 calls (2026-10-16): FCM delivered a push that was sent high priority at a lower one (RemoteMessage.PRIORITY_HIGH = 1). */
+fun pushDowngraded(priority: Int, originalPriority: Int): Boolean = originalPriority == 1 && priority != 1
 
 /** Runs the normal channel sync in the background, then posts local notifications. */
 class InboxSyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {

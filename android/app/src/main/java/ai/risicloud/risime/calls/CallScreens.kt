@@ -449,15 +449,32 @@ fun GroupCallLineRow(text: String, video: Boolean, missed: Boolean, onJoin: (() 
     }
 }
 
-/** A small banner for the in-app "full-screen calls are off" card (§16.9 A3). */
+/** A small banner for the in-app "full-screen calls are off" card (§16.9 A3; P0 calls 2026-10-16: one tap). */
 @Composable
-fun FullScreenIntentCard(onOpenSettings: () -> Unit, onDismiss: () -> Unit) {
+fun FullScreenIntentCard(onOpenSettings: () -> Unit, onDismiss: () -> Unit) =
+    CallsAttentionCard(
+        "Let RisiMe show incoming calls",
+        "Without this, a call is only a small silent banner on a locked phone. One tap: turn on \"Allow full screen notifications\" for RisiMe.",
+        "Allow", onOpenSettings, onDismiss,
+    )
+
+/** P0 calls (2026-10-16): the in-app card for a muted or lowered Calls channel ("Fix" opens the channel). */
+@Composable
+fun CallsChannelMutedCard(onFix: () -> Unit, onDismiss: () -> Unit) =
+    CallsAttentionCard(
+        "Calls are silent on this phone",
+        "RisiMe's Calls notifications are set to silent or low here, so a call doesn't ring. Tap Fix, then set Calls to ring with sound.",
+        "Fix", onFix, onDismiss,
+    )
+
+@Composable
+private fun CallsAttentionCard(title: String, text: String, action: String, onAction: () -> Unit, onDismiss: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(Spacing.md)) {
-            Text("Calls can't take over the screen", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
-            Text("Allow full-screen notifications so a call rings even when the phone is locked.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+            Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
             Row(Modifier.background(Color.Transparent)) {
-                TextButton(onClick = onOpenSettings) { Text("Open settings") }
+                TextButton(onClick = onAction) { Text(action) }
                 TextButton(onClick = onDismiss) { Text("Not now") }
             }
         }

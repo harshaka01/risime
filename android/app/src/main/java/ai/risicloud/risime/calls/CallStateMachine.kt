@@ -120,6 +120,9 @@ enum class CallNotice {
     /** Risi's identity wasn't in the room 12 s after connect. */
     RISI_NO_ANSWER,
 
+    /** P0 calls (2026-10-16): a normal phone call took over; this call ended and the peer was told. */
+    INTERRUPTED,
+
     /** Another identity than Risi's showed up in the room (fail closed). */
     RISI_UNSAFE,
 }
@@ -317,6 +320,11 @@ class CallStateMachine(
         val outgoing: Boolean,
         var phase: CallPhase,
     ) {
+        /** P0 calls (2026-10-16) self-heal: device ms when this call was created, and when its received audio last advanced. */
+        var createdAt = 0L
+        var mediaAt = 0L
+        /** The media layer reported a received-audio byte count at least once (only then can "no audio" be judged). */
+        var mediaKnown = false
         /** Incoming: the offer's device C (crypto R3 pinning). */
         var offerDevice: String? = null
         var offerSdp: String? = null
@@ -428,11 +436,15 @@ class CallStateMachine(
         val ringingFromPeer = lock.withLock { current?.takeIf { !it.ended && !it.outgoing && it.phase == CallPhase.RINGING_IN && it.peer.equals(peer, true) }?.id }
         if (ringingFromPeer != null) return answer(ringingFromPeer)
         val call = lock.withLock {
+            // P0 calls (2026-10-16): before "already in a call", make sure the held call is really live.
+            current?.takeIf { !it.ended }?.let { c -> staleReason(c, caller = null, callerDevice = null)?.let { why -> healLocked(c, why) } }
             if (current?.let { !it.ended } == true || platform.audioBusy() || platform.otherCallActive()) {
+                log("place call: in another call (call=${current?.takeIf { !it.ended }?.let { "${it.id} ${it.phase}" }} audio=${platform.audioBusy()} group=${platform.otherCallActive()})")
                 publishNotice(conversationId, peer, true, CallNotice.IN_ANOTHER_CALL)
                 return false
             }
             Call(newCallId(), conversationId, peer, outgoing = true, phase = CallPhase.CALLING).also {
+                it.createdAt = now()
                 it.official = official
                 if (video) {
                     it.media = CallEnvelope.MEDIA_VIDEO
@@ -759,6 +771,80 @@ class CallStateMachine(
     /** Telecom/the OS ended the call (a cellular call took over, the user ended it from the system UI). */
     suspend fun onSystemDisconnect(callId: String? = null) = hangUp(callId)
 
+    /**
+     * P0 calls (2026-10-16): a normal phone call took the audio (the mode watch saw MODE_IN_CALL, or
+     * Telecom put this call on hold). The call ends at once ("Call ended: phone call"), the peer gets the
+     * same `call_end` a hang-up sends, and nothing is left holding the next call.
+     */
+    suspend fun onCellularCall(callId: String? = null) {
+        val end: (Call) -> Unit = { c ->
+            log("cellular call: ending ${c.id} (${c.phase})")
+            finish(c, CallNotice.INTERRUPTED, sendEnd = endReasonFor(c))
+        }
+        val done = withTimeoutOrNull(HANGUP_LOCK_MS) {
+            lock.withLock { current?.takeIf { !it.ended && (callId == null || it.id == callId) }?.let(end) }
+            true
+        }
+        if (done == null) current?.takeIf { !it.ended && (callId == null || it.id == callId) }?.let(end)
+    }
+
+    /** P0 calls (2026-10-16): the call this device holds if it is really live (unlocked read; a stale one is cleared in the background). */
+    fun liveCallId(): String? {
+        val c = current?.takeIf { !it.ended } ?: return null
+        if (staleReason(c, caller = null, callerDevice = null) == null) return c.id
+        scope.launch { healIfStale() }
+        return null
+    }
+
+    /**
+     * P0 calls (2026-10-16) self-heal: true if this device holds a call that is really live (the busy
+     * question). A held call that isn't live is cleared on the way, as before a new call.
+     */
+    suspend fun healIfStale(): Boolean = lock.withLock {
+        val c = current?.takeIf { !it.ended } ?: return@withLock false
+        staleReason(c, caller = null, callerDevice = null)?.let { why -> healLocked(c, why); return@withLock false }
+        true
+    }
+
+    /**
+     * Why the call this device holds is not live any more (null = it is): [caller] (with [callerDevice])
+     * is the user (and device) whose fresh offer just arrived (null for my own call button). A peer device
+     * holds only one call, so a new offer from the device of my call means the old call is over there (its
+     * `call_end` was lost or never sent); a connected call whose received audio stopped for
+     * [MEDIA_STALL_MS] is dead (the stall watch can miss it: stats that never answer, bytes that never
+     * started); a call still in setup past its watchdog is stuck.
+     */
+    private fun staleReason(c: Call, caller: String?, callerDevice: String?): String? {
+        val t = now()
+        val connected = c.phase == CallPhase.ACTIVE || c.phase == CallPhase.RECONNECTING
+        val since = maxOf(c.mediaAt, c.connectedAt ?: 0L)
+        val audioStale = connected && c.mediaKnown && !c.moving && since > 0 && t - since >= MEDIA_STALL_MS
+        // The same device of the peer: it can't call me while its call with me goes on. (Another device
+        // of that user follows the normal rules: the sibling rule keeps it quiet while its sibling rings.)
+        if (caller != null && c.peer.equals(caller, true) && (callerDevice == null || peerDevice(c)?.equals(callerDevice, true) != false)) {
+            return "the same peer is calling again"
+        }
+        return when {
+            audioStale -> "no audio for ${t - since} ms"
+            !connected && c.createdAt > 0 && t - c.createdAt >= MEDIA_WATCHDOG_MS + HANGUP_LOCK_MS -> "still ${c.phase} after ${t - c.createdAt} ms"
+            else -> null
+        }
+    }
+
+    /** The `call_end` a hang-up of [c] sends now (null: nothing went out yet, or a callee still ringing). */
+    private fun endReasonFor(c: Call): String? = when {
+        c.connectedAt != null -> CallEnvelope.R_HANGUP
+        !c.outgoing && c.phase == CallPhase.RINGING_IN -> null
+        c.outgoing && !c.offerSent -> null
+        c.outgoing && c.selected == null -> CallEnvelope.R_CANCELLED
+        else -> CallEnvelope.R_HANGUP
+    }
+
+    private fun healLocked(c: Call, why: String) {
+        log("self-heal: ${c.id} (${c.phase}) is not live ($why): cleared")
+        finish(c, notice = null, sendEnd = endReasonFor(c))
+    }
+
     /** Has this device rung for [callId] without answering it (the "Missed" vs "Couldn't connect" line)? */
     suspend fun rangUnanswered(callId: String): Boolean = marks.get(callId)?.let { it.rang && !it.answered } == true
 
@@ -876,9 +962,13 @@ class CallStateMachine(
             log("offer ${env.callId}: my user is calling ${s.fromUser} (${it.first}): not ringing")
             return
         }
+        // P0 calls (2026-10-16, Shenika's phone): a held call that isn't live any more (the same peer
+        // calls again, no audio for 20 s, a setup past its watchdog) is cleared first, so a stale call
+        // never answers "busy" for a ring the user would have taken.
+        val held = cur?.takeIf { c -> staleReason(c, caller = peer, callerDevice = s.fromDevice)?.let { why -> healLocked(c, why) } == null }
         // §16.5 busy (android R9): own call, or another app's call by the audio mode.
-        if (cur != null || platform.audioBusy() || platform.otherCallActive()) {
-            log("offer ${env.callId}: busy")
+        if (held != null || platform.audioBusy() || platform.otherCallActive()) {
+            log("offer ${env.callId}: busy (call=${held?.let { "${it.id} ${it.phase}" }} audio=${platform.audioBusy()} group=${platform.otherCallActive()})")
             marks.put(CallMark(env.callId, ended = true, at = now()))
             scope.launch { sig(s.conversationId, peer, CallEnvelope.Busy(env.callId), env.media) }
             return
@@ -906,6 +996,7 @@ class CallStateMachine(
 
     private fun incoming(s: InboundCall, env: CallEnvelope.Offer): Call {
         val call = Call(env.callId, s.conversationId, s.fromUser.lowercase(), outgoing = false, phase = CallPhase.RINGING_IN)
+        call.createdAt = now()
         call.offerDevice = s.fromDevice.lowercase()
         call.offerSdp = env.sdp
         call.offerServerTsMs = s.serverTsMs
@@ -1727,6 +1818,7 @@ class CallStateMachine(
                             c.timers.remove("watchdog")?.cancel()
                             c.phase = CallPhase.ACTIVE
                             c.connectedAt = now()
+                            c.mediaAt = c.connectedAt!!
                             c.connectedAtServer = serverNow()
                             c.verified = true
                             timer(c, "max", MAX_CALL_MS) { x -> finish(x, CallNotice.CALL_ENDED, sendEnd = CallEnvelope.R_HANGUP) }
@@ -1885,7 +1977,9 @@ class CallStateMachine(
                 }
                 statsAt = now()
                 val bytes = st.bytesReceived ?: continue
+                c.mediaKnown = true
                 if (bytes != last) {
+                    c.mediaAt = now()
                     if (told) log("media watch: audio_recv advancing again ($last→$bytes)")
                     told = false
                     last = bytes

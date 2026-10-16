@@ -109,6 +109,10 @@
         <receiver
             android:name=".calls.CallActionReceiver"
             android:exported="false" />
+        <!-- P0 calls (2026-10-16): Settings → Calls → "Test incoming call" (local only: an alarm, then the real ring's channel). -->
+        <receiver
+            android:name=".calls.TestRingReceiver"
+            android:exported="false" />
 
         <!-- §26.6 scheduled messages: the exact alarm's receiver, and re-arming after a reboot or an update. -->
         <receiver

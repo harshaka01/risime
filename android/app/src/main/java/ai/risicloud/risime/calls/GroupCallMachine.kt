@@ -180,6 +180,8 @@ class GroupCallMachine(
         val timers = HashMap<String, Job>()
         var ended = false
         var shown = false
+        /** P0 calls (2026-10-16) self-heal: device ms when this call was first published. */
+        var createdAt = 0L
         val video get() = media == CallEnvelope.MEDIA_VIDEO
 
         // ---- v1.45 §40.3/§40.4 ----
@@ -213,8 +215,53 @@ class GroupCallMachine(
 
     fun currentCallId(): String? = current?.takeIf { !it.ended }?.id
 
-    /** This device is in a group call or ringing for one (busy for 1:1 calls, android A4). */
-    fun active(): Boolean = current?.let { !it.ended } == true
+    /**
+     * This device is in a group call or ringing for one (busy for 1:1 calls, android A4). P0 calls
+     * (2026-10-16): a held call that isn't live ([staleReason]) doesn't count; it is cleared in the background.
+     */
+    fun active(): Boolean {
+        val c = current?.takeIf { !it.ended } ?: return false
+        if (staleReason(c) == null) return true
+        scope.launch { healIfStale() }
+        return false
+    }
+
+    /**
+     * P0 calls (2026-10-16) self-heal: why the held group call is not live (null = it is). Ringing has its
+     * own 45-s validity; any other phase must have a room session once setup ([SETUP_MS]) is over
+     * (a call whose room never connected, or whose SFU session is gone, is dead).
+     */
+    private fun staleReason(c: GCall): String? {
+        if (c.phase == CallPhase.RINGING_IN || c.createdAt == 0L) return null
+        val age = now() - c.createdAt
+        return if (c.session == null && age >= SETUP_MS + 5_000) "no room session after $age ms" else null
+    }
+
+    /** P0 calls (2026-10-16): clears a held call that isn't live; true if a live one is still there. */
+    suspend fun healIfStale(): Boolean = lock.withLock { healLocked() }
+
+    private fun healLocked(): Boolean {
+        val c = current?.takeIf { !it.ended } ?: return false
+        val why = staleReason(c) ?: return true
+        log("self-heal: group call ${c.id} (${c.phase}) is not live ($why): cleared")
+        leave(c, null, announce = false)
+        return false
+    }
+
+    /**
+     * P0 calls (2026-10-16): a normal phone call took the audio. The group call (or Call Risi) is left at
+     * once with "Call ended: phone call"; a ringing one is declined.
+     */
+    suspend fun onCellularCall(callId: String? = null) {
+        val done = withTimeoutOrNull(2_000) {
+            lock.withLock {
+                val c = current?.takeIf { !it.ended && (callId == null || it.id == callId) } ?: return@withLock
+                log("cellular call: leaving group call ${c.id} (${c.phase})")
+                if (c.phase == CallPhase.RINGING_IN) decline(c) else leave(c, CallNotice.INTERRUPTED)
+            }
+        }
+        if (done == null) current?.takeIf { !it.ended && (callId == null || it.id == callId) }?.let { finish(it, CallNotice.INTERRUPTED) }
+    }
 
     // ---------------------------------------------------------------- user actions
 
@@ -224,6 +271,7 @@ class GroupCallMachine(
      */
     suspend fun start(conv: String, video: Boolean = false, camera: Boolean = video): Boolean {
         val c = lock.withLock {
+            healLocked()
             if (current?.let { !it.ended } == true || port.busy()) {
                 publishNotice(conv, CallNotice.IN_ANOTHER_CALL)
                 return false
@@ -246,6 +294,7 @@ class GroupCallMachine(
      */
     suspend fun startRisi(conv: String): Boolean {
         val c = lock.withLock {
+            healLocked()
             if (current?.let { !it.ended } == true || port.busy()) {
                 publishNotice(conv, CallNotice.IN_ANOTHER_CALL)
                 return false
@@ -447,7 +496,8 @@ class GroupCallMachine(
         val c = lock.withLock {
             val cur = current?.takeIf { !it.ended }
             if (cur != null && cur.id == callId && cur.phase == CallPhase.RINGING_IN) return@withLock null
-            if (cur != null || port.busy()) {
+            if (cur != null) healLocked()
+            if (current?.let { !it.ended } == true || port.busy()) {
                 publishNotice(conv, CallNotice.IN_ANOTHER_CALL)
                 return false
             }
@@ -569,6 +619,7 @@ class GroupCallMachine(
         }
         lastOfferAt[env.callId] = sentAt
         // android A4: one call at a time; no call_busy in groups (the chat line keeps Join).
+        healLocked()
         if (current?.let { !it.ended } == true || port.busy()) {
             log("group offer ${env.callId}: busy, not ringing")
             marks.put(CallMark(env.callId, ended = true, at = now()))
@@ -1061,6 +1112,7 @@ class GroupCallMachine(
     }
 
     private fun publish(c: GCall) {
+        if (c.createdAt == 0L) c.createdAt = now()
         if (c.ended || c.pendingRing) return
         c.shown = true
         _state.value = snapshot(c)

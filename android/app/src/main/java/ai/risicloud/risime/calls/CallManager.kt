@@ -297,6 +297,34 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     /** §16.9 (A3): full-screen intents were refused at the last ring: the in-app card offers the setting. */
     val fullScreenDenied = MutableStateFlow(false)
 
+    // ---- P0 calls (2026-10-16): what stops this phone from ringing, for Settings → Calls and the in-app card ----
+
+    /** The Calls channel is off, low or without a sound: a call shows but doesn't ring. */
+    fun callsChannelMuted(): Boolean {
+        if (Build.VERSION.SDK_INT < 26) return false
+        val ch = runCatching {
+            notifications.ensureChannels()
+            context.getSystemService(android.app.NotificationManager::class.java).getNotificationChannel(CallNotifications.CH_CALLS)
+        }.getOrNull() ?: return false
+        return ai.risicloud.risime.push.callsChannelMuted(ai.risicloud.risime.push.ChannelState(ch.importance, sound = ch.sound != null))
+    }
+
+    /** FCM delivered a call push at normal priority (it was sent high): remembered for Settings → Calls (7 days). */
+    fun notePushDowngraded() {
+        runCatching { prefs.edit().putLong(KEY_PUSH_DOWNGRADED, System.currentTimeMillis()).apply() }
+    }
+
+    fun pushDowngradedRecently(now: Long = System.currentTimeMillis()): Boolean =
+        runCatching { prefs.getLong(KEY_PUSH_DOWNGRADED, 0L) }.getOrDefault(0L).let { it > 0 && now - it < 7 * 24 * 3_600_000L }
+
+    /** The in-app calls card may show again (at most once a day after "Not now"). */
+    fun callsPromptDue(now: Long = System.currentTimeMillis()): Boolean =
+        runCatching { prefs.getLong(KEY_PROMPT_DISMISSED, 0L) }.getOrDefault(0L).let { now - it >= 24 * 3_600_000L }
+
+    fun dismissCallsPrompt() {
+        runCatching { prefs.edit().putLong(KEY_PROMPT_DISMISSED, System.currentTimeMillis()).apply() }
+    }
+
     private val marks = object : CallMarks {
         override suspend fun get(callId: String): CallMark? = port.callMarkDao.get(callId)?.let { CallMark(it.callId, it.rang, it.answered, it.ended, it.at) }
         override suspend fun put(mark: CallMark) = port.callMarkDao.put(CallMarkEntity(mark.callId, mark.rang, mark.answered, mark.ended, if (mark.at == 0L) System.currentTimeMillis() else mark.at))
@@ -368,6 +396,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         const val SOCKET_LOSS_MS = 15_000L
         private val SETUP_PHASES = setOf(CallPhase.CALLING, CallPhase.RINGING_OUT, CallPhase.ANSWERING, CallPhase.CONNECTING)
         private const val PREFS = "risime_calls"
+        /** P0 calls (2026-10-16): the audio-mode poll of [CellularWatch] while a call exists. */
+        const val CELLULAR_POLL_MS = 1_000L
+        private const val KEY_PUSH_DOWNGRADED = "call_push_downgraded_at"
+        private const val KEY_PROMPT_DISMISSED = "calls_prompt_dismissed_at"
+        /** P0 calls (2026-10-16): how long after the end a Telecom connection may still be held before it is dropped by force. */
+        const val RELEASE_VERIFY_MS = 4_000L
         private const val KEY_ACTIVE = "active_call"
 
         /** How long an AudioManager route may take to show up in the read-back. */
@@ -465,7 +499,8 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             notifications.postMissed(conv, port.displayName(from), video)
         }
         override fun busy(): Boolean {
-            if (_machine.value?.currentCallId() != null) return true
+            // P0 calls (2026-10-16): only a 1:1 call that is really live (a stale one is cleared in the background).
+            if (_machine.value?.liveCallId() != null) return true
             val am = context.getSystemService(AudioManager::class.java) ?: return false
             return am.mode == AudioManager.MODE_IN_CALL
         }
@@ -735,18 +770,105 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
 
     fun hangUp() {
         runCatching { onHangUpHook() }
-        if (blindRing.value != null) return stopBlindRing()
-        scope.launch {
-            _group.value?.takeIf { state.value?.group == true }?.hangUp()
+        endCall(CallEndReason.HANGUP)
+    }
+
+    /**
+     * P0 calls (Harsha 2026-10-16): the one way the platform ends a call, whatever the [reason] (End,
+     * a Telecom disconnect, a cellular call, the app swiped away, a stale call). The machine sends the
+     * peer its `call_end` (a cellular call says "Call ended: phone call"); then [releasePlatform] gives
+     * back everything the call held (Telecom's connection, the audio mode, the LiveKit room via the group
+     * machine, the foreground service, the wake locks, the ringing notification). The machines' own ends
+     * (the peer hung up, network loss, timeouts) reach [releasePlatform] through [onState].
+     */
+    fun endCall(reason: CallEndReason, callId: String? = null): Job {
+        log("end call: $reason${callId?.let { " ($it)" } ?: ""}")
+        if (blindRing.value != null) stopBlindRing()
+        return scope.launch {
             val m = _machine.value
-            m?.hangUp()
+            val g = _group.value
+            when (reason) {
+                CallEndReason.CELLULAR -> {
+                    m?.onCellularCall(callId)
+                    g?.onCellularCall(callId?.let(::liveCallId))
+                }
+                CallEndReason.STALE -> {
+                    m?.healIfStale()
+                    g?.healIfStale()
+                }
+                else -> {
+                    if (callId == null) g?.takeIf { state.value?.group == true }?.hangUp() else g?.hangUp(liveCallId(callId))
+                    m?.hangUp(callId)
+                }
+            }
             // Decision 054: the button always works. Whatever is still shown without a call behind it goes.
             val s = state.value
-            if (s != null && s.phase != CallPhase.ENDED && (m == null || m.currentCallId() != s.callId) && _group.value?.currentCallId() != s.callId) {
-                log("hang up: no call behind ${s.callId}: clearing")
+            if (reason != CallEndReason.STALE && s != null && s.phase != CallPhase.ENDED && (callId == null || s.callId == callId) &&
+                (m == null || m.currentCallId() != s.callId) && g?.currentCallId() != s.callId
+            ) {
+                log("end call: no call behind ${s.callId}: clearing")
                 onState(null)
             }
+            releasePlatform(reason.name.lowercase())
         }
+    }
+
+    /**
+     * Gives back what a call held once no call is left: every Telecom connection (disconnect + destroy),
+     * the audio mode and route, the wake locks, the ringback, the foreground service and its ringing
+     * notification. Safe to call any time (a live call keeps everything). A Telecom connection that is
+     * still there 4 s later is dropped by force, so a ghost call never holds the next one.
+     */
+    internal fun releasePlatform(why: String) {
+        val s = state.value
+        if (s != null && s.phase != CallPhase.ENDED) return
+        telecomCalls.keys.toList().forEach { endTelecom(it, s?.notice) }
+        if (telecomCalls.isEmpty()) releaseAudio()
+        releaseWake()
+        updateProximity()
+        updateRingback(s)
+        stopCellularWatch()
+        refreshService()
+        if (blindRing.value == null && !waking.value) runCatching { androidx.core.app.NotificationManagerCompat.from(context).cancel(CallNotifications.CALL_ID) }
+        scope.launch {
+            delay(RELEASE_VERIFY_MS)
+            val now = state.value
+            if ((now == null || now.phase == CallPhase.ENDED) && telecomCalls.isNotEmpty()) {
+                log("release ($why): Telecom still held ${telecomCalls.keys}: dropped")
+                telecomCalls.values.forEach { it.job.cancel() }
+                telecomCalls.clear()
+                releaseAudio()
+            }
+        }
+    }
+
+    // ---- P0 calls (2026-10-16): a normal phone call taking over (no READ_PHONE_STATE, android R9) ----
+
+    private val cellularWatch = CellularWatch(AudioManager.MODE_IN_CALL, AudioManager.MODE_IN_COMMUNICATION)
+    private var cellularJob: Job? = null
+
+    /** Polls the audio mode while a call exists ([CellularWatch]); a cellular call ends the RisiMe call through [endCall]. */
+    @Synchronized
+    private fun startCellularWatch() {
+        if (cellularJob?.isActive == true) return
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        cellularJob = scope.launch {
+            while (true) {
+                val s = state.value?.takeIf { it.phase != CallPhase.ENDED } ?: break
+                val connected = s.phase == CallPhase.ACTIVE || s.phase == CallPhase.RECONNECTING
+                if (cellularWatch.observe(s.callId, connected, runCatching { am.mode }.getOrDefault(AudioManager.MODE_NORMAL))) {
+                    log("cellular call: the audio mode turned MODE_IN_CALL during ${s.callId}")
+                    endCall(CallEndReason.CELLULAR, s.callId)
+                }
+                delay(CELLULAR_POLL_MS)
+            }
+        }
+    }
+
+    @Synchronized
+    private fun stopCellularWatch() {
+        cellularJob?.cancel()
+        cellularJob = null
     }
 
     fun setMuted(muted: Boolean) {
@@ -891,6 +1013,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
         if ((s == null || s.phase == CallPhase.ENDED) && telecomCalls.isEmpty()) releaseAudio()
         if (s != null && s.phase != CallPhase.ENDED) {
             acquireWake()
+            startCellularWatch()
             if (blindRing.value != null) {
                 blindJob?.cancel()
                 blindRing.value = null
@@ -917,10 +1040,12 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
             if (routePhase(s.phase)) checkRoute(s.callId, s.phase.name)
         } else {
             releaseWake()
+            stopCellularWatch()
         }
         updateProximity()
         updateRingback(s)
         refreshService()
+        if (s == null || s.phase == CallPhase.ENDED) releasePlatform("state")
         if (BuildConfig.DEBUG && s != null) log("state ${s.phase} video=${s.video} prompt=${s.prompt} asking=${s.asking} sharing=${s.sharing}: applied")
     }
 
@@ -1031,10 +1156,19 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
                     // A Telecom answer (a watch, the car) never turns the camera on (android A3).
                     onAnswer = { _ -> if (_group.value?.currentCallId() == callId) _group.value?.answer(callId, camera = false) else _machine.value?.answer(callId, camera = false) },
                     // §40.7: a moved call's callbacks act on the group call it became.
-                    onDisconnect = { _ -> _machine.value?.onSystemDisconnect(callId); _group.value?.hangUp(liveCallId(callId)) },
+                    onDisconnect = { _ ->
+                        log("telecom: disconnect for $callId")
+                        _machine.value?.onSystemDisconnect(callId)
+                        _group.value?.hangUp(liveCallId(callId))
+                    },
                     onSetActive = {},
-                    // A cellular call took over (android R9): no hold in v1.13, so the call ends.
-                    onSetInactive = { _machine.value?.onSystemDisconnect(callId); _group.value?.hangUp(liveCallId(callId)) },
+                    // A cellular call took over (android R9; P0 calls 2026-10-16): no hold in v1.13, so the call
+                    // ends as "Call ended: phone call", the peer is told, and nothing is left for the next call.
+                    onSetInactive = {
+                        log("telecom: hold (a phone call took over) for $callId")
+                        _machine.value?.onCellularCall(callId)
+                        _group.value?.onCellularCall(liveCallId(callId))
+                    },
                 ) {
                     handle.scope = this
                     // P0-3: availableEndpoints and currentCallEndpoint are Channel.receiveAsFlow() in
@@ -1382,7 +1516,7 @@ class CallManager(private val context: Context, private val port: CallAppPort, p
     fun onTaskRemoved() {
         if (blindRing.value != null) stopBlindRing()
         scope.launch {
-            _machine.value?.hangUp()
+            endCall(CallEndReason.BACKGROUND).join()
             _group.value?.hangUp()
             onState(null)
             releaseAudio()
@@ -1533,7 +1667,7 @@ fun pickCall(oneToOne: CallSnapshot?, group: CallSnapshot?): CallSnapshot? = whe
 fun telecomDisconnectCause(notice: CallNotice?): Int = when (notice) {
     null, CallNotice.ANSWERED_ELSEWHERE -> DisconnectCause.MISSED
     CallNotice.DECLINED -> DisconnectCause.REJECTED
-    CallNotice.CALL_ENDED, CallNotice.IN_ANOTHER_CALL -> DisconnectCause.LOCAL
+    CallNotice.CALL_ENDED, CallNotice.IN_ANOTHER_CALL, CallNotice.INTERRUPTED -> DisconnectCause.LOCAL
     else -> DisconnectCause.REMOTE
 }
 
@@ -1595,6 +1729,7 @@ object CallTexts {
         CallNotice.RISI_UNAVAILABLE -> ai.risicloud.risime.calls.risi.CallRisiTexts.error(ai.risicloud.risime.net.CallErrors.RISI_UNAVAILABLE)!!
         CallNotice.RISI_NO_ANSWER -> ai.risicloud.risime.calls.risi.CallRisiTexts.NO_ANSWER
         CallNotice.RISI_UNSAFE -> ai.risicloud.risime.calls.risi.CallRisiTexts.UNSAFE
+        CallNotice.INTERRUPTED -> "Call ended: phone call"
     }
 
     /** §20.1 the disabled group call buttons. */
