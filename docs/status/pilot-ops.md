@@ -70,3 +70,5 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
   Undo: set the image back to `…-asr6` in `infra/docker-compose.whisper.yml`, then
   `docker compose --env-file .env -f infra/docker-compose.whisper.yml up -d whisper`.
 - Server: srv15 (hearing gate), then srv16 (§41.10 server half, temperature_fallback=false on call chunks).
+
+- 2026-10-16 10:10 SLT (root): Call Risi worker + text-free `risi.stt:` counters on stderr (server.log): mode published, first packet per kind, drop reasons, summary on off/server/leave. Same as infra/voice/risi_voice_worker.hotfix.py. Undo: `cp ~/risime-voice/risi_voice_worker.py.prev-diag ~/risime-voice/risi_voice_worker.py` (new calls pick it up).

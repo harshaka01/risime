@@ -88,31 +88,41 @@ STT_MAX_TEXT = 1000
 STT_OFF_REASONS = ("unavailable", "error", "busy", "language")
 
 
-def stt_event(payload):
-    """The Port event for a phone packet on "risi.stt" (bytes), or None to drop it."""
-    if not isinstance(payload, (bytes, bytearray)) or len(payload) > STT_MAX_BYTES:
-        return None
+def stt_parse(payload):
+    """(Port event or None, drop reason or None) for a phone packet on "risi.stt" (bytes).
+    The reason is a fixed word (never the text) for the per-call diagnostic counters."""
+    if not isinstance(payload, (bytes, bytearray)):
+        return None, "not_bytes"
+    if len(payload) > STT_MAX_BYTES:
+        return None, "too_big"
     try:
         msg = json.loads(bytes(payload).decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
-        return None
+        return None, "bad_json"
     if not isinstance(msg, dict):
-        return None
+        return None, "not_object"
     t = msg.get("t")
     if t == "final":
         text, conf, seq = msg.get("text"), msg.get("conf"), msg.get("seq")
         if not isinstance(text, str) or not text.strip():
-            return None
+            return None, "final_no_text"
         if conf is not None and (isinstance(conf, bool) or not isinstance(conf, (int, float))
                                  or not 0 <= conf <= 1):
-            return None
+            return None, "final_bad_conf"
         return {"ev": "stt", "t": "final", "seq": seq if isinstance(seq, int) else None,
                 "text": text[:STT_MAX_TEXT], "conf": conf,
-                "during_risi": msg.get("during_risi") is True}
+                "during_risi": msg.get("during_risi") is True}, None
     if t == "off":
         reason = msg.get("reason")
-        return {"ev": "stt", "t": "off", "reason": reason if reason in STT_OFF_REASONS else "error"}
-    return None  # partials and anything else
+        return {"ev": "stt", "t": "off", "reason": reason if reason in STT_OFF_REASONS else "error"}, None
+    if t == "partial":
+        return None, "partial"  # expected: partials are not forwarded
+    return None, "unknown_t"
+
+
+def stt_event(payload):
+    """The Port event for a phone packet on "risi.stt" (bytes), or None to drop it."""
+    return stt_parse(payload)[0]
 
 
 def cal_packet(msg):
@@ -234,6 +244,9 @@ class Worker:
         self.cal_pending = collections.OrderedDict()  # v1.52 §41.8: request ids sent, not yet answered
         self.stt_phone = False  # v1.53 §41.10: the phone recognises the caller's speech
         self.stt_speaking = False  # the last `speaking` state sent to the phone
+        # Diagnostics (2026-10-16, call 75ec8683): per-call counts of "risi.stt" packets by
+        # outcome, to stderr only. Fixed words, never the phone's text.
+        self.stt_stats = collections.Counter()
 
     # ---- control
 
@@ -338,15 +351,21 @@ class Worker:
             return
         p = getattr(packet, "participant", None)
         if p is None or self.caller is None or not p.identity.startswith(self.caller):
+            if topic == STT_TOPIC:
+                self.stt_count("drop:not_caller")
             return
         if topic == STT_TOPIC:
             if not self.stt_phone:
+                self.stt_count("drop:not_phone_mode")
                 return
-            ev = stt_event(packet.data)
+            ev, why = stt_parse(packet.data)
             if ev is None:
+                self.stt_count("drop:" + why)
                 return
+            self.stt_count("fwd:" + ev["t"])
             if ev["t"] == "off":
                 self.stt_phone = False
+                self.stt_summary("off")
             self.port.send(ev)
             return
         ev = cal_event(packet.data, self.cal_pending)
@@ -356,6 +375,16 @@ class Worker:
         self.port.send(ev)
 
     # ---- the caller's speech recognised on the phone (contract v1.53 §41.10)
+
+    def stt_count(self, key):
+        # The first packet of each kind is logged at once (when it came), the totals at the end.
+        self.stt_stats[key] += 1
+        if self.stt_stats[key] == 1:
+            print(f"risi.stt: first {key} at {now_ms()}", file=sys.stderr, flush=True)
+
+    def stt_summary(self, why):
+        counts = " ".join(f"{k}={v}" for k, v in sorted(self.stt_stats.items())) or "none"
+        print(f"risi.stt: {why}: phone={self.stt_phone} packets: {counts}", file=sys.stderr, flush=True)
 
     async def stt_publish(self, packet):
         to = self.caller_identity()
@@ -374,6 +403,9 @@ class Worker:
         if mode not in ("phone", "server"):
             return
         ok = await self.stt_publish({"t": "mode", "mode": mode})
+        print(f"risi.stt: mode {mode} published={ok} at {now_ms()}", file=sys.stderr, flush=True)
+        if mode == "server":
+            self.stt_summary("mode server")
         self.stt_phone = ok and mode == "phone"
         self.stt_speaking = False
         if self.stt_phone and self.speaking:
@@ -389,6 +421,7 @@ class Worker:
         asyncio.ensure_future(self.stt_publish({"t": "speaking", "on": on}))
 
     async def leave(self, reason):
+        self.stt_summary("leave")
         self.stop_speaking()
         if self.room is not None:
             try:
