@@ -12001,8 +12001,8 @@ behalf") **for Official conversations during a Call Risi only**. Decision 094. B
   about a person, deletion requests (decision 085), and any text the guard can't classify. Risi says: "That one needs
   your tap: it's on the card in your Risi chat."
 - **The post in the Official conversation** (`envelope_risi_sent_for.json`):
-  `risi: {"v": 1, "kind": "sent_for", "for": {"user_id": uuid, "name": "Harsha"}, "write_id", "call_ref",
-  "made_by", "notify": [recipient]}`, `body: "<the text>\n— Sent by Risi for Harsha"`. The recipient is notified as for
+  `risi: {"v": 1, "kind": "sent_for", "on_behalf_of": {"user_id": uuid, "name": "Harsha"}, "write_id", "call_ref",
+  "made_by", "notify": [recipient]}`, `body: "<the text>\n— Sent by Risi for Harsha"`. (`on_behalf_of`, never `for`: §24's `for` is a list of user ids and stays one.) The recipient is notified as for
   any message (`notify`). Apps show the body with the line "Sent by Risi for Harsha" as a label; an old app shows the
   body, which carries the same label. The text is the caller's words as read back.
 - **The record in the caller's Risi chat:** the §42.2 `message_sent` reply with `"tab": "official"`, `"state": "sent"`,
