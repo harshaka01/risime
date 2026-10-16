@@ -27,8 +27,13 @@ Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `script
   friends** (find_contact finds nobody; shared data not changed), and Whisper loses the name from Kokoro's
   clip ("Ruwan." dropped, "It's for Ruwan." → "It's four.", "Send it to Ruwan." → "Send it to"). On srv4 the
   retry was one "I heard …" line three times (fixed in srv5: escalating lines; `dc46abf6` alternates later
-  ones). No "One moment…" before the questions; no question repeated. A device run that reaches a draft needs
-  a test-account friend (root/Harsha: OK to add one?) or a name Whisper gets from Kokoro.
+  ones). No "One moment…" before the questions; no question repeated.
+  **10:3xZ (srv6, architect OK 15:20 SLT):** test friend added through the app API (allowlist +94770000996
+  pilot-friend-test@example.com, signed in by dev OTP, friend request + accept; display name "David Test": Whisper
+  dropped "Ruwan" from Kokoro every time). Call 7 then reached the card: who → "Send it to David, please." →
+  "What should I say to David Test?" → "Hello." → "I heard 'Hello.' Tell me what the message … should say" →
+  the text → card "I called her a couple of times, …" (lead-in stripped, pronouns as said) → "I just said it …"
+  → a new card. Undo: unfriend, delete the user and the allowlist row of +94770000996.
 - **For root:** call 7's clips for `scripts/pilot-call-test` (scripts/ is root's): patch kept in the risi
   report, not committed.
 - **Not fixed:** "Cancel that and say … instead" may correct the card instead of cancelling it (the old card is
