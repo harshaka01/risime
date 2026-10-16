@@ -72,7 +72,7 @@ Caddy that answers only spark's IP with a shared header secret (weaker). Plus th
 **Shakya Adikari** (Harsha's 04:0x call):
 - a) find_contact: one account (20ae82c3…), picked right ("Shakya Adhikari" → Shakya Adikari 0.93; Swan Adikari 0.67 second).
 - b) Memory is complete for him: his Official 1:1 (grp:757e3a6f…, Risi an active member) holds 459 rows. His last **texts**:
-  6 in the 3 days before the call, the latest at 16 Oct 16:29 SLT. Since then he sent only an **emoji reaction** (16:40 SLT),
+  6 in the 3 days before the call, the latest at 16 Oct 16:29 SLT. Since then he sent only an **emoji reaction** (17:10 SLT),
   which memory rightly doesn't keep. So nothing was lost; there is no later text from him on the server.
 - c) Harsha's last text in that same 1:1 was 16:35 SLT, 6 minutes after Shakya's, so `official_line` said "Not yet … hasn't
   written since". True for "did he reply", wrong for "read me his last message" (04:20 item 4 / 04:25 fault 1).
