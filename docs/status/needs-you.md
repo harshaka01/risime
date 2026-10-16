@@ -43,6 +43,12 @@ Harsha's real calls. Ready to copy to risibridge. They run in tonight's model te
 Gemma-4-31B, Nemotron 3 Nano) with first-token latency.
 **Default:** copy as is.
 
+### Q-011 · 2026-10-16 23:30 SLT · [architect] · blocking: no
+**Marketplace phase 0: started** (architect 22:05/22:10). A `marketplace` role session builds it under `marketplace/`
+only (decision 095; CLAUDE.md role row added), loopback, its own DB, plus the signed-in page shell (Keycloak client
+`risi-marketplace`, allow-list from its own data). It pauses builds during tonight's model swaps. The spark → spark2
+link proposal follows in marketplace/STATUS.md; root copies it here with any exact ufw command for Harsha.
+
 ## Answered
 - ANSWERED: "Ok C is good but after if we fail tonight" (by Harsha, 2026-10-16 18:45 SLT, in the architect chat; architect
   19:20). D-001 brain model. Local only through tonight's model tests; the escalation path is built behind a flag that is
