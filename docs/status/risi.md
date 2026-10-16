@@ -2,6 +2,49 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## P0 2026-10-16 (architect 15:35, 16:05, 19:15/19:20 SLT; Harsha's calls 15:2x and 22e016e0): tool coverage, dictation, call context, voice send
+
+Golden #9 = the 15:2x call (4:57), #10 = call 22e016e0 (5:17), #11/#12 = RisiWork's two cases; Shenika → "Nimali",
+Bhanu Senanayake → "Kasun Senaratne", Ozzy → "Kamal", Whisper's spellings → "Senamali"/"Senarali"/"Nimaly"/"Neemara".
+
+- **Tools** (`CallRisi.Decider`, one decision a turn; `confidence`, `to`, `text`, `tab` always, the rest only when used):
+  read_messages (first), message_draft (`tab` private/official), dictate, calendar_read, calendar_add, reminder_add,
+  my_promises, promises_by, list_contacts, cancel_open, confirm_open, card_status, undo_send, capabilities and
+  **unsupported** ("I can't do that yet. On a call I can …", never the nearest tool).
+- **read_messages / promises_by / my_promises** (`CallRisi.Reads`, no model call): Risi's sealed memory of Official
+  chats (`Memory.scope` + `Memory.messages`, the store `VoiceTranslate.source_text` reads); "did X reply?" = X's messages
+  after the caller's own last one in the chats where X writes; "any new messages?" = 12 h by sender; Private is never
+  read ("I can't see your Private chats", only when he says private). The ledger by owner (`Rest.open_commitments`).
+  A day-named promises question stays the read of Risi's items, under the promises line (15:35 bug 3).
+- **Dictation mode** (`CallRisi.Dictation` + the session): "the message is going to be…", "take this down", "listen
+  until I say okay", or the answer to "What should I say to X?". Pauses start **no turn** (no `replaced`), nothing is
+  said per piece; **one model check per pause** labels the new words `more | restart | end | instruction | noise` and
+  gives that piece's message words (an instruction is never text, 16:05 item 1); the text is built from the pieces
+  (each checked against the words said), never generated whole. At most one "Mm-hm." after 3 s, never twice in a row;
+  ~6 s of silence ends it (2.5 s for the answer to "What should I say?"); an announced dictation ends only on an end
+  signal or silence. The read-back is one line (a long one: its first 22 words and how many more); misheard words are
+  offered first ("Some words may be misheard. Shall I fix them? It would say: …"). Words before the read-back is
+  spoken go back to dictation.
+- **Task close** (16:05 item 2): another tool request finishes the open task.
+- **Call context** (16:05 items 3–4, bug B): work/official/office/private/home/the chat/the group are never a name;
+  "her/him" = the person in focus; find_contact's near ties go to the pinned recipient (a correction pins it) or this
+  call's people unless the name heard is exactly someone else's; the chat chosen for a person ("send it to work")
+  stays for the call; a correction that gives the same card says "It's already going to …" (never the same line).
+- **Bug C**: "that is the message I want sent" ends the dictation; the Private tap line only when he asks Risi to send
+  now ("I can only draft it for your Private chat with X. Tap Send …"; with voice send: "Or say "send it to work" …").
+- **A, v1.55 §41.11** (`RisiMe.Agent.CallSend`, 96e51350, built by a sub-agent; the post's `on_behalf_of` per root's
+  585ce74c): an Official draft for a caller with voice send on → the card plus the guard (money/HR/legal/accusation/
+  deletion) in parallel; "I'll send X on Official: '…'. Send it?"; a clear yes → Risi's own `sent_for` post, "Sent."
+  only with its stored message_id, the card closed; "undo that" within 2 min; Official off → a Private card.
+- **D-001 (19:15/19:20)**: `confidence` (0–1) in the decision, logged (number only); config slot `:risi_brain` (old
+  `:risi_call_brain` still read); the decision is `local_only` (no automatic fallback); `CallRisi.Escalate` behind
+  `RISI_BRAIN_ESCALATE` (default **off**, `escalate: [model: nil, below: 0.5, daily_cap: 200]`, **no model set**);
+  escalations and the caller's corrections (recipient, cancel, card change) are `voice_call_training` rows, labels only.
+- **Gate (one command):** `cd server && MIX_ENV=test mix test --only llm_live test/risime/agent/call_risi/golden`
+  (golden calls, paraphrases per tool, the 30 shared RisiWork cases, simulated callers; each prints its decision
+  latency). `PARA_SAMPLE=<n>` (first n per tool, fixed order) and `SIM_RUNS=<n>` (first n callers, round-robin over
+  kinds, fixed seeds) shorten it for the model swap window; `GOLDEN_RECORD=1` re-records (a sampled run merges).
+
 ## P0 2026-10-16 (architect 11:45 SLT): v3 message loop fixed (Harsha's call 97edc028, 06:04Z)
 
 - **find_contact** (`RisiMe.Agent.FindContact`): the caller's friends + chat members, scored 0..1 (exact,
