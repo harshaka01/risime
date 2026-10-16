@@ -2,6 +2,30 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## P0 2026-10-16 (architect 11:45 SLT): v3 message loop fixed (Harsha's call 97edc028, 06:04Z)
+
+- **find_contact** (`RisiMe.Agent.FindContact`): the caller's friends + chat members, scored 0..1 (exact,
+  edit similarity of plain and loose forms, sound-alike key 0.8; spelled names joined; Sinhala/Tamil
+  transliterated). One clear match is used at once ("Nima Lee" → Nimali Perera); 2–3 near ones (≥ 0.6) are
+  asked once ("Did you mean A or B?"), the text kept; never "not found" at ≥ 0.6. **list_contacts** (names
+  only, max 10). The author ("given by Harsha", the caller's own name) is not the recipient.
+- **Pending task** `pending: %{task: "message", to, to_candidates, text}` in the call's dialogue; questions
+  nest in it (`awaiting` + the `question` asked); off-topic talk keeps it; cancel or its card drops it.
+- **The text:** while Risi waits for it, the caller's words are the text (only "tell her that" / "say" /
+  "just say" stripped); the model's rewording is checked softly against the whole call (contractions,
+  her ↔ you, politeness, stems; 70%); a failed check reads back and confirms ("I'll send X: '…'. Shall I put
+  it on a card?"), never asks again. "I just said it" → the caller's earlier words.
+- **Never the same question twice in a row:** the second time "I heard '…'." + a choice. A non-answer
+  ("Hello?", "Sorry?") gets that too, keeping the task. Yes / the name confirms a read-back; a name picks.
+- **Fillers:** no "One moment…" while the model decides; a tool says its own line when it starts.
+- **Gate:** golden calls 7 (this call) and 8 (the 10:15 addendum's quoted lines; the full 10:0x transcript
+  isn't in the repo) + 60 paraphrase variants (20 per task, written by Claude and reviewed) + 30 simulated
+  callers (risi-l1 plays Harsha). Live on risi-l1: golden 7/7, paraphrases 59/60 (98%), simulated callers
+  30/30 within 4 turns, 0 repeated questions. Run: `mix test --only llm_live test/risime/agent/call_risi/golden`
+  (`GOLDEN_RECORD=1` re-records; `GOLDEN_ONLY=`, `PARA_ONLY=` filter).
+- **Device test:** the pilot test account has no friends, so its drafts end in "couldn't find" (shared data
+  not changed). Call 7's script for `scripts/pilot-call-test` is for root (scripts/ is root's).
+
 ## P0 2026-10-16: Call Risi brain v3 (architect 09:40 SLT; Harsha's call 75ec8683, 03:55Z)
 
 **Flag** `RISI_CALL_BRAIN` = `off | canary | on` (+ `v3` = on, `legacy` = off), default **canary** = RISI_DEV_USERS
