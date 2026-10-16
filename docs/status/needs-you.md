@@ -31,6 +31,14 @@ Chatterbox samples resent to the Risi chat.
 needs his Keycloak sign-in).
 Sent to the Risi chat (topic `voices-try`).
 
+### Q-007 · 2026-10-16 09:50 SLT · [harsha] · blocking: no
+**Question:** the architect wants the Call Risi brain v3 decision made by "the strongest model available (commercial
+first)". There is no commercial key in `.env`, and a paid model needs your OK. Use one for that single decision per
+call turn?
+**Options:** keep risi-l1 (own model, free) / approve a commercial model (which one; key into `.env` by you).
+**Default:** risi-l1. The model is a setting, so a stronger one drops in without new code. v3 ships on risi-l1 if
+its real-call tests pass.
+
 ## Answered
 - ANSWERED: Problems (by Harsha, 2026-10-16 09:25 SLT). Question Q-003 / `hotfix11-try` (on-phone English speech). His
   09:25 SLT call: the phone sent no finished text, so the server took over after 25 s ("no_final"); the message

@@ -36,6 +36,14 @@ elif [ "$(git rev-parse --abbrev-ref HEAD)" != main ]; then
 fi
 git diff --quiet && git diff --cached --quiet || { echo "working tree not clean"; exit 1; }
 [ -n "$HOTFIX" ] || git pull -q --rebase origin main
+# Architect 2026-10-16: a release never deploys a server build older than the running one. Check before building,
+# so nothing is tagged or published (scripts/run-server refuses too, exit 3).
+CUR_RUN="$(cat "$HOME/risime-run/CURRENT" 2>/dev/null || true)"
+if [ -n "$CUR_RUN" ] && git rev-parse -q --verify "refs/tags/$CUR_RUN" >/dev/null && ! git merge-base --is-ancestor "$CUR_RUN^{commit}" HEAD; then
+  echo "STOP: HEAD lacks $(git rev-list --count "HEAD..$CUR_RUN^{commit}") commit(s) of the running $CUR_RUN: merge them first"
+  scripts/risi-notify "Release stopped before building: it lacks changes of the running server $CUR_RUN. Root will merge and rerun." --topic "release-older-$CUR_RUN" --kind p0 >/dev/null 2>&1 || true
+  exit 3
+fi
 # Every gate step has a hard timeout (default 30 min, GATE_STEP_TIMEOUT seconds); a hung step fails the release.
 STEP_T="${GATE_STEP_TIMEOUT:-1800}"
 step() { timeout -k 60 "$STEP_T" "$@" || { rc=$?; [ "$rc" -ge 124 ] && echo "GATE STEP TIMED OUT after ${STEP_T}s: $*"; return "$rc"; }; }

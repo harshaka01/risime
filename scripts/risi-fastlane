@@ -57,7 +57,9 @@ TAG="$BASE-srv$N"
 say "3/4 deploy $TAG"
 git tag -a "$TAG" -m "Risi fast lane $(git -C "$WT" log -1 --format=%h)" "$REF" && git push -q origin "$TAG" || die "tag $TAG"
 PREV="$(cat "$HOME/risime-run/CURRENT" 2>/dev/null || echo '?')"
-if ! timeout 2400 scripts/run-server "$TAG" >> "$LOG" 2>&1; then
+rc=0; timeout 2400 scripts/run-server "$TAG" >> "$LOG" 2>&1 || rc=$?
+if [ "$rc" = 3 ]; then die "deploy $TAG stopped: older than the running $PREV (merge it in first); nothing changed"; fi
+if [ "$rc" != 0 ]; then
   say "run-server failed; rolling back to $PREV"; scripts/rollback >> "$LOG" 2>&1 || true; die "deploy $TAG (rolled back to $PREV)"
 fi
 

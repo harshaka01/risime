@@ -11,7 +11,7 @@ H="$HOME/risime-run/HISTORY"; CUR="$(cat "$HOME/risime-run/CURRENT" 2>/dev/null 
 TO="${1:-$(awk '{print $2}' "$H" 2>/dev/null | grep -vxF "$CUR" | tail -1)}"
 [ -n "$TO" ] || { echo "no previous tag in $H"; exit 1; }
 echo "==> rollback $CUR -> $TO"
-scripts/run-server "$TO"
+RISI_ALLOW_OLDER=1 scripts/run-server "$TO"
 echo "Rolled back to $TO. If data must go back too, see the newest backup before the switch:"
 echo "  scripts/restore list --env dev --dest ~/risime-backups"
 echo "  (stop risime.service first; restore needs --confirm risime_dev)"

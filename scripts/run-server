@@ -28,6 +28,17 @@ if [ -n "$CUR" ] && [ "$CUR" != "$TAG" ] && [[ "$CUR" == *-srv* ]] && git rev-pa
    && git merge-base --is-ancestor "$TAG^{commit}" "$CUR^{commit}"; then
   echo "==> SKIP deploy: the running $CUR already contains $TAG (fast lane); the server stays on $CUR"; exit 0
 fi
+# Never deploy a build older than the running one (architect 2026-10-16, after the nightly.11 hotfix): every commit
+# of the running tag must be in $TAG. Otherwise stop (exit 3) and post a "Root needs you" card. scripts/rollback
+# sets RISI_ALLOW_OLDER=1 (going back is its job).
+if [ -n "$CUR" ] && [ "$CUR" != "$TAG" ] && [ "${RISI_ALLOW_OLDER:-0}" != 1 ] && git rev-parse -q --verify "refs/tags/$CUR" >/dev/null \
+   && ! git merge-base --is-ancestor "$CUR^{commit}" "$TAG^{commit}"; then
+  missing="$(git rev-list --count "$TAG^{commit}..$CUR^{commit}")"
+  echo "==> STOP: $TAG lacks $missing commit(s) of the running $CUR; the server stays on $CUR"
+  [ -x scripts/risi-notify ] && scripts/risi-notify "A deploy of $TAG was stopped: it is older than the running server $CUR ($missing change(s) missing). The server stays on $CUR. Root will merge and redeploy." \
+    --topic "deploy-older-$TAG" --kind p0 >/dev/null 2>&1 || true
+  exit 3
+fi
 RUN="$RUNROOT/$TAG"
 [ -e "$RUN/.git" ] || git worktree add -q --detach "$RUN" "$TAG"
 [ "$(git -C "$RUN" rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")" ] || { echo "$RUN is not at $TAG"; exit 1; }
