@@ -41,7 +41,13 @@ class FakeSfuSession(override val localIdentity: String, val listener: SfuListen
     val playable = HashMap<String, Boolean>()
     val camera = CopyOnWriteArrayList<Boolean>()
 
-    override suspend fun publishMic(): Boolean = true.also { micPublished = true }
+    /** Runs inside publishMic() (e.g. a packet that arrives while the microphone is being published). */
+    var duringPublishMic: ((FakeSfuSession) -> Unit)? = null
+    override suspend fun publishMic(): Boolean {
+        duringPublishMic?.invoke(this)
+        micPublished = true
+        return true
+    }
     override fun setMicMuted(muted: Boolean) { this.muted = muted }
     override suspend fun setCamera(on: Boolean): Boolean = true.also { camera += on }
     override fun setPlayable(identity: String, playable: Boolean) { this.playable[identity] = playable }
@@ -60,11 +66,12 @@ class FakeSfu : SfuConnector {
     var fail = false
     val sessions = CopyOnWriteArrayList<FakeSfuSession>()
     val connects = CopyOnWriteArrayList<SfuConnect>()
+    var duringPublishMic: ((FakeSfuSession) -> Unit)? = null
 
     override suspend fun connect(p: SfuConnect, listener: SfuListener): SfuSession {
         connects += p
         if (fail) throw IllegalStateException("unreachable")
-        return FakeSfuSession(identityOf(p.token), listener).also { sessions += it }
+        return FakeSfuSession(identityOf(p.token), listener).also { it.duringPublishMic = duringPublishMic; sessions += it }
     }
 
     companion object {

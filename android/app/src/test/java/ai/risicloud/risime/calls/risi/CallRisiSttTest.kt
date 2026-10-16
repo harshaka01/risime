@@ -301,4 +301,104 @@ class CallRisiSttTest {
         assertTrue(engines.isEmpty())
         assertTrue(s.data.isEmpty())
     }
+
+    /**
+     * Harsha's call 2026-10-16 03:55Z: Risi's worker sends `mode: "phone"` when it hears the phone's microphone track,
+     * which can be while publishMic() is still running. The session must exist by then (nightly.11 created it after).
+     */
+    @Test fun modeThatArrivesWhileTheMicIsBeingPublishedIsNotLost() = runTest {
+        val engines = mutableListOf<FakeEngine>()
+        val (m, sfu) = machine(engines)
+        sfu.duringPublishMic = { s -> s.listener.onData(CallRisiStt153.TOPIC, risi, mode) }
+        assertTrue(m.startRisi("grp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"))
+        runCurrent()
+        val s = sfu.sessions.last()
+        assertTrue(s.micPublished)
+        assertEquals(1, engines.single().starts)
+        s.room(SfuParticipant(risi, local = false, hasAudio = true, encrypted = false, cryptor = CryptorState.NONE))
+        runCurrent()
+        engines.single().events!!.final("Do I have anything to do today?", null)
+        runCurrent()
+        val (payload, topic, to) = s.data.single()
+        assertEquals(CallRisiStt153.TOPIC, topic)
+        assertEquals(listOf(risi), to)
+        assertTrue(payload.contains("\"t\":\"final\""))
+    }
+
+    // ---- confidence, endpointing, health (found on Harsha's first call) ----
+
+    /** Android gives -1 or 0.0 when the recogniser has no confidence; the worker drops conf outside 0..1. */
+    @Test fun missingConfidenceIsNullNeverMinusOneOrZero() {
+        assertNull(CallRisiSttRules.conf(null))
+        assertNull(CallRisiSttRules.conf(floatArrayOf()))
+        assertNull(CallRisiSttRules.conf(floatArrayOf(-1f)))
+        assertNull(CallRisiSttRules.conf(floatArrayOf(0f, 0.5f)))
+        assertNull(CallRisiSttRules.conf(floatArrayOf(Float.NaN)))
+        assertEquals(0.91f, CallRisiSttRules.conf(floatArrayOf(0.91f, 0.2f)))
+        assertEquals(1f, CallRisiSttRules.conf(floatArrayOf(1.5f)))
+        for (raw in listOf(-1f, 0f, Float.NaN)) {
+            val j = ProtocolJson.parseToJsonElement(CallRisiStt153.final(1, "hello", raw, false).decodeToString()) as JsonObject
+            assertTrue("$raw", j["conf"] is kotlinx.serialization.json.JsonNull)
+        }
+        val ok = ProtocolJson.parseToJsonElement(CallRisiStt153.final(1, "hello", 0.42f, false).decodeToString()) as JsonObject
+        assertEquals("0.42", ok.s("conf"))
+        // The seq is a JSON integer (the worker keeps only ints).
+        assertEquals("1", ok["seq"]!!.jsonPrimitive.content)
+        assertFalse(ok["seq"]!!.jsonPrimitive.isString)
+    }
+
+    /** 16 kHz mono PCM16 LE: [ms] of a tone at [amp], or silence. */
+    private fun tone(ms: Int, amp: Int): ByteArray {
+        val n = 16 * ms
+        val b = ByteArray(n * 2)
+        for (i in 0 until n) {
+            val v = if (amp == 0) 0 else (amp * kotlin.math.sin(i * 2 * Math.PI * 220 / 16_000)).toInt()
+            b[2 * i] = (v and 0xFF).toByte()
+            b[2 * i + 1] = ((v shr 8) and 0xFF).toByte()
+        }
+        return b
+    }
+
+    /** Feeds [b] in 10-ms frames (as the call's capture comes); true if the endpointer fired on any. */
+    private fun CallSttEndpointer.frames(b: ByteArray): Int {
+        var fired = 0
+        for (off in b.indices step 320) if (feed(b.copyOfRange(off, minOf(off + 320, b.size)))) fired++
+        return fired
+    }
+
+    @Test fun thePhoneEndsAnUtteranceAfterSpeechAndQuiet() {
+        val e = CallSttEndpointer()
+        assertEquals(0, e.frames(tone(2_000, 0))) // quiet before speech: never ends
+        assertEquals(0, e.frames(tone(800, 6_000)))
+        assertTrue(e.heardSpeech)
+        assertEquals(0, e.frames(tone(500, 0))) // a pause inside the sentence
+        assertEquals(0, e.frames(tone(300, 6_000)))
+        assertEquals(1, e.frames(tone(1_000, 0))) // ≥ 0.9 s quiet after speech: the end
+        assertEquals(0, e.frames(tone(3_000, 0))) // only once
+        assertEquals(0, e.frames(tone(500, 6_000)) + e.frames(tone(1_000, 0)))
+        // A click (< 240 ms voiced) and quiet hum under the threshold never end an utterance nor count as speech.
+        val c = CallSttEndpointer()
+        assertEquals(0, c.frames(tone(100, 6_000)) + c.frames(tone(2_000, 0)) + c.frames(tone(2_000, 150)))
+        assertFalse(c.heardSpeech)
+    }
+
+    @Test fun aRecogniserThatHearsNothingOverClearSpeechStopsWithOff() {
+        val h = CallSttHealth()
+        assertNull(h.ended(words = false, heardSpeech = true, error = 7))
+        assertEquals(CallRisiStt153.OFF_ERROR, h.ended(words = false, heardSpeech = true, error = 6))
+        // Words reset it; quiet "no speech" / "no match" (the caller is silent) never count.
+        val q = CallSttHealth()
+        assertNull(q.ended(words = false, heardSpeech = true, error = 7))
+        assertNull(q.ended(words = true, heardSpeech = true))
+        assertNull(q.ended(words = false, heardSpeech = true, error = null))
+        assertNull(q.ended(words = false, heardSpeech = false, error = 6))
+        assertNull(q.ended(words = false, heardSpeech = true, error = 7))
+        repeat(50) { assertNull(CallSttHealth().ended(words = false, heardSpeech = false, error = 6)) }
+        val quiet = CallSttHealth()
+        repeat(50) { assertNull(quiet.ended(words = false, heardSpeech = false, error = 7)) }
+        // Slow errors in a row (not only quick ones) end it too.
+        val e = CallSttHealth()
+        repeat(CallSttHealth.MAX_ERRORS - 1) { assertNull(e.ended(words = false, heardSpeech = false, error = 3)) }
+        assertEquals(CallRisiStt153.OFF_ERROR, e.ended(words = false, heardSpeech = false, error = 11))
+    }
 }

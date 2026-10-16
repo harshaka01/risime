@@ -59,7 +59,8 @@ object CallRisiStt153 {
         put("t", T_FINAL)
         put("seq", seq)
         put("text", text.take(MAX_TEXT))
-        val c = conf?.takeIf { !it.isNaN() && it >= 0f }?.coerceAtMost(1f)
+        // -1 and 0.0 are what recognisers report when they give no confidence: `null`, never a "low" 0.
+        val c = conf?.takeIf { !it.isNaN() && it > 0f }?.coerceAtMost(1f)
         if (c == null) put("conf", JsonNull) else put("conf", Math.round(c * 1000.0) / 1000.0)
         put("lang", LANG_EN)
         if (duringRisi) put("during_risi", true)

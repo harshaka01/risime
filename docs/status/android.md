@@ -1,5 +1,32 @@
 # Android status — 0.2 nightlies
 
+## §41.10 fix after Harsha's first real call (16 Oct, call 75ec8683; READY for the next APK)
+Server log: `stt=phone` at 03:55:29.848Z, then `stt=server (no_final)` at 03:55:54: 3 clear utterances, no `final`,
+no `off`. Causes found in the nightly.11 app (not reproducible on redroid: no RecognitionService):
+1. **`mode` lost (likely the whole failure).** The worker sends `mode: "phone"` once, when it hears the phone's
+   microphone track (`track_subscribed` → `caller_joined` → `stt_mode`). The app created its §41.10 session only after
+   `publishMic()` returned, and dropped `risi.stt` packets while it was null (`c.stt?.onData`). A `mode` arriving during
+   the publish was lost for good: no recogniser, nothing sent. Now the session is created as soon as the room is
+   connected (`GroupCallMachine.startRisi`, before `publishMic`).
+2. **Writer stuck on a full pipe.** The audio writer wrote to the recogniser's pipe with blocking writes and the app kept
+   the read end open; once the recogniser stopped reading (after a result), the writer blocked forever, every later
+   utterance got no audio, ended in "no speech" (which never sends `off`). Now the write end is non-blocking
+   (`O_NONBLOCK`, chunks dropped and counted when the recogniser isn't reading) and is closed only by the writer thread.
+3. **No endpointing guarantee with `EXTRA_AUDIO_SOURCE`.** The phone now ends each utterance itself (speech, then 0.9 s
+   of quiet: `stopListening` + end of stream; `CallSttEndpointer`), plus a 4-s "never answered" cancel.
+4. **Silent failure.** `off` (`CallSttHealth`) when: no audio from the call's capture in 6 s (`unavailable`); 2
+   utterances in a row with clear speech but no words (`error`); 6 recogniser errors in a row, slow ones too (`error`).
+5. **conf 0.0.** A recogniser without scores gives -1 or 0.0; 0.0 went out as `"conf": 0.0` (the server would answer
+   "Sorry, I didn't catch that." to every sentence). Now `null` for ≤ 0.
+- Logcat (tag `RisiMe`, never text): `risi stt: listening (utterance n)`, `ready`, and per utterance
+  `utterance n <how>; fed X ms, voiced Y ms, dropped Z ms[, words]`, `stopping (<reason>)`. Ask Harsha for
+  `adb logcat -s RisiMe` from one call if the next APK still falls back.
+- Tests: `OnDeviceCallSttTest` (Robolectric recogniser shadow: pipe at 16 kHz mono, restart after result / no match /
+  no speech, conf 0/-1 → null, fatal error → `off`, no audio → `off unavailable`, never-answering recogniser → `off`),
+  `CallRisiSttTest` (+ mode during publishMic, conf, endpointer, health). `assembleDebug testDebugUnitTest` PASS (2081).
+- Not verified: a real on-device recogniser reading `EXTRA_AUDIO_SOURCE` (Pixel 8 / Android System Intelligence) and
+  the WebRTC samples callback feeding it during a LiveKit call. First real check = Harsha's next call.
+
 ## v1.53 §41.10 Call Risi speech recognised on the phone (16 Oct 05:xx SLT; READY for the nightly.11 hotfix)
 - Branch `hotfix/nightly.11` (from v0.3.0-nightly.10): f6de06bb (+ 9b1da3d4, the six contract examples on that branch
   only). Same change on main: 94b1fa90 (merged with §41.8; PROTOCOL_VERSION 1.53).

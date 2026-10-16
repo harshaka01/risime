@@ -301,6 +301,12 @@ class GroupCallMachine(
             if (c.ended || current !== c) false else {
                 c.session = session
                 c.risiIdentity = info.risiIdentity
+                // v1.53 §41.10: the session exists from the moment the room is connected, before the microphone is
+                // published. Risi's worker sends `mode: "phone"` as soon as it hears our microphone track, which can
+                // be before publishMic() returns here; with the session created only afterwards (nightly.11), that
+                // one-time packet was dropped, the recogniser never started, and the server fell back (no_final).
+                // The session sends nothing before `mode`, and the recogniser reads only the call's own capture.
+                startStt(c, info.risiIdentity, session)
                 true
             }
         }
@@ -323,7 +329,6 @@ class GroupCallMachine(
                     leave(x, CallNotice.RISI_NO_ANSWER)
                 }
             }
-            startStt(c, info.risiIdentity, session)
             refresh(c)
         }
         // §41.3: the durable line (no `call_offer`, no ring, no `call_member`).
@@ -805,8 +810,9 @@ class GroupCallMachine(
     }
 
     /**
-     * Under the lock, once the Call Risi is up (connected, microphone published): v1.53 §41.10's session. Its packets go
-     * out in order, reliable, to Risi's identity only, and only while this is still the current, live call.
+     * Under the lock, once the Call Risi room is connected (before the microphone is published): v1.53 §41.10's
+     * session. Its packets go out in order, reliable, to Risi's identity only, and only while this is still the current,
+     * live call.
      */
     private fun startStt(c: GCall, risi: String, session: SfuSession) {
         val engine = risiSttEngine ?: return
