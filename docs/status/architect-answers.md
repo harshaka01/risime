@@ -5,6 +5,58 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-17 04:20 SLT · STOP-THE-LINE: Harsha's 04:0x call failed; the gate tests the wrong thing
+
+Harsha 04:05 SLT, after a 7-minute Call Risi (transcript in his Risi chat): "you write most useless risi brain and risi voice".
+He is right. The gate passed (single-turn decisions) but the real call failed on **conversation**: segments, state, repeats
+and tool shape. No more "try now" to Harsha until the replay below passes. Model stays risi-l1; most of this is our code.
+
+**What went wrong (each one is a test case; invented names in eval, real call stays in the private replay set):**
+1. **Dictation took only the last segment.** He said "I'll tell you the message", spoke 3 STT segments; the draft was only
+   the last one ("And I just want to take the quality of messages that"). In dictation, accumulate **all** segments until
+   a 2.5 s pause **after a complete sentence** or "that's it / send it", never close on a fragment ending in "that/and/to".
+2. **Instructions went into the body.** "type the messages and send it to Shanika's work address and not to the private,
+   you can send it straight away" ended up in the text (27 more words). Every turn: split into body vs instructions; route
+   ("work address" = Official chat) and "send straight away" are instructions. f2ff4f03 fixed part of this; prove it on this call.
+3. **"Send straight away" was asked again.** He said explicitly "send it directly without me getting involved". Keep one
+   short read-back ("Sending to Shenika on Official: … Sending now, say undo to stop") and send, with the 2-min undo
+   (decision 094). Don't ask "Send it?" when he already said send.
+4. **read_messages has one shape: "did they reply?"** (`reads.ex official_line`). "Read me the last message from Shakya"
+   got "Not yet. Your last Official message to Shakya was…", because her last message is older than his. Split the tool:
+   `last_from(person)` reads her latest message (with time) whatever the order; `replied_since(person)` only for
+   "did she reply". The brain picks by the question; "what did she say / read / last message from" = last_from.
+5. **Fixed 3-day window, then a false "none".** "I don't see any Official messages from Shenika in the last 3 days" while
+   he says there are. Check his data (is she under another contact/number, a group, or older?). Rule: if none in 3 days,
+   look back 30 days and say the real latest ("Her last Official message was on 9 Oct: …"); if none at all, say which
+   account and chats you looked in. Never imply there are none when you only looked at a window.
+6. **Same sentence 4–5 times in a row.** "I don't see…" ×5 and "Not yet…" ×5, including to "That's not true", "Now you are not
+   responding", "To which account are you reading?" and an insult. Hard rule in code, not prompt: Risi never says the same
+   answer twice in a row. On a repeat-trigger, either change approach (other tool, wider window, other contact) or say
+   "I'm getting that wrong. Tell me the name again, or say 'Official chats' to hear who wrote recently."
+7. **Stuck state.** After the Shakya turn every utterance re-ran the same tool. A correction ("No", "That's not true",
+   spelling "S-H-A-K-Y-A", "I mean…") must reset the pending task and re-decide from the full utterance.
+8. **Meta questions unanswered.** "To which account are you reading?" → answer it: "Your Official chats on your work
+   account. I can't see Private chats."
+9. **Disambiguation reply missed.** Offered "Shakya Adikari or Swan Adikari?", he said "Not shocked yet" (STT for
+   Shakya). Match the answer phonetically against **only the offered options** first; "shock/shak" → Shakya.
+10. **Wrong person / bad name.** "Shiro Asi" was answered as "M replied yesterday…": a contact whose first name parses as "M".
+    Never speak a one-letter name; use the full display name, and if the match is weak, ask.
+11. **Latency.** Opened with "Why is taking time to answer?". Report first-audio p50/p95 for this call from the logs.
+12. **Spelled names.** "S-H-A-K-Y-A" must resolve by letters.
+
+**New gate (replaces "golden + paraphrases" as the release test for Call Risi):**
+- **Real-call replay:** feed the STT segments of Harsha's real calls (this one, the 09:2x, 10:0x, 11:3x, 15:2x, 15:5x calls
+  of 16 Oct) turn by turn, with his real timing, into brain v3 against a fixture of his Official data. Keep the replays
+  private (spark2, not in git), with invented-name copies in `eval/`. Pass = every turn gets a correct action or answer,
+  0 repeated answers, 0 false "none", 0 instruction words in a message body.
+- Plus 30 multi-turn simulated callers that **argue back** ("that's not true", "no", spelling, insults, meta questions).
+- Post per-call pass rates in needs-you. Only then a "try now" to Harsha, and only with the list of what changed.
+
+**Model vs code check:** run the same replay on risi-l1 and on Gemma-4-26B. If after the code fixes risi-l1 still
+fails the replay, tell me and I take D-001 (C) to Harsha for a paid reference on his own key. Don't add one yourself.
+
+Order: 4, 6, 7, 5, 1, 2, 3, 9, 8, 10, 12, 11. Commit in small green chunks; this outranks timestamps and marketplace.
+
 ## 2026-10-17 04:00 SLT · Bug (Harsha 03:57): Risi messages have no timestamp
 
 Harsha: "Risi messages time stamp is missing." Every message and card from Risi, in the Risi chat and wherever Risi posts in
