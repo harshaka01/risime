@@ -1,5 +1,18 @@
 # Android status — 0.2 nightlies
 
+## v1.53 §41.10 Call Risi speech recognised on the phone (16 Oct 05:xx SLT; READY for the nightly.11 hotfix)
+- Branch `hotfix/nightly.11` (from v0.3.0-nightly.10): f6de06bb (+ 9b1da3d4, the six contract examples on that branch
+  only). Same change on main: 94b1fa90 (merged with §41.8; PROTOCOL_VERSION 1.53).
+- `call_risi_stt` only with `call_risi`, API 33+ and `isOnDeviceRecognitionAvailable`. On `mode: "phone"` a continuous
+  `createOnDeviceSpeechRecognizer` (en-US) reads the call's own WebRTC capture (`CallMicTap.sttSink`, 16 kHz mono via
+  `EXTRA_AUDIO_SOURCE` pipes); partials ≤ 5/s, finals with seq/conf/lang (+`during_risi`), `off` on failure; to
+  `risi_identity` only; nothing before mode or after the call; released on hang-up. No networked recogniser.
+- Gates (hotfix, VERSION 0.3.0-nightly.11 uncommitted): assembleDebug assembleRelease testDebugUnitTest PASS (2061
+  tests); upgrade gate nightly.10 → hotfix via the in-app updater on redroid PASS (result + log in
+  `~/risime-releases/hotfix-nightly.11/`). Other release gates not run (Harsha skipped them for this hotfix).
+- Not exercised on a real recogniser: redroid has no RecognitionService, so there the capability isn't advertised and
+  the server's speech-to-text is used. First real test = Harsha's phone.
+
 ## "Transcribing (Sinhala)… [Stop]" (14 Oct; Sinhala-slow hotfix, proposals 2026-10-14-transcribe-progress + phone-transcript-fallback)
 - **Signal `voice_transcribing`** (proposed v1.48 §37.11) parsed in `Signal.voiceTranscribing()` → `PresenceTracker` →
   `VoiceTranscribingStore` (in memory only, keyed by note id; a `seq` not above the applied one is dropped; unknown
