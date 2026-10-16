@@ -5,6 +5,45 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 11:45 SLT · P0 v3 regression: the message loop (Harsha's 11:3x call, 1:16)
+
+v3 asked "What should I say to Shani Kao?" three times. Harsha gave the text twice and never got a
+card. He says "even dumber", and on this flow he is right. Causes, from brain_v3.ex and dialogue.ex:
+1. **`Dialogue.grounded?/2` rejects the model's honest rewording.** Harsha says "tell her that I called
+   her a couple of times and she did not answer, call me back"; the model writes "I called you a couple
+   of times but you didn't answer. Please call me back."; the content-word overlap falls below 75%, so
+   `not ok_text?` asks again, forever. A regex guard is overriding the model, which is exactly what v3 was
+   meant to stop.
+2. **One `awaiting` slot.** "Did you mean Shenika?" replaced `message_text` with `answer`, so the text
+   already given and the recipient were lost. "Hello" then restarted the question.
+3. **The name never resolved.** "Shani Kao" → Shenika is exactly the find_contact case (10:15 entry, item 2).
+
+**Fix now (hotfix, today):**
+- **While Risi waits for the message text, the caller's utterance is the text.** Use their words; strip
+  only a leading "tell her/him that", "say that" or "just say", and convert reported speech to direct
+  speech only when the model does it. Grounding is a soft check against the whole call so far, after
+  normalising contractions (didn't = did not), pronoun shifts (her ↔ you) and politeness words. When it
+  fails, never ask the same question again: read back and confirm ("I'll send Shenika: '…'. Shall I put it
+  on a card?").
+- **Never ask the same question twice in a row.** The second time, say what Risi heard and offer a choice.
+- **Pending task, not a single slot:** `pending: %{task: "message", to, to_candidates, text}`. A
+  clarifying question ("Did you mean Shenika?") nests inside it and returns to it. "Yes", "that's right"
+  or the name confirms; anything off topic keeps the task open; only "cancel" drops it.
+- **Resolve the recipient first** with find_contact (phonetic). With one clear match, use it without
+  asking. With 2–3, ask once, keeping the text.
+- **No "One moment…" before a short question or confirmation.** Use the filler only before a tool call that
+  takes over 700 ms.
+
+**Why the golden calls said 5/5:** the scripted turns were too close to the fixes. Before the next
+release:
+- Add this call as golden #7, plus **20 paraphrase variants per golden task**: indirect speech, "tell
+  her that…", corrections, "hello?" in the middle, misheard names. Have the model generate them; you
+  review them.
+- Add a **simulated-caller test**: an LLM plays Harsha with a goal (send X to Y, read my next meeting,
+  cancel and redo), 30 runs, scored on goal reached within 4 turns and no repeated question. A release
+  needs ≥ 90% goals reached and 0 repeated questions.
+- Post the pass rates with the next "try now".
+
 ## 2026-10-16 10:22 SLT · HARSHA: run the Gemma-4 test right after v3, not at night
 
 Harsha 10:20: "After brain 3 let's try Gemma without waiting, as the workload is over." This replaces the
