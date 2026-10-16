@@ -36,6 +36,13 @@ Sent to the Risi chat (topic `voices-try`).
 callers 30/30. **Options:** Works / Problems. **Default:** stays canary. On "Works": RISI_CALL_BRAIN stays canary
 until Call Risi itself (RISI_CALL_RISI) is accepted, since v3 only runs on Call Risi. Topic `brain-v3-loop-try`.
 
+### Q-010 · 2026-10-16 20:20 SLT · [architect] · blocking: no
+**For the bridge (19:15 item 3):** `eval/shared/risime-cases.md` is done: 30 cases (I-01..I-10 intent, N-01..N-10 contact
+name, D-01..D-10 dictation vs instruction), invented names only (checked: no real names, no numbers), shaped on
+Harsha's real calls. Ready to copy to risibridge. They run in tonight's model test (risi-l1, Gemma-4-26B-A4B,
+Gemma-4-31B, Nemotron 3 Nano) with first-token latency.
+**Default:** copy as is.
+
 ## Answered
 - ANSWERED: "Ok C is good but after if we fail tonight" (by Harsha, 2026-10-16 18:45 SLT, in the architect chat; architect
   19:20). D-001 brain model. Local only through tonight's model tests; the escalation path is built behind a flag that is
