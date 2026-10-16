@@ -49,7 +49,7 @@
     "gemma4-31b-fp8": {
       "repo": "RedHatAI/gemma-4-31B-it-FP8-block",
       "disk_gb": 33.3,
-      "mem_gb": 37,
+      "mem_gb": 45,
       "args": [
         "--limit-mm-per-prompt",
         "{\"image\": 0, \"audio\": 0}",
@@ -63,7 +63,7 @@
       "_doc": "NVIDIA Nemotron 3 Nano (NemotronHForCausalLM, 31.6B total / 3.2B active), NVFP4 via hf_quant_config.json (vLLM auto-picks quant method modelopt_fp4; do not pass --quantization). NEVER --trust-remote-code: vLLM has a native nemotron_h model, the repo .py files must not run. Thinking off via enable_thinking=false (vLLM nemotron_v3 reasoning parser honours it). Tool parser: vLLM 0.29 has no 'nemotron' parser; qwen3_coder is NVIDIA's documented one for Nano 3. Swap share = weights 19.3 + 3 GB.",
       "repo": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
       "disk_gb": 19.3,
-      "mem_gb": 19.5,
+      "mem_gb": 30,
       "args": [
         "--reasoning-parser",
         "nemotron_v3",
@@ -123,21 +123,39 @@
   "asr": {
     "whisper-small-sinhala": {
       "repo": "SinhaSpeech/whisper-small-sinhala-v6-e6-run11-best",
-      "mem_gb": 6, "args": ["--max-model-len", "448", "--max-num-batched-tokens", "2048"],
+      "mem_gb": 6,
+      "args": [
+        "--max-model-len",
+        "448",
+        "--max-num-batched-tokens",
+        "2048"
+      ],
       "langs": [
         "si"
       ]
     },
     "whisper-large-v3-sinhala": {
       "repo": "kasunw/whisper-large-v3-sinhala",
-      "mem_gb": 10, "args": ["--max-model-len", "448", "--max-num-batched-tokens", "2048"],
+      "mem_gb": 10,
+      "args": [
+        "--max-model-len",
+        "448",
+        "--max-num-batched-tokens",
+        "2048"
+      ],
       "langs": [
         "si"
       ]
     },
     "tamil-asr-qwen3": {
       "repo": "lemuralabs/tamil-asr-qwen3",
-      "mem_gb": 9, "args": ["--max-model-len", "4096", "--max-num-batched-tokens", "4096"],
+      "mem_gb": 9,
+      "args": [
+        "--max-model-len",
+        "4096",
+        "--max-num-batched-tokens",
+        "4096"
+      ],
       "langs": [
         "ta"
       ]
