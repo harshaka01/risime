@@ -192,9 +192,10 @@ defmodule RisiMe.Agent.Turn do
     # P0 2026-10-15: a Call Risi voice turn hands its own schedule range (the call's follow-up
     # topic: "on the 18th?" after a calendar question); every other request classifies its text.
     # Call Risi brain v3: a call hands a message whose recipient and text are the caller's own
-    # words (`__send`): the turn drafts exactly that, no model writes it.
+    # words (`:call_send`, an atom key: no JSON envelope can carry it): the turn drafts exactly
+    # that, no model writes it.
     intent =
-      case {env["__schedule"], env["__intent"], env["__send"]} do
+      case {env["__schedule"], env["__intent"], env[:call_send]} do
         {_, _, %{"to" => to, "text" => t}} when is_binary(to) and is_binary(t) ->
           :send_message
 
@@ -279,7 +280,7 @@ defmodule RisiMe.Agent.Turn do
 
     result =
       cond do
-        intent == :send_message -> forced_send(st, ctx, env["__send"])
+        intent == :send_message -> forced_send(st, ctx, env[:call_send])
         clarified -> resolve_clarify(st, ctx, clarified)
         schedule -> forced_read(st, ctx)
         intent == :risi_items -> forced_items(st, ctx)

@@ -2,6 +2,41 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## P0 2026-10-16: Call Risi brain v3 (architect 09:40 SLT; Harsha's call 75ec8683, 03:55Z)
+
+**Flag** `RISI_CALL_BRAIN` = `off | canary | on` (+ `v3` = on, `legacy` = off), default **canary** = RISI_DEV_USERS
+(Harsha + the pilot test account). Legacy brain unchanged, and it answers any turn whose decision fails.
+
+- **A, one model decision per turn** (`CallRisi.Decider`, model = `config :risime, :risi_call_brain, model:`,
+  default risi-l1; greedy, JSON schema, no retries, 8 s): the last 12 turns, the open state, now + zone, the
+  tools → `{tool, action, cancel_open, request, say, text, to}`. Learning log task `voice_call_decision`
+  (prompt hash + tool/action only, never words). Measured on risi-l1: 1.2–2.1 s a decision.
+- **B, dialogue state** (`CallRisi.Dialogue`, per call in the session): the open card (message / calendar /
+  reminder, live only while its row is `pending`) and what Risi waits for (message text, recipient, day, an
+  answer). Message slots {to, text}: no text → "What should I say to <name>?"; a text the model gave is
+  drafted only when the caller's words carry it (75% of content words: "Hi Shenika, how are you" fails).
+  The draft goes to the §25 turn as `:call_send` (an atom key: no JSON envelope can carry it) =
+  the `send_message` step itself, no model call. Read back: "Here's your message to X: "…". Tap Send on the
+  card in your Risi chat to send it, or tell me what to change." A voice yes never sends (§41.9).
+  "Cancel that" = `Writes.cancel_request/2` (the Cancel tap; silent `confirm_update` state `cancelled` for a
+  risi_items device: shows "Closed"; **root: add `cancelled` to §34.2's states**), "cancel that and …" runs the
+  new request too.
+- **C, fragments:** a cut-off utterance (dangling word, comma, no final stop from Whisper) waits 1.2 s; the next
+  words merge (the session restarts the turn with both); words said while a tool works restart it with all the
+  words (v3 never decides a fragment alone; legacy's regex merge stays legacy-only).
+- **D, fillers:** "One moment…" after 700 ms of deciding; the calendar line only after a calendar tool.
+  Not pre-rendered (that is the voice worker, not touched).
+- **E, echo:** an unclear utterance says Sorry only for clear speech (≥ 700 ms, not over Risi's voice, ≥ 1.5 s
+  after Risi went quiet); else silence (server and phone STT paths).
+- **F, claim guard:** the model's claiming sentences are dropped (logged `call_v3`); message cards get
+  message wording everywhere (`ClaimGuard.honest`, `WriteTruth.card_line/status_line`: Send, never "Tap Add").
+- **Gate:** `test/risime/agent/call_risi/golden/` = calls 1, 2, 3, 5 and 6 (this one), turn by turn; recorded
+  decisions in plain mix test, `mix test --only llm_live test/risime/agent/call_risi/golden` live (GOLDEN_RECORD=1
+  re-records). Live risi-l1: 5/5 calls, 0 turn failures. Call 6 is in eval/sets/call-risi (brain v3).
+- **Agent design:** owner = the Voice agent (call brain); learns from the learning-log decision rows and every
+  bad call as a golden file (L1); measured by the golden calls (live pass rate) + live acceptance; AOA because
+  understanding a spoken dialogue is reasoning, not exactness (dates, cards and sends stay deterministic tools).
+
 ## P0 2026-10-16: v1.53 §41.10 server half (phone speech-to-text), srv16 (8848634b)
 
 - `call_risi_stt` kept only with `call_risi`; `CallRisi.PhoneStt` + Session: phone mode only after the worker

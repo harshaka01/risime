@@ -568,7 +568,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       # that (no model writes the text).
       |> then(fn e ->
         case range do
-          {:send, to, body} -> Map.put(e, "__send", %{"to" => to, "text" => body})
+          {:send, to, body} -> Map.put(e, :call_send, %{"to" => to, "text" => body})
           _ -> e
         end
       end)

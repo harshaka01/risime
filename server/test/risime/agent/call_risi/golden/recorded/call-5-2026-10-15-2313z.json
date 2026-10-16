@@ -9,7 +9,7 @@
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1331
+    "ms": 1332
   },
   "do i have anything to do today?": {
     "decision": {
@@ -21,7 +21,7 @@
       "to": "",
       "tool": "promises_read"
     },
-    "ms": 1738
+    "ms": 1500
   },
   "good morning.": {
     "decision": {
@@ -33,7 +33,7 @@
       "to": "",
       "tool": "none"
     },
-    "ms": 1337
+    "ms": 1345
   },
   "yeah.": {
     "decision": {
@@ -45,6 +45,6 @@
       "to": "",
       "tool": "none"
     },
-    "ms": 1493
+    "ms": 1508
   }
 }

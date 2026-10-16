@@ -231,7 +231,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
 
       intent =
         cond do
-          is_map(env["__send"]) -> {:send, env["__send"]}
+          is_map(env[:call_send]) -> {:send, env[:call_send]}
           is_map(env["__schedule"]) -> {:schedule_read, env["__schedule"]}
           env["__intent"] == "risi_items" -> :risi_items
           true -> RisiMe.Agent.ScheduleIntent.classify(text, ~D[2026-10-15])
@@ -535,7 +535,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     low = String.downcase(said)
     tag = "t#{utt}"
     run = List.last(runs)
-    send_env = Enum.find_value(runs, & &1["__send"])
+    send_env = Enum.find_value(runs, & &1[:call_send])
 
     [
       cond do

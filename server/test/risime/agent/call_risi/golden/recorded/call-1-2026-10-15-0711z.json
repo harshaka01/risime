@@ -9,7 +9,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1484
+    "ms": 1474
   },
   "do you have anything on the 18th?": {
     "decision": {
@@ -21,7 +21,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1510
+    "ms": 1497
   },
   "give me the entire week… tell me the important": {
     "decision": {
@@ -33,7 +33,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1608
+    "ms": 1602
   },
   "what can you do?": {
     "decision": {
@@ -45,7 +45,7 @@
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1633
+    "ms": 1376
   },
   "why can't you get the calendar information?": {
     "decision": {
@@ -57,6 +57,6 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1518
+    "ms": 1528
   }
 }

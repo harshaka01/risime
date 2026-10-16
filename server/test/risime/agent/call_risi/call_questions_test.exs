@@ -300,8 +300,12 @@ defmodule RisiMe.Agent.CallRisi.CallQuestionsTest do
   end
 
   test "the Call Risi question set" do
-    cases = @set |> File.read!() |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
+    all = @set |> File.read!() |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
+
+    # Brain v3's calls (`"brain": "v3"`) run as golden calls (call_risi/golden): the model decides.
+    cases = Enum.reject(all, &(&1["brain"] == "v3"))
     assert length(cases) >= 50
+    assert Enum.any?(all, &(&1["id"] == "harsha-2026-10-16-call-6"))
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call-2"))
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call"))
     assert Enum.any?(cases, &(&1["id"] == "harsha-2026-10-15-call-3"))
