@@ -10,7 +10,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1369
+      "ms": 1412
     },
     "nima lee.": {
       "decision": {
@@ -22,7 +22,7 @@
         "to": "Nima Lee",
         "tool": "message_draft"
       },
-      "ms": 1533
+      "ms": 1570
     },
     "tell her that i'm running ten minutes late.": {
       "decision": {
@@ -34,7 +34,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1466
+      "ms": 1505
     }
   },
   "para-message-steps-02": {
@@ -48,7 +48,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1203
+      "ms": 1211
     },
     "ruvan.": {
       "decision": {
@@ -60,7 +60,7 @@
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1401
+      "ms": 1413
     },
     "say that the car is ready for pickup.": {
       "decision": {
@@ -72,7 +72,7 @@
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1421
+      "ms": 1425
     }
   },
   "para-message-steps-03": {
@@ -86,7 +86,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1538
+      "ms": 1544
     },
     "send a text to nimaali.": {
       "decision": {
@@ -98,7 +98,7 @@
         "to": "Nimaali",
         "tool": "message_draft"
       },
-      "ms": 1275
+      "ms": 1287
     }
   },
   "para-message-steps-04": {
@@ -112,7 +112,7 @@
         "to": "Nee Mali",
         "tool": "message_draft"
       },
-      "ms": 1277
+      "ms": 1279
     },
     "just say happy birthday and see you tonight.": {
       "decision": {
@@ -120,11 +120,11 @@
         "cancel_open": false,
         "request": "",
         "say": "",
-        "text": "happy birthday and see you tonight.",
+        "text": "Happy birthday and see you tonight.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1467
+      "ms": 1608
     }
   },
   "para-message-steps-05": {
@@ -138,7 +138,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1255
+      "ms": 1372
     },
     "tell him the meeting starts at three.": {
       "decision": {
@@ -150,7 +150,7 @@
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1454
+      "ms": 1477
     }
   },
   "para-message-steps-06": {
@@ -164,7 +164,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1210
+      "ms": 1232
     },
     "tell her i'll call her after lunch.": {
       "decision": {
@@ -176,7 +176,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1467
+      "ms": 1496
     },
     "to n-i-m-a-l-i.": {
       "decision": {
@@ -188,7 +188,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1547
+      "ms": 1550
     }
   },
   "para-message-steps-07": {
@@ -202,7 +202,7 @@
         "to": "Nimalee",
         "tool": "message_draft"
       },
-      "ms": 1291
+      "ms": 1319
     },
     "tell her that i missed her call and i will call back soon.": {
       "decision": {
@@ -214,7 +214,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1543
+      "ms": 1548
     }
   },
   "para-message-steps-08": {
@@ -240,7 +240,7 @@
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1402
+      "ms": 1414
     }
   },
   "para-message-steps-09": {
@@ -254,7 +254,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1277
+      "ms": 1302
     },
     "the message is: can we meet tomorrow morning?": {
       "decision": {
@@ -266,7 +266,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1438
+      "ms": 1460
     }
   },
   "para-message-steps-10": {
@@ -280,7 +280,7 @@
         "to": "Nimally",
         "tool": "message_draft"
       },
-      "ms": 1273
+      "ms": 1282
     },
     "tell her that she should bring the laptop charger.": {
       "decision": {
@@ -292,7 +292,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1519
+      "ms": 1539
     }
   },
   "para-message-steps-11": {
@@ -318,7 +318,7 @@
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1483
+      "ms": 1532
     }
   },
   "para-message-steps-12": {
@@ -332,7 +332,7 @@
         "to": "Nimaali",
         "tool": "message_draft"
       },
-      "ms": 1529
+      "ms": 1567
     },
     "send a message on a private chat.": {
       "decision": {
@@ -344,7 +344,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1199
+      "ms": 1241
     },
     "tell her i called a couple of times but she didn't pick up.": {
       "decision": {
@@ -356,7 +356,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1571
+      "ms": 1597
     }
   },
   "para-message-steps-13": {
@@ -370,7 +370,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1335
+      "ms": 1353
     },
     "tell her the train is delayed by half an hour.": {
       "decision": {
@@ -382,7 +382,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1492
+      "ms": 1537
     }
   },
   "para-message-steps-14": {
@@ -396,7 +396,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1196
+      "ms": 1209
     },
     "it's for ruwan.": {
       "decision": {
@@ -408,7 +408,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1354
+      "ms": 1366
     },
     "tell him to bring the keys.": {
       "decision": {
@@ -420,7 +420,7 @@
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1422
+      "ms": 1572
     }
   },
   "para-message-steps-15": {
@@ -434,7 +434,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1271
+      "ms": 1460
     },
     "um, tell her that dinner is at eight tonight.": {
       "decision": {
@@ -446,7 +446,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1478
+      "ms": 1639
     }
   },
   "para-message-steps-16": {
@@ -460,7 +460,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1197
+      "ms": 1228
     },
     "let her know i'm on my way.": {
       "decision": {
@@ -472,7 +472,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1502
+      "ms": 1530
     },
     "nimali perera.": {
       "decision": {
@@ -484,7 +484,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1613
+      "ms": 1651
     }
   },
   "para-message-steps-17": {
@@ -498,7 +498,7 @@
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1442
+      "ms": 1475
     },
     "text kamal for me.": {
       "decision": {
@@ -510,7 +510,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1253
+      "ms": 1293
     }
   },
   "para-message-steps-18": {
@@ -524,7 +524,7 @@
         "to": "Nee Mali",
         "tool": "message_draft"
       },
-      "ms": 1276
+      "ms": 1309
     },
     "tell her that i can't make it today, sorry.": {
       "decision": {
@@ -536,7 +536,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1494
+      "ms": 1515
     }
   },
   "para-message-steps-19": {
@@ -550,7 +550,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1195
+      "ms": 1218
     },
     "nimalee.": {
       "decision": {
@@ -562,7 +562,7 @@
         "to": "Nimalee",
         "tool": "message_draft"
       },
-      "ms": 1416
+      "ms": 1449
     },
     "say good luck with the exam.": {
       "decision": {
@@ -574,7 +574,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1473
+      "ms": 1466
     }
   },
   "para-message-steps-20": {
@@ -588,7 +588,7 @@
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1253
+      "ms": 1259
     },
     "tell him i'll be home by seven.": {
       "decision": {
@@ -600,7 +600,7 @@
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1414
+      "ms": 1429
     }
   }
 }

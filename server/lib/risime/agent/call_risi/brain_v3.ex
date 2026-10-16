@@ -487,13 +487,16 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   # Asks `q` (the open state waits for its answer), but never the same question twice in a row:
   # the second time Risi says what it heard and offers a choice.
   defp ask(ctx, d, q, awaiting) do
-    awaiting = Map.put(awaiting, :question, q)
-    d2 = %{d | awaiting: awaiting}
+    prev = d.awaiting || %{}
 
-    line =
-      if repeat?(d, q),
-        do: Dialogue.heard_line(ctx[:heard] || "", d2),
-        else: q
+    tries =
+      if prev[:slot] == awaiting.slot and (prev[:base] == q or repeat?(d, q)),
+        do: (prev[:tries] || 0) + 1,
+        else: 0
+
+    d2 = %{d | awaiting: Map.merge(awaiting, %{question: q, base: q, tries: tries})}
+    line = if tries == 0, do: q, else: Dialogue.retry_line(d2, ctx[:heard] || "", tries)
+    d2 = put_in(d2.awaiting.question, line)
 
     report(ctx, {:dialogue, d2})
     Brain.say_text(ctx, line)

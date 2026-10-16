@@ -99,6 +99,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
             {why, code} -> {"", {why, code}}
           end
 
+        {heard, outcome} = unsure_name(ctx, r, heard, outcome)
+
         report(ctx, {:heard, outcome})
         text = String.trim(prefix <> " " <> heard)
         report(ctx, {:stt, %{text: text, lang: r.language, model: r.model, ms: ms}})
@@ -537,6 +539,28 @@ defmodule RisiMe.Agent.CallRisi.Brain do
         report(ctx, {:done, %{status: :model_failed, request_id: nil}})
     end
   end
+
+  # Brain v3 (device test of call 7): a name said alone ("Ruwan.") is what Whisper is least sure
+  # of, and an unsure utterance was dropped. While Risi waits for who a message is for, outside
+  # its echo window, unsure words that match one of the caller's people are kept.
+  defp unsure_name(ctx, %{text: t}, "", {:unclear, _} = outcome) when is_binary(t) do
+    awaiting = (Map.get(ctx, :dialogue) || %{})[:awaiting] || %{}
+    words = String.trim(t)
+
+    with true <- Map.get(ctx, :v3?) == true,
+         true <- awaiting[:slot] in ~w(message_to message_pick),
+         true <- words != "" and length(String.split(words)) <= 4,
+         true <- Hearing.clear_speech?(Map.put(ctx, :speech_ms, 60_000)),
+         people = RisiMe.Agent.FindContact.people(ctx.user_id),
+         d when d != :none <-
+           RisiMe.Agent.FindContact.decide(RisiMe.Agent.FindContact.find(words, people)) do
+      {words, :ok}
+    else
+      _ -> {"", outcome}
+    end
+  end
+
+  defp unsure_name(_ctx, _r, heard, outcome), do: {heard, outcome}
 
   ## A tool route: the filler at once, then the Risi chat's own turn (§25), spoken from its results.
 

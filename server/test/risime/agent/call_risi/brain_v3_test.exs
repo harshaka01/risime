@@ -756,4 +756,52 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     utter(pid, 1, "Tell me 10 names in my contacts.")
     assert said(pid, 1) == "Here are 2 of your contacts: Nimali Perera and Ruwan Silva."
   end
+
+  test "a name Whisper is unsure of, said when Risi asked who: kept when it is one of their people" do
+    Application.put_env(:risime, :risi_contacts, fn _ -> [{"u1", "Nimali Perera"}] end)
+    pid = call!()
+
+    script(%{
+      "Send a message." => %{"tool" => "message_draft", "action" => "tool"},
+      "Nimali." => %{"tool" => "message_draft", "action" => "tool", "to" => "Nimali"}
+    })
+
+    utter(pid, 1, "Send a message.")
+    assert said(pid, 1) == "Who should I send it to?"
+    # Outside Risi's echo window.
+    Process.sleep(2_500)
+    utter(pid, 2, "unclear:Nimali.", 500)
+    assert said(pid, 2) == "What should I say to Nimali Perera?"
+  end
+
+  test "the device call: text given while Risi asks who: held, and never the same question twice" do
+    pid = call!()
+    t2 = "Tell her that I called her a couple of times."
+    t3 = "I just said it to you."
+
+    script(%{
+      "So can you send the message to her?" => %{
+        "tool" => "message_draft",
+        "action" => "tool",
+        "to" => "her"
+      },
+      t2 => %{
+        "tool" => "message_draft",
+        "action" => "tool",
+        "text" => "I called you a couple of times."
+      },
+      t3 => %{"tool" => "message_draft", "action" => "tool"}
+    })
+
+    utter(pid, 1, "So can you send the message to her?")
+    assert said(pid, 1) == "Who should I send it to?"
+    utter(pid, 2, t2)
+
+    assert said(pid, 2) ==
+             ~s(I have your message: "I called you a couple of times." Who is it for?)
+
+    utter(pid, 3, t3)
+    assert said(pid, 3) == "I still need the person's name. Say it or spell it, or say cancel."
+    refute_received {:turn_run, _}
+  end
 end

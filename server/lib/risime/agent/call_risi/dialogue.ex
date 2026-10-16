@@ -207,10 +207,51 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   What Risi says instead of asking the same question twice in a row (architect 11:45): what it
   heard and a choice.
   """
-  def heard_line(heard, d) do
-    h = heard |> to_string() |> String.trim() |> String.slice(0, 120)
-    lead = if h == "", do: "Sorry, I didn't get that. ", else: "I heard \"#{h}\". "
-    lead <> choice(d)
+  def heard_line(heard, d), do: heard_lead(heard) <> choice(d)
+
+  defp heard_lead(heard) do
+    words = heard |> to_string() |> String.split()
+
+    case words do
+      [] ->
+        "Sorry, I didn't get that. "
+
+      _ when length(words) > 10 ->
+        "I heard " <> quoted(Enum.join(Enum.take(words, 8), " ") <> "…") <> " "
+
+      _ ->
+        "I heard " <> quoted(Enum.join(words, " ")) <> " "
+    end
+  end
+
+  @doc """
+  What Risi says when it would ask the same thing again (`tries` = 1, 2, …): never the same
+  question twice in a row. The first retry says what Risi heard (or the message it holds) and
+  offers a choice; later ones say what is still missing, with no question.
+  """
+  def retry_line(d, heard, tries)
+
+  def retry_line(%{awaiting: %{slot: "message_to"}, pending: %{text: t}}, _heard, 1)
+      when is_binary(t),
+      do: "I have your message: #{quoted(short(t))} Who is it for?"
+
+  def retry_line(%{awaiting: %{slot: "message_to"}}, heard, 1),
+    do: heard_lead(heard) <> "Who is the message for? You can also spell the name."
+
+  def retry_line(%{awaiting: %{slot: "message_to"}}, _heard, _),
+    do: "I still need the person's name. Say it or spell it, or say cancel."
+
+  def retry_line(%{awaiting: %{slot: "message_text", to: to}}, _heard, n) when n >= 2,
+    do: "I still need the words of the message to #{to}. Say them, or say cancel."
+
+  def retry_line(%{awaiting: %{slot: "message_pick", options: os}}, _heard, n) when n >= 2,
+    do: "Please say one of the names: #{or_names(os)}. Or say cancel."
+
+  def retry_line(d, heard, _), do: heard_line(heard, d)
+
+  defp short(t) do
+    w = String.split(t)
+    if length(w) > 14, do: Enum.join(Enum.take(w, 12), " ") <> "…", else: t
   end
 
   defp choice(%{awaiting: %{slot: "message_text", to: to}}),
@@ -228,7 +269,7 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   defp choice(%{awaiting: %{slot: "day"}}),
     do: "Tell me the day, like today or Friday, or say cancel."
 
-  defp choice(_), do: "Could you say it another way, or say cancel?"
+  defp choice(_), do: "Please say it another way, or say cancel."
 
   @doc "\"A or B\" / \"A, B or C\"."
   def or_names([one]), do: one
@@ -241,7 +282,8 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   def confirm_line(to, text), do: "I'll send #{to}: #{quoted(text)} Shall I put it on a card?"
 
   # "\"Call me.\"" / "\"Call me\".": one full stop, never ".\".".
-  defp quoted(text) do
+  @doc false
+  def quoted(text) do
     t = String.trim(text)
     if Regex.match?(~r/[.?!]$/u, t), do: "\"#{t}\"", else: "\"#{t}\"."
   end
