@@ -1,5 +1,24 @@
 # Android status — 0.2 nightlies
 
+## P0 calls (architect 16 Oct 11:50, Harsha 11:42; READY for the hotfix APK)
+**Shenika's phone (from server data, read-only):** Android device, app v0.3.0-nightly.11, push token registered,
+caps include `calls`; the device row has no model or Android version (the server doesn't store them). Every call push
+to her was accepted by FCM (`push: kind=call ... result=ok`, high-priority data message, 93–505 ms) and her app woke
+and answered within 0.06–2.2 s, so FCM and the wake-up work. But for each ring at 05:32:06, 05:47:22, 05:47:38,
+05:47:54 and 05:49:13 UTC her phone sent exactly one signal and Harsha's phone sent a durable message 140–360 ms later
+(the automatic `call_end busy`): her phone answered **call_busy** and never rang. It still held the previous call
+(05:32:33, which Harsha's side left at 05:38:26 without a `call_end` reaching her): her phone kept trickling ICE for that
+call at 05:42:37. So the cause is the same as bug 2: a stale call that the busy rule never checked.
+**Fix:** self-heal before busy / "already in a call" (`CallStateMachine.staleReason`: a new offer from the same peer
+device, no received audio for 20 s, a setup past its watchdog; `GroupCallMachine`: no room session after setup);
+one `CallManager.endCall(reason)` + `releasePlatform` on every end; a cellular call (Telecom hold, or the audio mode
+MODE_IN_COMMUNICATION → MODE_IN_CALL during a connected call; no READ_PHONE_STATE) ends the call as "Call ended:
+phone call" and tells the peer; muted Calls channel row + in-app Fix card; one-tap full-screen-intent card; FCM
+downgrade warning; brand background advice once; Settings → Calls → "Test incoming call" (5 s, local, real channel).
+- Tests: `CallSelfHealTest`, `CallManagerEndCallTest`, `CallRingHealthTest`; `assembleDebug testDebugUnitTest` PASS.
+- Not verified on a device: redroid has no radio, so a cellular call can't be simulated there (no `adb emu gsm`); the
+  cellular paths are covered by JVM/Robolectric tests only. First real check = the two "try now" checks.
+
 ## §41.10 fix after Harsha's first real call (16 Oct, call 75ec8683; READY for the next APK)
 Server log: `stt=phone` at 03:55:29.848Z, then `stt=server (no_final)` at 03:55:54: 3 clear utterances, no `final`,
 no `off`. Causes found in the nightly.11 app (not reproducible on redroid: no RecognitionService):
