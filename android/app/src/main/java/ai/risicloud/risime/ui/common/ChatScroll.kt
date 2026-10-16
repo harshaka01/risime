@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import ai.risicloud.risime.data.db.MessageEntity
 import ai.risicloud.risime.ui.chat.ChatItem
+import ai.risicloud.risime.ui.chat.voiceCardsAfterTheirNote
 import ai.risicloud.risime.ui.chat.withDaySeparators
 import ai.risicloud.risime.ui.theme.Spacing
 
@@ -130,7 +131,7 @@ fun ChatMessageList(
     emptyText: String = "No messages yet. Say hello!",
     row: @Composable LazyItemScope.(items: List<ChatItem>, index: Int) -> Unit,
 ) {
-    val items = remember(messages) { withDaySeparators(messages, System.currentTimeMillis()) }
+    val items = remember(messages) { withDaySeparators(voiceCardsAfterTheirNote(messages), System.currentTimeMillis()) }
     SideEffect { scroll.onMessages(messages) }
     LaunchedEffect(scroll) {
         snapshotFlow { scroll.atBottom }.distinctUntilChanged().filter { it }.collect { scroll.unseen = 0 }

@@ -131,6 +131,35 @@ fun RisiCardRow(row: MessageEntity, r: RisiMeta, ctx: RisiCardContext, modifier:
         CallTranscriptCompareCard(row, ctx, modifier)
         return
     }
+    // Architect 14:05 item 2: the Official action-items card is one line until tapped (it never crowds the note's
+    // transcript); the owner's `action_confirm` card in the Risi chat stays open (it has the buttons).
+    if (r.kind == ai.risicloud.risime.net.RisiKinds142.ACTION_ITEMS) {
+        var expanded by androidx.compose.runtime.saveable.rememberSaveable(row.clientMsgId) { mutableStateOf(false) }
+        val card = remember(row.systemJson) { ai.risicloud.risime.net.RisiActionCard.parse(row.systemJson) }
+        if (card != null && !expanded) {
+            val me = ctx.host.me
+            val open = card.items.map { ai.risicloud.risime.data.tabs.RisiActionItems.live(it, ctx.itemViews) }
+                .count { ai.risicloud.risime.data.tabs.RisiActionItems.visible(it, ai.risicloud.risime.data.tabs.RisiActionItems.state(it, ctx.itemViews), me) }
+            Box(modifier.fillMaxWidth().padding(end = 32.dp), contentAlignment = Alignment.CenterStart) {
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    tonalElevation = 1.dp,
+                    border = BorderStroke(1.dp, OfficialAccent.copy(alpha = 0.6f)),
+                    modifier = Modifier.testTag("risi_action_items_collapsed").clickable(onClickLabel = "Show the action items") { expanded = true },
+                ) {
+                    Text(
+                        ai.risicloud.risime.data.tabs.RisiActionItems.collapsedLine(open, card.unclear),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                    )
+                }
+            }
+            return
+        }
+    }
     Box(modifier.fillMaxWidth().padding(end = 32.dp), contentAlignment = Alignment.CenterStart) {
         Surface(
             shape = MaterialTheme.shapes.medium,

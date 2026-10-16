@@ -25,6 +25,9 @@ data class RisiVoiceSettings(
     /** Read-only (absent = false): Translate and "Wrong language?" are on for this user. Never sent. */
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     @SerialName("translate_available") val translateAvailable: Boolean = false,
+    /** Proposal 2026-10-16-translate-languages (read-only, never sent): every target the server translates to; absent = en / si / ta. */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    @SerialName("translate_languages") val translateLanguages: List<String>? = null,
 )
 
 object RisiKinds141 {

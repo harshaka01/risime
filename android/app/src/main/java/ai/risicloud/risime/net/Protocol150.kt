@@ -82,8 +82,8 @@ object VoiceTranslate150 {
     fun typedTranslatable(text: String?): Boolean = !text.isNullOrBlank() && textLanguage(text) != "en"
 
     /** The "Always translate to" target for a text in [language], or null (off, or already in it). */
-    fun autoTarget(setting: String?, language: String?): String? =
-        setting?.takeIf { it in LANGUAGES && it != language }
+    fun autoTarget(setting: String?, language: String?, supported: Collection<String> = LANGUAGES): String? =
+        setting?.takeIf { it != OFF && it in supported && it != language }
 
     /**
      * §37.13.1 the `risi_action` for "Wrong language?": [voiceEnvelope] is the note's own §37.2 envelope (its `blob`,

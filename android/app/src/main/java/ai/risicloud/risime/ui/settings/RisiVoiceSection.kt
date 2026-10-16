@@ -64,21 +64,48 @@ fun RisiVoiceSection(c: AppContainer) {
         val always by c.voice.alwaysTranslate.collectAsStateWithLifecycle()
         if (available) {
             Text(ai.risicloud.risime.net.VoiceTranslate150.ALWAYS_SETTING, style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-                for (v in listOf(ai.risicloud.risime.net.VoiceTranslate150.OFF) + listOf("en", "si", "ta")) {
-                    androidx.compose.material3.FilterChip(
-                        selected = always == v, enabled = !saving,
-                        onClick = {
-                            saving = true
-                            error = null
-                            scope.launch { if (!c.voice.setAlwaysTranslate(v)) error = "Couldn't save. Try again"; saving = false }
-                        },
-                        label = { Text(if (v == ai.risicloud.risime.net.VoiceTranslate150.OFF) "Off" else ai.risicloud.risime.net.VoiceTranslate150.name(v)) },
-                        modifier = Modifier.testTag("settings_always_translate_$v"),
-                    )
-                }
+            // Architect 14:05 item 3: Off, Sinhala / English / Tamil, the current pick if it's another language, and
+            // "More languages…" (the same searchable picker as under messages).
+            val supported by c.voice.translateLanguages.collectAsStateWithLifecycle()
+            var more by remember { mutableStateOf(false) }
+            val pick: (String) -> Unit = { v ->
+                saving = true
+                error = null
+                scope.launch { if (!c.voice.setAlwaysTranslate(v)) error = "Couldn't save. Try again"; saving = false }
             }
+            AlwaysTranslateRow(always, supported, !saving, onMore = { more = true }) { v ->
+                if (v != ai.risicloud.risime.net.VoiceTranslate150.OFF) c.voice.recentTranslate.record(v)
+                pick(v)
+            }
+            if (more) ai.risicloud.risime.ui.chat.LanguagePickerDialog(null, supported, c.voice.recentTranslate, onDismiss = { more = false }) { more = false; pick(it) }
         }
         error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    }
+}
+
+/** Architect 14:05 item 3: the always-translate chips: Off, the default buttons, and the current pick when it's another language. */
+fun alwaysTranslateChips(current: String, supported: List<String>): List<String> {
+    val off = ai.risicloud.risime.net.VoiceTranslate150.OFF
+    val base = ai.risicloud.risime.voice.TranslateLanguages.DEFAULTS.filter { it in supported }
+    return listOf(off) + base + listOfNotNull(current.takeIf { it != off && it !in base })
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+internal fun AlwaysTranslateRow(always: String, supported: List<String>, enabled: Boolean, onMore: () -> Unit, onPick: (String) -> Unit) {
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        for (v in alwaysTranslateChips(always, supported)) {
+            androidx.compose.material3.FilterChip(
+                selected = always == v, enabled = enabled,
+                onClick = { onPick(v) },
+                label = { Text(if (v == ai.risicloud.risime.net.VoiceTranslate150.OFF) "Off" else ai.risicloud.risime.voice.TranslateLanguages.name(v)) },
+                modifier = Modifier.testTag("settings_always_translate_$v"),
+            )
+        }
+        if (ai.risicloud.risime.voice.TranslateLanguages.hasMore(supported)) {
+            androidx.compose.material3.TextButton(onClick = onMore, enabled = enabled, modifier = Modifier.testTag("settings_always_translate_more")) {
+                Text(ai.risicloud.risime.voice.TranslateLanguages.MORE)
+            }
+        }
     }
 }

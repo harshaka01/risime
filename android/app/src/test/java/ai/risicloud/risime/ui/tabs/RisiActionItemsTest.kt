@@ -102,6 +102,52 @@ class RisiActionItemsTest {
             jumpLine = { conv, ref -> jumps?.add("$conv:${ref.type}:${ref.turn ?: ref.messageId}") },
         )
         rule.setContent { RisiMeTheme { Column { rows.forEach { m -> RisiCardRow(m, RisiMessages.meta(m)!!, ctx) } } } }
+        expandAll()
+    }
+
+    /** Architect 14:05: the Official card starts as one line; these tests look inside it. */
+    private fun expandAll() {
+        while (rule.onAllNodes(hasTestTag("risi_action_items_collapsed")).fetchSemanticsNodes().isNotEmpty()) {
+            rule.onAllNodes(hasTestTag("risi_action_items_collapsed"))[0].performClick()
+            rule.waitForIdle()
+        }
+    }
+
+    @Test fun theOfficialCardIsOneLineUntilTapped() {
+        val ctx = risiCardContext(Host(kamal), listOf(row("envelope_risi_action_items.json")), { names[it.lowercase()] ?: "Someone" }, now, onRef = {})
+        val r = row("envelope_risi_action_items.json")
+        rule.setContent { RisiMeTheme { Column { RisiCardRow(r, RisiMessages.meta(r)!!, ctx) } } }
+        rule.onNodeWithText("action item", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Risi · ", substring = true).assertIsDisplayed()
+        assertTrue("no items drawn while collapsed", rule.onAllNodes(hasTestTag("risi_action_item")).fetchSemanticsNodes().isEmpty())
+        rule.onNodeWithTag("risi_action_items_collapsed").performClick()
+        rule.onNodeWithTag("risi_card_action_items").assertIsDisplayed()
+        assertTrue(rule.onAllNodes(hasTestTag("risi_action_item")).fetchSemanticsNodes().isNotEmpty())
+    }
+
+    @Test fun theVoiceNoteCardFollowsItsNoteNotTheMessagesInBetween() {
+        val noteId = "d1e2f3a4-a6f2-11f1-8000-0242ac120002"
+        fun text(id: String, mid: String? = null) = MessageEntity(
+            clientMsgId = id, messageId = mid ?: "e0000000-0000-4000-8000-0000000000" + id.padStart(2, '0').takeLast(2), conversationId = official, from = kamal, to = official,
+            body = id, serverTs = "2026-10-12T12:30:00.000Z", localTs = 1L, status = MessageStatus.DELIVERED.name, outgoing = false,
+        )
+        val note = text("note", noteId)
+        val between = text("between")
+        val card = row("envelope_risi_action_items_voice_note.json", id = "card")
+        val after = text("after")
+        val order = ai.risicloud.risime.ui.chat.voiceCardsAfterTheirNote(listOf(note, between, card, after)).map { it.clientMsgId }
+        assertEquals(listOf("note", "card", "between", "after"), order)
+        // Without the note on this phone the card stays where it is; other cards never move.
+        assertEquals(listOf("between", "card", "after"), ai.risicloud.risime.ui.chat.voiceCardsAfterTheirNote(listOf(between, card, after)).map { it.clientMsgId })
+        val call = row("envelope_risi_action_items.json", id = "callcard")
+        assertEquals(listOf("note", "between", "callcard"), ai.risicloud.risime.ui.chat.voiceCardsAfterTheirNote(listOf(note, between, call)).map { it.clientMsgId })
+    }
+
+    @Test fun collapsedLineCounts() {
+        assertEquals("Risi · 2 action items ›", RisiActionItems.collapsedLine(2, unclear = false))
+        assertEquals("Risi · 1 action item ›", RisiActionItems.collapsedLine(1, unclear = false))
+        assertEquals("Risi · No open action items ›", RisiActionItems.collapsedLine(0, unclear = false))
+        assertTrue(RisiActionItems.collapsedLine(3, unclear = true).contains("clearly"))
     }
 
     private fun card(file: String) = RisiActionCard.parse((ProtocolJson.parseToJsonElement(example(file)) as JsonObject)["risi"].toString())!!
@@ -248,6 +294,7 @@ class RisiActionItemsTest {
         // The card's own time is 2026-10-12T12:31Z; now is 12:40Z: within 48 h.
         val ctx = risiCardContext(host, listOf(r), { names[it.lowercase()] ?: "Someone" }, now, onRef = {})
         rule.setContent { RisiMeTheme { Column { RisiCardRow(r, RisiMessages.meta(r)!!, ctx) } } }
+        expandAll()
         rule.onNodeWithText("Unassigned", substring = true).assertIsDisplayed()
         rule.onNodeWithTag("risi_action_claim").performClick()
         assertEquals(listOf(task.itemId), host.claims)

@@ -93,16 +93,15 @@ private fun TranslateLinks(x: ChatMessaging, conversationId: String, messageId: 
     val store = x.c.voice.translations
     val states by store.states.collectAsStateWithLifecycle()
     val always by x.c.voice.alwaysTranslate.collectAsStateWithLifecycle()
+    val supported by x.c.voice.translateLanguages.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val auto = VoiceTranslate150.autoTarget(always, language)
+    val auto = VoiceTranslate150.autoTarget(always, language, supported)
     LaunchedEffect(messageId, auto) { if (auto != null) store.translate(x.c.api, conversationId, messageId, auto) }
-    Row {
-        for (l in VoiceTranslate150.choices(language)) {
-            Link(VoiceTranslate150.translateLabel(l), "translate_$l") { scope.launch { store.translate(x.c.api, conversationId, messageId, l) } }
-            Text("  ")
-        }
+    // Architect 14:05 item 3: Sinhala / English / Tamil (the text's own hidden), then "More languages…".
+    TranslateLanguageButtons(language, supported, x.c.voice.recentTranslate, label = { "Translate to " + ai.risicloud.risime.voice.TranslateLanguages.name(it) }) { l ->
+        scope.launch { store.translate(x.c.api, conversationId, messageId, l) }
     }
-    for (l in VoiceTranslate150.LANGUAGES) {
+    for (l in supported) {
         when (val s = states[store.key(messageId, l)]) {
             is VoiceTranslations.State.Working -> Text(VoiceTranslations.WORKING, style = MaterialTheme.typography.labelSmall)
             is VoiceTranslations.State.Done -> Column(Modifier.padding(top = Spacing.xxs).testTag("translation_$l")) {

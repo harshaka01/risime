@@ -1,5 +1,24 @@
 # Android status — 0.2 nightlies
 
+## Flag refresh, voice-note card, Translate picker (architect 16 Oct 14:15 + 14:05 items 2–3; READY for the APK after the call hotfix)
+- **14:15 flags:** one `AppContainer.refreshServerConfig` (`data/ServerConfigRefresh`) at app start, every ON_START
+  (30-s throttle) and every socket (re)join (forced). Audit of the cached server capabilities: `/auth/config` (tabs,
+  Risi tools/skills/ledger/events/notes, Google Calendar, call + voice transcription, action items) was refreshed on
+  every rejoin already; `/risi/voice` (`translate_available`, always-translate: Regina's bug) only in Settings → Risi;
+  `GET /me` `private_transcribe` only on the Private voice screens; `call_risi` only on the chat list / Risi chat
+  screens. All now go through the one path (`callRisiUser` is shared by both view models). Proposal
+  `contract/proposals/2026-10-16-config-changed.md` (a `config_changed` signal; the app works without it).
+- **14:05 item 2:** the Official action-items card follows its voice note (note → transcript under the bubble → card;
+  `voiceCardsAfterTheirNote`), and is one line ("Risi · 2 action items ›") until tapped. The owner's `action_confirm`
+  card in the Risi chat stays open.
+- **14:05 item 3:** Translate picker: Sinhala / English / Tamil (the text's own hidden), recents (5, this phone) on top
+  of "More languages…" (search), on transcripts, typed messages and Always translate. **"More languages…" appears only
+  when the server sends `translate_languages`** (proposal `2026-10-16-translate-languages.md`; the server accepts only
+  en/si/ta today, so offering more would only fail).
+- Tests: `ServerConfigRefreshTest`, `TranslatePickerTest`, `RisiActionItemsTest` (+ collapsed, order). Gate PASS.
+- Not verified: no screenshots (no Robolectric screenshot setup in the repo; redroid not used); a live phone picking up a
+  flag change without opening Settings (first check: Regina's phone after the APK).
+
 ## P0 calls (architect 16 Oct 11:50, Harsha 11:42; READY for the hotfix APK)
 **Shenika's phone (from server data, read-only):** Android device, app v0.3.0-nightly.11, push token registered,
 caps include `calls`; the device row has no model or Android version (the server doesn't store them). Every call push

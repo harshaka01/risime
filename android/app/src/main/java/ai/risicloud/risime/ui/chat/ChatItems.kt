@@ -52,3 +52,40 @@ fun withDaySeparators(messages: List<MessageEntity>, nowMs: Long, zone: ZoneId =
     }
     return out
 }
+
+/**
+ * Architect 2026-10-16 14:05 item 2: a voice note's Risi action-items card is drawn right after the note (whose
+ * transcript, with Translate, is drawn under the note's bubble): voice note → transcript → card, never between them
+ * and never further down. [messages] are oldest first. Without the note on the phone the card follows the note's
+ * standalone transcript line; without either it stays where it is. Nothing else moves.
+ */
+fun voiceCardsAfterTheirNote(messages: List<MessageEntity>): List<MessageEntity> {
+    val kind = "\"" + ai.risicloud.risime.net.RisiKinds142.ACTION_ITEMS + "\""
+    val cards = messages.mapNotNull { m ->
+        if (m.systemJson?.contains(kind) != true) return@mapNotNull null
+        val card = ai.risicloud.risime.net.RisiActionCard.parse(m.systemJson) ?: return@mapNotNull null
+        if (card.kind != ai.risicloud.risime.net.RisiKinds142.ACTION_ITEMS || card.source != ai.risicloud.risime.net.RisiKinds142.SOURCE_VOICE_NOTE) return@mapNotNull null
+        card.sourceRef?.messageId?.lowercase()?.let { m to it }
+    }
+    if (cards.isEmpty()) return messages
+    fun transcriptOf(r: MessageEntity): String? =
+        if (r.systemJson?.contains(ai.risicloud.risime.net.RisiKinds141.VOICE_TRANSCRIPT) != true) null
+        else ai.risicloud.risime.net.RisiVoiceTranscript.parse(r.systemJson)?.messageId?.lowercase()
+    val cardRows = cards.map { it.first }.toSet()
+    val out = messages.toMutableList()
+    for ((card, noteId) in cards) {
+        val pos = out.indexOf(card)
+        out.removeAt(pos)
+        val note = out.indexOfFirst { it.messageId?.lowercase() == noteId && transcriptOf(it) == null && it !in cardRows }
+        val anchor = if (note >= 0) note else out.indexOfLast { transcriptOf(it) == noteId }
+        if (anchor < 0) {
+            out.add(pos, card)
+            continue
+        }
+        // After the anchor, the note's (hidden) transcript rows and any card already placed for the same note.
+        var at = anchor + 1
+        while (at < out.size && (transcriptOf(out[at]) == noteId || out[at] in cardRows && cards.any { (c, n) -> c === out[at] && n == noteId })) at++
+        out.add(at, card)
+    }
+    return out
+}

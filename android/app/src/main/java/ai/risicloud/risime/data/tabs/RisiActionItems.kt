@@ -24,6 +24,17 @@ import java.util.Locale
  */
 object RisiActionItems {
     const val HEADER_ITEMS = "Risi · Action items"
+
+    /**
+     * Architect 2026-10-16 14:05 item 2: the Official card collapsed to one line ("Risi · 2 action items ›"); a tap
+     * expands it. [open] = the items it would show (unclear cards say so).
+     */
+    fun collapsedLine(open: Int, unclear: Boolean): String = when {
+        unclear -> "Risi · Couldn't hear the action items clearly ›"
+        open == 0 -> "Risi · No open action items ›"
+        open == 1 -> "Risi · 1 action item ›"
+        else -> "Risi · $open action items ›"
+    }
     const val HEADER_CONFIRM = "Risi · Your action items"
     const val UNASSIGNED = "Unassigned"
     const val OWNERS_CONFIRM = "Owners confirm theirs in their Risi chat."

@@ -94,6 +94,14 @@ class VoiceNotes(
     /** Settings → Risi → "Always translate voice notes to": off | en | si | ta. */
     val alwaysTranslate: StateFlow<String> = _alwaysTranslate
 
+    private val _translateLanguages = MutableStateFlow(TranslateLanguages.supported(prefs?.getString(KEY_LANGUAGES, null)?.split(',')))
+
+    /** Architect 14:05 item 3: the targets the server translates to (en / si / ta until it lists more). */
+    val translateLanguages: StateFlow<List<String>> = _translateLanguages
+
+    /** This user's recent Translate picks on this phone (the picker's top rows). */
+    val recentTranslate = RecentTranslateLanguages(prefs)
+
     /** The per-viewer translations (memory only, never Room). */
     val translations = VoiceTranslations()
 
@@ -139,6 +147,8 @@ class VoiceNotes(
         _transcribeMine.value = s.transcribe
         _actionItems.value = s.actionItems
         _translateAvailable.value = s.translateAvailable
+        _translateLanguages.value = TranslateLanguages.supported(s.translateLanguages)
+        runCatching { prefs?.edit()?.putString(KEY_LANGUAGES, s.translateLanguages.orEmpty().joinToString(","))?.apply() }
         val always = if (s.translateAvailable) s.alwaysTranslate ?: ai.risicloud.risime.net.VoiceTranslate150.OFF else ai.risicloud.risime.net.VoiceTranslate150.OFF
         _alwaysTranslate.value = always
         runCatching {
@@ -187,6 +197,7 @@ class VoiceNotes(
         private const val KEY_MINE = "voice_transcribe_mine"
         private const val KEY_ACTION_ITEMS = "voice_action_items"
         private const val KEY_TRANSLATE = "voice_translate_available"
+        private const val KEY_LANGUAGES = "voice_translate_languages"
         private const val KEY_ALWAYS = "voice_always_translate"
         private const val KEY_NOTE_SHOWN = "voice_official_note_shown"
     }
