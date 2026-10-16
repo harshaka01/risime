@@ -2,6 +2,18 @@
 
 Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `scripts/risi-fastlane` (root deploys).
 
+## P0 2026-10-16: v1.53 §41.10 server half (phone speech-to-text), srv16 (8848634b)
+
+- `call_risi_stt` kept only with `call_risi`; `CallRisi.PhoneStt` + Session: phone mode only after the worker
+  acks `stt_mode` (the RUNNING worker never acks, so srv16 behaves exactly as srv15 until root deploys
+  `infra/voice/risi_voice_worker.hotfix.py` = the running copy + §41.10). Finals drive turns (no server STT),
+  conf < 0.4 → one "Sorry, I didn't catch that.", `during_risi` without barge-in → no answer, `off` or 3 misses
+  (clear speech, no final in 3 s) → server STT. Phone text never logged; runs row `;src=phone` + latency.
+- `temperature_fallback=false` on Call Risi chunk transcriptions only (root's asr7 field).
+- Harness: `CALLRISI_MIN_MEM_GB=0 VOICE_WORKER=<hotfix> scripts/call-risi-harness --phone-stt` passed
+  (5 phone turns, one Sorry for conf 0.2, the phone's "tea" drove the turn, 6 speaking on/off, fallback to
+  server after 3 un-finaled utterances).
+
 ## P0 2026-10-15 (evening): Harsha's 3rd Call Risi call (14:13–14:17Z, srv10) + the claim guard
 
 **What happened (his call):** the all-day Risi Calendar item ("Free up calendar on 18th Oct whole day", stored
