@@ -5,6 +5,19 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 14:15 SLT · Bug: a flag turned on never reaches the phone until Settings is opened
+
+`RISI_VOICE_TRANSLATE` is now `on` (Harsha 14:06, verified with `Flags.raw` = "on"), but Regina still sees
+no Translate. In the app, `VoiceNotes.translateAvailable` comes from prefs and is refreshed **only** by
+`RisiVoiceSection`'s `LaunchedEffect` (Settings → Risi). A restart keeps the cached `false`.
+Fix in the next APK:
+- Call `voice.refreshSettings()` at app start, on every resume (ON_START) and after each socket
+  reconnect, the same way the other server-driven flags are refreshed.
+- Audit every server-driven capability the app caches (translate, private transcribe, call Risi, skills,
+  notes…) for the same "refreshed only on one screen" pattern, and fix them all in one place.
+- Better: push a `config_changed` event on the user channel when a flag changes, so phones refetch at once.
+Until then, the workaround for users is to open Settings once.
+
 ## 2026-10-16 14:05 SLT · Voice notes in Official chats (Harsha's photos of Regina's phone, 13:56)
 
 1. **Regina gets no Translate on transcripts.** `RISI_VOICE_TRANSLATE` is still `canary` (dev users only),
