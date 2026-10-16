@@ -5,6 +5,20 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 10:25 SLT · Model bake-off: three contenders, not two
+
+Harsha doesn't want a Risi that is only a wrapper around a paid model. Run the v3 golden calls on three
+models and post the pass rate, the p50/p95 first-token latency and the cost per call for each:
+1. risi-l1 (now).
+2. **The strongest open-weights model that fits on our own hardware** with acceptable call latency, served
+   with vLLM, for example a Qwen3 MoE or gpt-oss class model. Pick it by tool-calling quality, and say what
+   you picked and why. A download over 2 GB follows golden rule 10 (Harsha's OK, at night, rate-limited,
+   logged).
+3. One commercial model, only if Harsha approves it (Q-007).
+
+The brain code is model-agnostic. The learning log records every decision, so the own model can later be
+trained on the decisions the best model gets right.
+
 ## 2026-10-16 10:15 SLT · Brain v3 addendum: contacts, a second golden call, model bake-off
 
 Harsha's 10:0x call (2:12, still the old brain) adds failures v3 must cover. Add it as golden call #5.
