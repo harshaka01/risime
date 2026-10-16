@@ -42,7 +42,8 @@ for c in risime-tts-lab-tts-lab-1 $(docker ps --format '{{.Names}}' | grep '^ris
   if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$c" | grep -qE '^TTS_LAB_PIN=.+'; then
     echo "keep $c (Call Risi's voice is pinned there)"; continue
   fi
-  if [ -n "$(docker logs --since 15m "$c" 2>&1 | grep -iE 'POST|GET /(synth|tts|transcribe|v1)' | head -1)" ]; then
+  # The TTS lab logs no requests, only its own model lines ("tts-lab: loading …"); 16 Oct it was stopped mid-test.
+  if [ -n "$(docker logs --since 15m "$c" 2>&1 | grep -iE 'POST|GET /(synth|tts|transcribe|v1)|^tts-lab: (load|unload|synth|speak)' | head -1)" ]; then
     echo "keep $c (used in the last 15 min)"; continue
   fi
   docker stop "$c" >/dev/null && echo "stopped $c (idle, daytime)"
