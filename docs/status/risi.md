@@ -47,6 +47,11 @@ Bhanu Senanayake → "Kasun Senaratne", Ozzy → "Kamal", Whisper's spellings �
   between them → one read-back of the whole text → "Did David reply to me?" → "I don't see any Official messages from
   David in the last 3 days." (read_messages, no draft); 0 `replaced` turns. Found: an instruction during dictation was
   written to the transcript twice ("Hello." twice): fixed in 429edf41 (after srv7).
+- **Gate round 2 (root 16 Oct evening), live on risi-l1:** golden 11/11 calls; paraphrases 339/340 (every tool 20/20,
+  message-steps 19/20); shared RisiWork cases intent 10/10, contact 9/10 (N-04: "Tell Tharindi about the schedule"
+  read the calendar), dictation 10/10; simulated callers 30/30, 0 repeated questions. Decision latency: turn p50
+  1.5–1.65 s, p95 1.9–2.2 s; dictation check p50 0.7 s, p95 0.85 s. Shared D-08 is a yes now (root): "Can you just send it
+  by yourself?" after an Official "Send it?" read-back sends (unguarded text, the same ack rule; Private keeps the tap).
 - **Gate (one command):** `cd server && MIX_ENV=test mix test --only llm_live test/risime/agent/call_risi/golden`
   (golden calls, paraphrases per tool, the 30 shared RisiWork cases, simulated callers; each prints its decision
   latency). `PARA_SAMPLE=<n>` (first n per tool, fixed order) and `SIM_RUNS=<n>` (first n callers, round-robin over
