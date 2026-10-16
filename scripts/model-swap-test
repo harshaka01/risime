@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+# Daytime model swap test (architect 2026-10-16 10:22/10:25 SLT; Harsha approved, max 60 min).
+# Stops risi-l1, serves ONE candidate on the same 127.0.0.1:8100 with the same --served-model-name
+# (risi-l1) so the app server needs no change, runs the brain v3 golden calls live + a streaming
+# latency probe, then ALWAYS restores risi-l1 (trap: error, Ctrl-C, timeout).
+#   scripts/model-swap-test [--dry-run] <gemma-4-26B-A4B-FP8 | gemma-4-31B-FP8 | qwen3.8-27B-FP8>
+# --dry-run: preflight checks + how risi-l1 runs now + the docker commands it WOULD run; touches nothing.
+# Output: results/model-swap/<UTC time>-<candidate>.md and one table row on stdout.
+#
+# Refuses to start when (exit 2): a release gate / fast lane / gradle / eval job runs, ~/risime-run/.deploy.lock
+# is held, a speech eval/compare job runs or speech-guard says no-go, a Call Risi call looks active, the
+# candidate weights are missing (golden rule 10: this script never downloads), or memory would not fit.
+# Call Risi heuristic: the server log (~/risime-logs/server.log, JSON lines) has a "call risi" line (stt=/turn)
+# or a "calls:rooms start ... ok" line within the last 3 min. Calls have no end log line, so "no end" is
+# approximated by "no activity for 3 min"; a turn line appears every turn, so a live call is seen quickly.
+# Restore is the compose definition of risi-l1 (infra/docker-compose.llm.yml): the old container is only
+# stopped (`docker stop risime-llm-vllm-1`) and started again (`docker start`), never recreated or removed.
+# Time: hard cap 60 min for the whole script. A watchdog sends TERM at 50 min (restore needs ~5-8 min to load).
+set -uo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"
+DRY=0; CAND=""
+for a in "$@"; do case "$a" in --dry-run) DRY=1 ;; -*) echo "unknown flag $a"; exit 64 ;; *) CAND="$a" ;; esac; done
+
+LIVE=risime-llm-vllm-1; SERVED=risi-l1; PORT=8100; IMG=nvcr.io/nvidia/vllm:26.09-py3
+EVMODELS="${RISI_EVAL_MODELS:-$HOME/risime-eval-models}"
+FLOOR_GB=6; OVERHEAD_GB=7; KV_GB=3        # candidates.json mem_gb + KV_GB (8 seqs x 8k ctx) = --gpu-memory-utilization share
+CAP_S=3600; WATCHDOG_S=3000; HEALTH_MAX_S=1200
+case "$CAND" in
+  gemma-4-26B-A4B-FP8) KEY=gemma4-26b-a4b-fp8 ;;
+  gemma-4-31B-FP8)     KEY=gemma4-31b-fp8 ;;
+  qwen3.8-27B-FP8)     KEY=qwen38-27b-fp8 ;;
+  *) echo "usage: $0 [--dry-run] gemma-4-26B-A4B-FP8|gemma-4-31B-FP8|qwen3.8-27B-FP8"; exit 64 ;;
+esac
+DIR="$EVMODELS/$KEY"; NAME="risi-swap-$KEY"
+START=$(date +%s); STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+OUT="$REPO/results/model-swap/$STAMP-$CAND.md"
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+log() { echo "[$(date +%H:%M:%S)] $*" >&2; }
+die() { echo "model-swap-test: $*" >&2; exit "${2:-2}"; }
+avail_gb() { awk '/MemAvailable/ {printf "%.1f", $2/1048576}' /proc/meminfo; }
+total_gb() { awk '/MemTotal/ {printf "%.1f", $2/1048576}' /proc/meminfo; }
+lt() { python3 -I -c "import sys; sys.exit(0 if float('$1') < float('$2') else 1)"; }
+cand_field() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1]))["llm"][sys.argv[2]]; print(d[sys.argv[3]])' "$REPO/eval/risi/candidates.json" "$KEY" "$1"; }
+# vLLM args of the candidate from candidates.json, minus its eval-sized context flags (replaced below).
+cand_args() { python3 -I -c '
+import json,sys,shlex
+a=json.load(open(sys.argv[1]))["llm"][sys.argv[2]]["args"]; o=[]; i=0
+while i<len(a):
+    if a[i] in ("--max-model-len","--max-num-batched-tokens"): i+=2; continue
+    o.append(a[i]); i+=1
+print(" ".join(shlex.quote(x) for x in o))' "$REPO/eval/risi/candidates.json" "$KEY"; }
+LLM_API_KEY=$(grep -m1 '^LLM_API_KEY=' "$REPO/.env" 2>/dev/null | cut -d= -f2- | tr -d '"'"'" ); export LLM_API_KEY
+curl_auth() { printf 'header = "Authorization: Bearer %s"\n' "$LLM_API_KEY" | curl -sS -K - "$@"; }  # key never on a command line
+
+# ---------- 1. preflight ----------
+preflight() {
+  local bad=0 p
+  p=$(pgrep -af 'nightly-release|risi-fastlane|ui-entry-test|run-server|scripts/risi-eval|asr-eval|risi-eval-scores|speech-compare|gradlew|GradleWrapperMain|mix test' \
+      | grep -v -e shell-snapshots -e pgrep -e model-swap-test | cut -c1-110) || true
+  [ -n "$p" ] && { echo "BLOCK: a release gate / fast lane / deploy / eval / gradle / mix test job is running:"; echo "$p" | head -5; bad=1; }
+  if [ -e "$HOME/risime-run/.deploy.lock" ] && ! flock -n "$HOME/risime-run/.deploy.lock" true 2>/dev/null; then
+    echo "BLOCK: ~/risime-run/.deploy.lock is held (a deploy runs)"; bad=1; fi
+  if docker ps --format '{{.Names}}' | grep -E '^risi-eval-|^risi-swap-' | grep -q .; then
+    echo "BLOCK: an eval/swap candidate container is running: $(docker ps --format '{{.Names}}' | grep -E '^risi-eval-|^risi-swap-' | tr '\n' ' ')"; bad=1; fi
+  # speech lab/compare jobs: speech-guard's own go/no-go (pause file, live p95, memory), minus a manual pause note
+  if [ -x "$REPO/scripts/speech-guard" ]; then
+    # It guards speech EVAL jobs: a manual pause file or the host memory line only warn here (MemAvailable reads low by
+    # design); a live-speech problem (service down, live request waiting, live p95/RTF) blocks.
+    local g; g=$(python3 -I "$REPO/scripts/speech-guard" check 2>&1) || {
+      if echo "$g" | grep -qiE 'live (request|p95|rtf)|not answer|unreachable|health'; then echo "BLOCK: speech-guard: $g"; bad=1
+      else echo "WARN: speech-guard says wait (not blocking): $g"; fi; }
+  fi
+  # Call Risi activity
+  local act; act=$(python3 -I - <<'PY'
+import json,os,datetime
+p=os.path.expanduser("~/risime-logs/server.log"); now=datetime.datetime.now(datetime.timezone.utc); hit=0
+try:
+    with open(p,"rb") as f:
+        f.seek(0,2); n=f.tell(); f.seek(max(0,n-3_000_000)); lines=f.read().decode("utf8","replace").splitlines()
+    for l in lines[-6000:]:
+        if "call risi" not in l and "calls:rooms start" not in l: continue
+        try: d=json.loads(l)
+        except Exception: continue
+        m=d.get("msg","")
+        if not (m.startswith("call risi") or (m.startswith("calls:rooms start") and m.rstrip().endswith(" ok"))): continue
+        t=datetime.datetime.fromisoformat(d["time"].replace("Z","+00:00"))
+        if (now-t).total_seconds()<=180: hit+=1
+except Exception as e: print("unreadable:",e); raise SystemExit
+print(hit)
+PY
+)
+  case "$act" in
+    0) : ;;
+    unreadable*) echo "BLOCK: cannot read the server log to rule out an active call ($act)"; bad=1 ;;
+    *) echo "BLOCK: Call Risi looks active ($act log lines in the last 3 min)"; bad=1 ;;
+  esac
+  # candidate weights (rule 10: no download)
+  if [ ! -f "$DIR/config.json" ] || ! ls "$DIR"/*.safetensors >/dev/null 2>&1; then
+    echo "BLOCK: weights for $CAND not found at $DIR (config.json + *.safetensors). This script never downloads (rule 10)."; bad=1
+  elif ls "$DIR"/*.incomplete "$DIR"/.cache/huggingface/download/*.incomplete >/dev/null 2>&1; then
+    echo "BLOCK: $DIR has .incomplete files (download unfinished)"; bad=1; fi
+  # memory: after risi-l1 stops it frees about its share (0.34 x total); the candidate needs mem+KV+overhead+floor
+  local need tot; tot=$(total_gb); need=$(python3 -I -c "print($(cand_field mem_gb)+$KV_GB+$OVERHEAD_GB+$FLOOR_GB)")
+  local freed; freed=$(python3 -I -c "print(round(0.34*$tot,1))")
+  local after; after=$(python3 -I -c "print(round($(avail_gb)+$freed,1))")
+  echo "memory: MemAvailable now $(avail_gb) GB, risi-l1 would free ~$freed GB -> ~$after GB; candidate needs ~$need GB (weights+KV+$OVERHEAD_GB overhead+$FLOOR_GB floor)"
+  lt "$after" "$need" && { echo "BLOCK: not enough memory for $CAND even with risi-l1 stopped"; bad=1; }
+  docker inspect "$LIVE" >/dev/null 2>&1 || { echo "BLOCK: container $LIVE not found"; bad=1; }
+  [ -n "$LLM_API_KEY" ] || { echo "BLOCK: LLM_API_KEY missing in .env"; bad=1; }
+  return $bad
+}
+
+# ---------- 2. how risi-l1 runs now (read-only) ----------
+describe_live() {
+  echo "== risi-l1 now ($LIVE), docker inspect (env NAMES only) =="
+  docker inspect "$LIVE" --format 'status={{.State.Status}} started={{.State.StartedAt}}
+image={{.Config.Image}}
+command={{json .Config.Cmd}}
+ports={{json .HostConfig.PortBindings}}
+volumes={{json .HostConfig.Binds}}
+shm={{.HostConfig.ShmSize}} gpus={{json .HostConfig.DeviceRequests}} restart={{.HostConfig.RestartPolicy.Name}}
+compose={{index .Config.Labels "com.docker.compose.project.config_files"}} (service {{index .Config.Labels "com.docker.compose.service"}})' 2>&1 | sed 's/^/  /'
+  echo "  env names: $(docker inspect "$LIVE" --format '{{range .Config.Env}}{{println .}}{{end}}' | cut -d= -f1 | grep -E '^(VLLM_API_KEY|HF_HUB_OFFLINE|TRANSFORMERS_OFFLINE|VLLM_NO_USAGE_STATS|DO_NOT_TRACK)$' | tr '\n' ' ') (values not printed)"
+  docker inspect "$LIVE" --format '{{json .HostConfig.PortBindings}}' | grep -q '"HostIp":"127.0.0.1","HostPort":"8100"' \
+    || die "risi-l1 is not bound to 127.0.0.1:8100 as expected; refusing" 3
+  echo "  weights now: $HOME/risime-models/Qwen3.6-35B-A3B-FP8 ; candidate weights: $DIR ($(du -sh "$DIR" 2>/dev/null | cut -f1))"
+}
+
+run_candidate_cmd() {  # prints the docker run command (key by reference only)
+  local tot util; tot=$(total_gb); util=$(python3 -I -c "print(round(($(cand_field mem_gb)+$KV_GB)/$tot,3))")
+  echo "VLLM_API_KEY=\$LLM_API_KEY docker run -d --name $NAME --gpus all --shm-size 8g --ulimit memlock=-1 --ulimit stack=67108864 \\"
+  echo "  -p 127.0.0.1:$PORT:8000 -e VLLM_API_KEY -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 \\"
+  echo "  -v $DIR:/model:ro $IMG vllm serve /model --served-model-name $SERVED --host 0.0.0.0 --port 8000 \\"
+  echo "  --max-model-len 8192 --max-num-seqs 8 --gpu-memory-utilization $util --disable-uvicorn-access-log $(cand_args)"
+}
+
+if [ "$DRY" = 1 ]; then
+  echo "== DRY RUN: $CAND (dir $DIR, key $KEY) =="
+  describe_live
+  echo "== preflight =="
+  if preflight; then echo "preflight: OK, a real run would start now"; else echo "preflight: a real run would REFUSE (see BLOCK lines)"; fi
+  echo "== docker commands a real run would execute =="
+  echo "docker stop $LIVE"
+  run_candidate_cmd
+  echo "# wait: GET http://127.0.0.1:$PORT/v1/models (Bearer, timeout ${HEALTH_MAX_S}s), MemAvailable floor ${FLOOR_GB} GB sampled every 2 s"
+  echo "(cd server && mise exec -- env LLM_API_KEY=... mix test --only llm_live test/risime/agent/call_risi/golden [+ simulated*/paraphrase* suites if present])"
+  echo "# probe: 1 warm-up + 10 streaming call-style prompts, first-token p50/p95, tok/s"
+  echo "docker rm -f $NAME ; docker start $LIVE ; # wait for a chat completion from $SERVED (trap: always)"
+  echo "# results -> $OUT"
+  exit 0
+fi
+
+# ---------- real run ----------
+describe_live
+preflight || die "refusing to start (see BLOCK lines above)" 2
+mkdir -p "$REPO/results/model-swap"
+
+STOPPED=0; WATCH=""; WD=""; RESULT_STATE="not finished"
+restore() {
+  trap '' INT TERM; set +e
+  [ -n "$WATCH" ] && kill "$WATCH" 2>/dev/null; [ -n "$WD" ] && kill "$WD" 2>/dev/null
+  log "RESTORE: removing $NAME, starting $LIVE"
+  docker rm -f "$NAME" >/dev/null 2>&1
+  if [ "$STOPPED" = 1 ]; then
+    for _ in 1 2 3; do docker start "$LIVE" >/dev/null 2>&1 && break; sleep 5; done
+    local ok=0
+    for _ in $(seq 1 120); do
+      if curl_auth -m 20 -o "$TMP/r.json" -w '%{http_code}' "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' \
+         -d '{"model":"risi-l1","messages":[{"role":"user","content":"Say OK."}],"max_tokens":8}' 2>/dev/null | grep -q '^200$'; then ok=1; break; fi
+      sleep 10
+    done
+    if [ "$ok" = 1 ]; then RESTORED="risi-l1 restored and answers a chat completion"; else RESTORED="RESTORE FAILED: risi-l1 did not answer within 20 min: run 'docker start $LIVE' and check docker logs"; fi
+  else RESTORED="risi-l1 was never stopped"; fi
+  log "$RESTORED"
+  echo "" >> "$OUT"; echo "Restore: $RESTORED (total $(( $(date +%s) - START )) s)" >> "$OUT"
+  echo "| $CAND | ${GOLDEN:-n/a} | ${P50:-n/a} / ${P95:-n/a} s | ${TOKS:-n/a} | ${PEAK:-n/a} GB | $RESULT_STATE; $RESTORED |"
+}
+trap restore EXIT
+trap 'RESULT_STATE="interrupted"; exit 130' INT TERM
+( sleep "$WATCHDOG_S"; log "WATCHDOG: 50 min reached"; kill -TERM $$ ) & WD=$!
+
+{ echo "# Model swap test: $CAND"; echo; echo "- started $STAMP (UTC), candidate dir $DIR, served as \`$SERVED\` on 127.0.0.1:$PORT"; echo; } > "$OUT"
+
+log "stopping $LIVE"
+docker stop "$LIVE" >/dev/null || die "docker stop failed" 3
+STOPPED=1
+log "launching $NAME"
+CID=$(run_candidate_cmd | sed 's/ \\$//' | sed 's/^VLLM_API_KEY=\$LLM_API_KEY //' | tr '\n' ' ')
+# shellcheck disable=SC2086
+eval "VLLM_API_KEY=\"\$LLM_API_KEY\" $CID" >/dev/null || { RESULT_STATE="docker run failed"; exit 3; }
+ss -ltnH "sport = :$PORT" | awk '{print $4}' | grep -qv '^127\.0\.0\.1:' && { RESULT_STATE="port not loopback"; exit 3; }
+
+PEAKF="$TMP/peak"; avail_gb > "$PEAKF"
+( while docker inspect "$NAME" >/dev/null 2>&1; do
+    a=$(avail_gb); lt "$a" "$(cat "$PEAKF")" && echo "$a" > "$PEAKF"
+    if lt "$a" "$FLOOR_GB"; then echo "MEMORY FLOOR: $a GB < $FLOOR_GB GB; killing candidate" >&2; docker rm -f "$NAME" >/dev/null 2>&1; fi
+    sleep 2; done ) & WATCH=$!
+
+up=0
+for _ in $(seq 1 $((HEALTH_MAX_S/5))); do
+  docker inspect "$NAME" >/dev/null 2>&1 || { RESULT_STATE="candidate died while loading (memory floor or error)"; docker logs "$NAME" 2>&1 | tail -5 >/dev/null; exit 4; }
+  curl_auth -m 5 -f -o /dev/null "http://127.0.0.1:$PORT/v1/models" 2>/dev/null && { up=1; break; }
+  [ $(( $(date +%s) - START )) -gt $WATCHDOG_S ] && break
+  sleep 5
+done
+[ "$up" = 1 ] || { RESULT_STATE="candidate not healthy in time"; exit 4; }
+log "candidate healthy after $(( $(date +%s) - START )) s"
+
+# ---------- 4. golden calls + probe ----------
+cat > "$TMP/probe.py" <<'PY'
+import json, os, sys, time, urllib.request
+URL="http://127.0.0.1:8100/v1/chat/completions"; KEY=os.environ["LLM_API_KEY"]
+SYS="You are Risi on a phone call. Reply in one or two short spoken sentences. Decide the action and say it."
+P=["What is on my calendar tomorrow afternoon?","Send a message to Shenika saying I will be ten minutes late.","Remind me to call Kamal at five.",
+   "Hello, how are you, this is a text message given by Harsha.","Who is in the Rise team chat?","Add lunch with Shirazi on Friday at one.",
+   "Read me the last message from the group.","Cancel that, I did not mean it.","Tell the team the build is green.","What did I promise Kamal yesterday?"]
+def one(p):
+    body=json.dumps({"model":"risi-l1","messages":[{"role":"system","content":SYS},{"role":"user","content":p}],"max_tokens":120,"temperature":0,
+        "stream":True,"stream_options":{"include_usage":True},"chat_template_kwargs":{"enable_thinking":False}}).encode()
+    r=urllib.request.Request(URL,body,{"Content-Type":"application/json","Authorization":"Bearer "+KEY})
+    t0=time.time(); first=None; toks=None
+    with urllib.request.urlopen(r,timeout=120) as f:
+        for raw in f:
+            l=raw.decode().strip()
+            if not l.startswith("data:") or l.endswith("[DONE]"): continue
+            d=json.loads(l[5:])
+            if d.get("usage"): toks=d["usage"]["completion_tokens"]
+            for c in d.get("choices",[]):
+                dl=c.get("delta",{})
+                if first is None and (dl.get("content") or dl.get("reasoning_content") or dl.get("reasoning")): first=time.time()-t0
+    t1=time.time()-t0
+    return first, toks, t1
+one("warm up")
+fs=[]; rates=[]
+for p in P:
+    try: f,t,tt=one(p)
+    except Exception as e: print("probe error",type(e).__name__,file=sys.stderr); continue
+    if f is None: continue
+    fs.append(f)
+    if t and tt-f>0.05: rates.append((t-1)/(tt-f))
+fs.sort()
+def q(a,x): return a[min(len(a)-1,int(round(x*(len(a)-1))))] if a else float("nan")
+print(json.dumps({"n":len(fs),"p50":round(q(fs,.5),3),"p95":round(q(fs,.95),3),"toks":round(sum(rates)/len(rates),1) if rates else None}))
+PY
+log "latency probe"
+PR=$(python3 -I "$TMP/probe.py" 2>>"$TMP/probe.err" | tail -1)
+P50=$(echo "$PR" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["p50"])' 2>/dev/null)
+P95=$(echo "$PR" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["p95"])' 2>/dev/null)
+TOKS=$(echo "$PR" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["toks"])' 2>/dev/null)
+
+left=$(( CAP_S - ( $(date +%s) - START ) - 600 ))   # keep 10 min for the restore
+[ "$left" -gt 120 ] || { RESULT_STATE="no time left for the golden calls"; exit 5; }
+SUITES=(test/risime/agent/call_risi/golden)
+for d in server/test/risime/agent/call_risi/simulated* server/test/risime/agent/call_risi/paraphrase* server/test/risime/agent/simulated* server/test/risime/agent/paraphrase*; do
+  [ -e "$d" ] && SUITES+=("${d#server/}"); done
+log "golden calls live (suites: ${SUITES[*]}; limit ${left}s)"
+timeout "$left" bash -c 'cd server && ~/.local/bin/mise exec -- mix test --only llm_live "$@"' _ "${SUITES[@]}" > "$TMP/golden.txt" 2>&1
+GRC=$?
+GOLDEN=$(grep -E "^GOLDEN CALLS" "$TMP/golden.txt" | tail -1 | sed 's/GOLDEN CALLS (live [^)]*): //')
+[ -n "$GOLDEN" ] || GOLDEN="no result line (mix exit $GRC)"
+PEAK=$(python3 -I -c "print(round($(total_gb)-float(open('$PEAKF').read()),1))" 2>/dev/null)   # peak memory used = total - min MemAvailable
+{ echo "## Result"; echo
+  echo "| candidate | golden calls | first token p50 / p95 | tok/s | peak used | note |"
+  echo "|---|---|---|---|---|---|"
+  echo "| $CAND | $GOLDEN | ${P50:-n/a} / ${P95:-n/a} s | ${TOKS:-n/a} | ${PEAK:-n/a} GB (min MemAvailable $(cat "$PEAKF") GB) | probe n=${PR:-none} |"
+  echo; echo "Call-path target: first token p50 <= 0.8 s. Probe: 10 call-style prompts, streaming, max 120 tokens, temperature 0."
+  echo; echo "## Golden / live test output (failures)"; echo '```'; grep -E "GOLDEN CALLS|^  FAIL|tests?, [0-9]+ failure|Finished in" "$TMP/golden.txt" | head -60; echo '```'
+  echo; echo "## Candidate vLLM startup"; echo '```'; docker logs "$NAME" 2>&1 | grep -E "Model loading took|KV cache|Maximum concurrency" | tail -5; echo '```'
+  [ -s "$TMP/probe.err" ] && { echo; echo "Probe errors: $(wc -l < "$TMP/probe.err")"; }
+} >> "$OUT"
+[ "$GRC" = 0 ] && RESULT_STATE="golden suite passed" || RESULT_STATE="golden suite had failures (mix exit $GRC)"
+exit 0
