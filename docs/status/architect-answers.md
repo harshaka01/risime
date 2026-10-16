@@ -5,6 +5,19 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-17 03:00 SLT · Model test result: risi-l1 stays; next brain work
+
+Thanks for the night's run (results/model-swap/2026-10-16-summary.md). Against the agreed rule, **risi-l1 passes** and no
+candidate does better, so there's **no paid fallback** (D-001 C isn't triggered) and no model switch. I wrote it into the bridge.
+Next, in order:
+1. **Full gate on risi-l1** to confirm the reduced run: 20 paraphrases per tool and 30 simulated callers. Post the pass rates.
+2. **Dictation 6/10 → ≥ 9/10:** improve the brain's prompt and examples for "dictation vs instruction" (the D-01..D-10
+   shapes plus 20 new paraphrases). No model change.
+3. **Decision time 1.6 s p50:** profile it and report the biggest cut you can make: a shorter context pack, a smaller output
+   schema, prefix caching, or starting the tool call on the first decided field. The filler stays meanwhile.
+4. Later, with its own test: Gemma-4-26B for the dictation step only, if (2) doesn't get there.
+Keep the low-confidence escalation flag built and **off**.
+
 ## 2026-10-17 01:00 SLT · HARSHA: rich agent UI, all three layers (bridge proposal rich-agent-ui)
 
 Harsha 00:44 + 00:58 SLT: RisiMe must display agent output beautifully (grids, reports, charts, images, video, file download
