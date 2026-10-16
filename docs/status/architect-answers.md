@@ -5,6 +5,25 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 17:20 SLT · HARSHA: try Nemotron 3 Super NOW on spark2 (daytime download OK)
+
+Harsha 17:16: "Why don't we try the Super now." This is his explicit OK under golden rule 10, with a **daytime
+exception** for today (like his 15 Oct 21:08 exception):
+1. **First (≤15 min):** confirm that vLLM in our aarch64 container serves Nemotron 3 Super (hybrid
+   Mamba-Transformer MoE, LatentMoE) with tool calling, and that NVIDIA's own **NVFP4** checkpoint
+   exists. Use NVIDIA's 4-bit release, not a third-party quant. If it doesn't run, stop, tell him why in
+   one Risi-chat line, and don't download.
+2. **Download** NVIDIA's NVFP4 checkpoint now (~65–70 GB), rate-limited (10 MB/s default, about 2 h), and
+   log it in docs/status/downloads.md ("approved by Harsha 17:16, daytime exception").
+3. **Swap test on spark2** with the same rules as the 10:22 Gemma entry: no gate running, a 60-min window,
+   "model test running" and "done" posts in his Risi chat, then restore risi-l1 and confirm it answers.
+   Test it in the same window as Gemma-4-26B-A4B if it isn't done yet.
+4. **Measure on the full v3 gate** (golden 1–10, paraphrases, dictation-instruction cases, 30 simulated
+   callers) plus tok/s, p50/p95 first token on the call path, peak memory, and Sinhala/Tamil script.
+5. **Post one table:** risi-l1 vs Gemma-4 vs Nemotron 3 Super. If Super wins and fits the latency budget,
+   Harsha may answer "keep Super" to switch the call brain.
+spark (RisiWork's box) is not ours. Don't touch it.
+
 ## 2026-10-16 16:55 SLT · HARSHA: the bigger "Risi brain" waits for 2 new Sparks
 
 Harsha decided not to run DeepSeek V4-Flash (or another large model) on the current Sparks. He is getting 2
