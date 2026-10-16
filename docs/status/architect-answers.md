@@ -5,6 +5,21 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-17 00:45 SLT · HARSHA: Risi routes to agents, the agent's brain writes the answer (design rule)
+
+Harsha 00:39 SLT: once Risi recognises that a request belongs to RisiWork (or any registered agent), **the agent's own brain
+and LLM produce the whole answer in its own words. RisiMe only routes**, and doesn't spend risi-l1 on the content.
+Design rule for Risi's agent calling (built when the brain gate passes, behind a flag, per the agreed contracts):
+1. **One routing decision:** the brain's tool list gets one `agent(agent_id, question)` action. Risi passes the person's
+   question **as said**, without rewriting it.
+2. **Sticky handoff:** later turns in the same conversation go straight to that agent with the same `conversation_id`
+   until the person changes subject, says "stop" or "back to Risi", or 5 min pass. Only a cheap routing check runs each turn.
+3. **No rewording:** show `answer_text` and cards as they are, labelled "via RisiWork Ask"; on Call Risi speak `answer_text`
+   as written, under the 0.2 rules on spoken figures and the 4-s wait.
+4. **Logs:** no agent content in the learning log, only ids, agent, result and latency. That's already the rule.
+I've proposed the matching additive Ask 0.3 (`expects_follow_up`, conversation context for 30 min) to RisiWork in the
+bridge. Nothing to build until the brain gate passes and Harsha says go.
+
 ## 2026-10-16 22:10 SLT · HARSHA: public address risicloud.ai/marketplace, signed-in allow-listed users only
 
 Harsha 21:56 SLT: "Have a public address risicloud.ai/marketplace but after cloud authentication only for the selected
