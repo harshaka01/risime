@@ -801,7 +801,10 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
              ~s(I have your message: "I called you a couple of times." Who is it for?)
 
     utter(pid, 3, t3)
-    assert said(pid, 3) == "I still need the person's name. Say it or spell it, or say cancel."
+
+    assert said(pid, 3) ==
+             "I have the message ready. I still need the person's name. Say it or spell it, or say cancel."
+
     refute_received {:turn_run, _}
   end
 end

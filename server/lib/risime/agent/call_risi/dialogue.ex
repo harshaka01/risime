@@ -238,8 +238,14 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   def retry_line(%{awaiting: %{slot: "message_to"}}, heard, 1),
     do: heard_lead(heard) <> "Who is the message for? You can also spell the name."
 
-  def retry_line(%{awaiting: %{slot: "message_to"}}, _heard, _),
-    do: "I still need the person's name. Say it or spell it, or say cancel."
+  # Later retries alternate (never the same line twice in a row) and say the message is kept.
+  def retry_line(%{awaiting: %{slot: "message_to"}} = d, _heard, n) do
+    kept = if is_binary((d[:pending] || %{})[:text]), do: "I have the message ready. ", else: ""
+
+    if rem(n, 2) == 0,
+      do: kept <> "I still need the person's name. Say it or spell it, or say cancel.",
+      else: kept <> "Who gets it? Say \"to\" and their name, or say cancel."
+  end
 
   def retry_line(%{awaiting: %{slot: "message_text", to: to}}, _heard, n) when n >= 2,
     do: "I still need the words of the message to #{to}. Say them, or say cancel."
