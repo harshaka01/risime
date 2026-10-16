@@ -82,9 +82,16 @@ say c6f2 "receive and send a message to you."
 say c6g "No, no, no. I want to send a message to Ruwan. So you should ask what the message should be, and then I'll tell you."
 say c6h "Good morning, and I'm just testing whether you can send a message on behalf of me."
 say c6i "Cancel that."
+# Call 7 (Harsha 16 Oct 06:04Z, call 97edc028; brain v3 message loop): his words; his friend's name as "Ruwan"
+# (the test account has no friends: the draft ends in "I couldn't find Ruwan …"; shared data is not changed).
+say c7a "So can you send the message to her on a private chat?"
+say c7b "Send it to David, please."
+say c7c "Hello?"
+say c7d "Tell her that I called her a couple of times and then she did not answer. And I'll call her back or call me back."
+say c7e "I just said it to you. Just tell her that I called her a couple of times, but she did not answer, and call me back."
 say b1 "you know it will be fun, yeah I did not know I was going to promote, and I tend to come out, so do I"
 say b2 "it's fascinating, isn't it, bye bye, ready, you're on"
-for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c c5a c5b c5c c5f c6a c6b c6c c6d c6e c6f1 c6f2 c6g c6h c6i; do
+for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c c5a c5b c5c c5f c6a c6b c6c c6d c6e c6f1 c6f2 c6g c6h c6i c7a c7b c7c c7d c7e; do
   "$PY" -I -c 'import sys, wave, numpy as np
 p = sys.argv[1]
 w = wave.open(p, "rb"); prm = w.getparams(); x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16); w.close()
@@ -188,6 +195,7 @@ for n in $CALLS; do case "$n" in
   4) call 4 c4a c4b c4c ;;
   5) call 5 c5a c5b c5req n_far1 n_noise c5f n_far2 n_silence ;;
   6) call 6 c6a c6b c6c c6d c6e c6f c6g c6h c6i ;;
+  7) call 7 c7a c7b c7c c7d c7e ;;
 esac; done
 curl -s -o /dev/null "${H[@]}" -X POST "$API/auth/logout" || true
 echo "PCT DONE (out $OUT)"
