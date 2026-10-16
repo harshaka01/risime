@@ -23,8 +23,17 @@ Role created 2026-10-11 (CLAUDE.md rule 12, decision 077). Ships through `script
   callers (risi-l1 plays Harsha). Live on risi-l1: golden 7/7, paraphrases 59/60 (98%), simulated callers
   30/30 within 4 turns, 0 repeated questions. Run: `mix test --only llm_live test/risime/agent/call_risi/golden`
   (`GOLDEN_RECORD=1` re-records; `GOLDEN_ONLY=`, `PARA_ONLY=` filter).
-- **Device test:** the pilot test account has no friends, so its drafts end in "couldn't find" (shared data
-  not changed). Call 7's script for `scripts/pilot-call-test` is for root (scripts/ is root's).
+- **Device test** (`scripts/pilot-call-test`, call 7, synthetic Kokoro voice): the pilot test account has **no
+  friends** (find_contact finds nobody; shared data not changed), and Whisper loses the name from Kokoro's
+  clip ("Ruwan." dropped, "It's for Ruwan." → "It's four.", "Send it to Ruwan." → "Send it to"). On srv4 the
+  retry was one "I heard …" line three times (fixed in srv5: escalating lines; `dc46abf6` alternates later
+  ones). No "One moment…" before the questions; no question repeated. A device run that reaches a draft needs
+  a test-account friend (root/Harsha: OK to add one?) or a name Whisper gets from Kokoro.
+- **For root:** call 7's clips for `scripts/pilot-call-test` (scripts/ is root's): patch kept in the risi
+  report, not committed.
+- **Not fixed:** "Cancel that and say … instead" may correct the card instead of cancelling it (the old card is
+  superseded anyway; paraphrase calendar-cancel-12). A one-word name Whisper is unsure of is kept only when it
+  matches one of the caller's people.
 
 ## P0 2026-10-16: Call Risi brain v3 (architect 09:40 SLT; Harsha's call 75ec8683, 03:55Z)
 
