@@ -61,3 +61,12 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
   `RISI_DEV_USERS=` line in `.env`, then `systemctl --user restart risime.service`. Undo: remove that id, then restart.
 
 - 2026-10-15 ~18:00 UTC (root): `~/risime-voice/KEEP` created, so every deploy (fast lane and nightly) keeps the running Call Risi worker (the harness-tested echo-guard copy). The gapless + barge-in worker (c2e38f46) ships only after Harsha tries barge-in on a real phone. Undo: `rm ~/risime-voice/KEEP`; the next deploy then copies the worker. TTS lab container `risime-tts-lab-tts-lab-1` runs image `risime/tts-lab:2026-10-15-1` with the lab-only pause override; daytime-memory stops it when idle.
+
+## 2026-10-16 ~00:55Z: hearing hotfix (Harsha 04:52 SLT)
+- Call Risi worker: `~/risime-voice/risi_voice_worker.py` ← `infra/voice/risi_voice_worker.hotfix.py`. That file is the
+  running copy plus §41.10 phone STT, without the gapless change; KEEP stays. Undo:
+  `cp -p ~/risime-voice/risi_voice_worker.py.prev-2026-10-16 ~/risime-voice/risi_voice_worker.py` (new calls only).
+- Speech service: image asr7 (form field `temperature_fallback`), recreated; healthy in 22 s; whisper-smoke PASS.
+  Undo: set the image back to `…-asr6` in `infra/docker-compose.whisper.yml`, then
+  `docker compose --env-file .env -f infra/docker-compose.whisper.yml up -d whisper`.
+- Server: srv15 (hearing gate), then srv16 (§41.10 server half, temperature_fallback=false on call chunks).
