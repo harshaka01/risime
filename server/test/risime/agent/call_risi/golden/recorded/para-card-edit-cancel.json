@@ -9,7 +9,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1399
+      "ms": 1448
     },
     "tell nimali i'll be late.": {
       "decision": {
@@ -20,7 +20,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1463
+      "ms": 1221
     }
   },
   "para-card-edit-cancel-02": {
@@ -33,7 +33,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1427
+      "ms": 1599
     },
     "never mind, cancel it.": {
       "decision": {
@@ -44,7 +44,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1399
+      "ms": 1425
     }
   },
   "para-card-edit-cancel-03": {
@@ -57,7 +57,7 @@
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1562
+      "ms": 1613
     },
     "tell kamal lunch is at one.": {
       "decision": {
@@ -68,7 +68,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1456
+      "ms": 1478
     }
   },
   "para-card-edit-cancel-04": {
@@ -82,18 +82,18 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1792
+      "ms": 1816
     },
     "send nimali good morning.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "tab": "private",
         "text": "Good morning",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1420
+      "ms": 1474
     }
   },
   "para-card-edit-cancel-05": {
@@ -102,12 +102,13 @@
         "action": "tool",
         "cancel_open": true,
         "confidence": 1,
+        "request": "Cancel that and say I'll be there in ten minutes instead.",
         "tab": "private",
         "text": "I'll be there in ten minutes",
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1501
+      "ms": 2155
     },
     "tell ruwan i'm on my way.": {
       "decision": {
@@ -118,7 +119,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1468
+      "ms": 1483
     }
   },
   "para-card-edit-cancel-06": {
@@ -132,7 +133,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1775
+      "ms": 1833
     },
     "tell kamal the printer is fixed.": {
       "decision": {
@@ -143,7 +144,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1423
+      "ms": 1463
     }
   },
   "para-card-edit-cancel-07": {
@@ -151,13 +152,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Message Nimali: see you on Monday.",
         "tab": "private",
         "text": "See you on Monday.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1869
+      "ms": 1602
     },
     "message nimali: see you tomorrow.": {
       "decision": {
@@ -168,7 +168,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1433
+      "ms": 1465
     }
   },
   "para-card-edit-cancel-08": {
@@ -181,7 +181,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1137
+      "ms": 1437
     },
     "tell ruwan the shop is closed.": {
       "decision": {
@@ -192,7 +192,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1424
+      "ms": 1468
     }
   },
   "para-card-edit-cancel-09": {
@@ -200,13 +200,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "The meeting moved to three. in room two",
+        "request": "The meeting moved to three in room two.",
         "tab": "private",
-        "text": "The meeting moved to three. in room two",
+        "text": "The meeting moved to three in room two.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1970
+      "ms": 1976
     },
     "tell nimali the meeting moved to three.": {
       "decision": {
@@ -217,7 +217,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1491
+      "ms": 1503
     }
   },
   "para-card-edit-cancel-10": {
@@ -231,7 +231,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1427
+      "ms": 1728
     },
     "cancel that.": {
       "decision": {
@@ -242,7 +242,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1140
+      "ms": 1433
     }
   },
   "para-card-edit-cancel-11": {
@@ -256,7 +256,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 2006
+      "ms": 2115
     },
     "put racing discussion on sunday at 9.": {
       "decision": {
@@ -268,7 +268,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1700
+      "ms": 1699
     }
   },
   "para-card-edit-cancel-12": {
@@ -282,19 +282,18 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1639
+      "ms": 1680
     },
     "never mind, cancel it.": {
       "decision": {
-        "action": "reply",
+        "action": "tool",
         "confidence": 1,
-        "say": "Okay, I've cancelled that.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1285
+      "ms": 1176
     }
   },
   "para-card-edit-cancel-13": {
@@ -308,7 +307,7 @@
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1708
+      "ms": 2012
     },
     "send kamal: i'm sick today.": {
       "decision": {
@@ -319,7 +318,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1436
+      "ms": 1456
     }
   },
   "para-card-edit-cancel-14": {
@@ -327,44 +326,49 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Tell Nimali happy birthday. Add 'see you tonight' at the end.",
+        "request": "Add 'see you tonight' at the end.",
         "tab": "private",
-        "text": "Happy birthday! See you tonight",
+        "text": "Happy birthday. See you tonight.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 2040
+      "ms": 1949
     },
     "tell nimali happy birthday.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
         "tab": "private",
-        "text": "Happy birthday!",
+        "text": "Happy birthday",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1408
+      "ms": 1432
     }
   },
   "para-card-edit-cancel-15": {
-    "dictation| >> make it call me after six.": {
+    "make it call me after six.": {
       "decision": {
-        "text": "Make it call me after six.",
-        "tool": "more"
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Message Ruwan, call me after six.",
+        "tab": "private",
+        "text": "Call me after six.",
+        "to": "Ruwan Silva",
+        "tool": "message_draft"
       },
-      "ms": 673
+      "ms": 1904
     },
     "message ruwan, call me.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "tab": "private",
         "text": "",
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1323
+      "ms": 1256
     }
   },
   "para-card-edit-cancel-16": {
@@ -377,7 +381,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1401
+      "ms": 1440
     },
     "tell kamal the train is late.": {
       "decision": {
@@ -388,7 +392,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1432
+      "ms": 1461
     }
   },
   "para-card-edit-cancel-17": {
@@ -402,7 +406,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1712
+      "ms": 1760
     },
     "tell nimali thanks for the help.": {
       "decision": {
@@ -413,7 +417,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1453
+      "ms": 1484
     }
   },
   "para-card-edit-cancel-18": {
@@ -426,18 +430,19 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1343
+      "ms": 1506
     },
     "no no, the keys are in the drawer.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "request": "Message Ruwan, the keys are in the drawer.",
+        "tab": "",
         "text": "The keys are in the drawer.",
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1566
+      "ms": 1891
     }
   },
   "para-card-edit-cancel-19": {
@@ -450,25 +455,25 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1386
+      "ms": 1424
     },
     "dictation| >> cancel.": {
       "decision": {
         "text": "",
         "tool": "instruction"
       },
-      "ms": 538
+      "ms": 559
     },
     "send a message to kamal.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
-        "tab": "private",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1226
+      "ms": 1313
     }
   },
   "para-card-edit-cancel-20": {
@@ -481,18 +486,18 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1395
+      "ms": 1436
     },
     "tell nimali i'll call later.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "tab": "private",
         "text": "I'll call later.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1189
+      "ms": 1277
     },
     "tell ruwan i'll call later instead.": {
       "decision": {
@@ -503,7 +508,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1248
+      "ms": 1556
     }
   }
 }

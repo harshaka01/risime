@@ -9,7 +9,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1338
+      "ms": 1375
     }
   },
   "para-unsupported-02": {
@@ -22,7 +22,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1346
+      "ms": 1338
     }
   },
   "para-unsupported-03": {
@@ -35,7 +35,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1264
+      "ms": 1342
     }
   },
   "para-unsupported-04": {
@@ -48,11 +48,25 @@
         "to": "Nimali",
         "tool": "read_messages"
       },
-      "ms": 1347
+      "ms": 1376
     }
   },
   "para-unsupported-05": {
     "order lunch for the team.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "I can't order lunch, but I can help you find a restaurant or add a reminder to order later.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1928
+    }
+  },
+  "para-unsupported-06": {
+    "can you phone kamal right now?": {
       "decision": {
         "action": "tool",
         "confidence": 1,
@@ -61,21 +75,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1338
-    }
-  },
-  "para-unsupported-06": {
-    "can you phone kamal right now?": {
-      "decision": {
-        "action": "reply",
-        "confidence": 1,
-        "say": "I can't make phone calls, but I can send a message to Kamal for you.",
-        "tab": "",
-        "text": "",
-        "to": "",
-        "tool": "unsupported"
-      },
-      "ms": 1837
+      "ms": 1345
     }
   },
   "para-unsupported-07": {
@@ -89,7 +89,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1824
+      "ms": 1873
     }
   },
   "para-unsupported-08": {
@@ -102,7 +102,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1311
+      "ms": 1327
     }
   },
   "para-unsupported-09": {
@@ -115,7 +115,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1303
+      "ms": 1337
     }
   },
   "para-unsupported-10": {
@@ -128,7 +128,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1300
+      "ms": 1331
     }
   },
   "para-unsupported-11": {
@@ -142,7 +142,7 @@
         "to": "Kamal",
         "tool": "read_messages"
       },
-      "ms": 1638
+      "ms": 1679
     }
   },
   "para-unsupported-12": {
@@ -155,20 +155,21 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1348
+      "ms": 1374
     }
   },
   "para-unsupported-13": {
     "can you join my zoom meeting?": {
       "decision": {
-        "action": "tool",
+        "action": "reply",
         "confidence": 1,
+        "say": "I can't join Zoom meetings, but I can help with your calendar or messages.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1301
+      "ms": 1837
     }
   },
   "para-unsupported-14": {
@@ -181,7 +182,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1429
+      "ms": 1341
     }
   },
   "para-unsupported-15": {
@@ -189,26 +190,27 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "I can't check live stock prices. Would you like me to add a reminder to check it later?",
+        "say": "I can't check live stock prices. I can help with your calendar, messages, or reminders instead.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1873
+      "ms": 1927
     }
   },
   "para-unsupported-16": {
     "buy me a train ticket to kandy.": {
       "decision": {
-        "action": "tool",
+        "action": "reply",
         "confidence": 1,
+        "say": "I can't book train tickets. I can help with your calendar, messages, or reminders instead.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1206
+      "ms": 1758
     }
   },
   "para-unsupported-17": {
@@ -221,7 +223,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1341
+      "ms": 1376
     }
   },
   "para-unsupported-18": {
@@ -234,7 +236,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1317
+      "ms": 1329
     }
   },
   "para-unsupported-19": {
@@ -247,7 +249,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1192
+      "ms": 1348
     }
   },
   "para-unsupported-20": {
@@ -255,7 +257,7 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "I can't search for hotels, but I can help with your calendar, messages, or reminders.",
+        "say": "I can't book hotels, but I can help with your calendar or messages.",
         "tab": "",
         "text": "",
         "to": "",

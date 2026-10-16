@@ -250,13 +250,9 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         %{awaiting: %{slot: slot}},
         text
       )
-      when slot in ~w(message_to message_pick message_text) and
+      when slot in ~w(message_to message_pick) and
              (a == "ask" or (a == "reply" and dec.say != "")) do
-    base = %{dec | action: "tool", tool: "message_draft", say: ""}
-
-    if slot == "message_text",
-      do: %{base | to: "", text: ""},
-      else: %{base | to: name_words(text), text: ""}
+    %{dec | action: "tool", tool: "message_draft", say: "", to: name_words(text), text: ""}
   end
 
   def in_task2(dec, _d, _text), do: dec
@@ -498,7 +494,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
     end
   end
 
-  defp tool(ctx, %{tool: "cancel_open"}, _d, _text, _lang, cancelled) do
+  defp tool(ctx, %{tool: "cancel_open"}, d, text, lang, cancelled) do
     line =
       case cancelled do
         k when k in ~w(message calendar reminder) -> Dialogue.cancelled_line(k)
@@ -507,8 +503,15 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         nil -> "There's nothing open to cancel."
       end
 
-    Brain.say_text(ctx, line)
-    done(ctx)
+    case after_cancel(text) do
+      rest when is_binary(rest) and cancelled != nil ->
+        Brain.say_text(ctx, if(cancelled == :awaiting, do: "Okay.", else: line))
+        answer_model(Map.put(ctx, :heard, rest), d, rest, lang)
+
+      _ ->
+        Brain.say_text(ctx, line)
+        done(ctx)
+    end
   end
 
   defp tool(ctx, %{tool: "message_draft"} = dec, d, text, lang, _cancelled),
@@ -690,7 +693,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
     said =
       if said == "" or no_name?(said), do: Dialogue.focus(d) || "", else: said
 
-    case said == "" || contact(said, people, d) do
+    case said == "" || contact(said, people, d, FindContact.recent(ctx.user_id)) do
       true ->
         q = "Who do you mean?"
         report(ctx, {:dialogue, %{d | awaiting: %{slot: "answer", question: q}}})
@@ -721,9 +724,9 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   # find_contact with the call's context (architect 16:05 item 4): the pinned recipient (the
   # caller corrected to them), then the people of this call, win a near tie — and a near match
   # of them wins over another person's, unless the name heard is exactly that other person's.
-  def contact(said, people, d) do
+  def contact(said, people, d, recent \\ []) do
     found = FindContact.find(said, people)
-    call = Enum.uniq(Enum.reject([d[:pinned] | d[:people] || []], &is_nil/1))
+    call = Enum.uniq(Enum.reject([d[:pinned] | d[:people] || []], &is_nil/1) ++ recent)
 
     in_call =
       Enum.find_value(call, fn name ->
@@ -733,10 +736,35 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
     exact_other? =
       Enum.any?(found, &(&1.score == 1.0 and (in_call == nil or &1.name != in_call.name)))
 
-    if in_call != nil and not exact_other?,
-      do: {:one, in_call},
-      else: FindContact.decide(found)
+    cond do
+      in_call != nil and not exact_other? ->
+        {:one, in_call}
+
+      found != [] ->
+        FindContact.decide(found) |> nearest(said, people, d, recent)
+
+      true ->
+        nearest(:none, said, people, d, recent)
+    end
   end
+
+  # Shared case N-04: "Sineka" matches nobody: "Did you mean <the person in focus>?", else the
+  # closest of the caller's people; only when they have nobody at all, :none.
+  defp nearest(:none, said, people, d, recent) do
+    focus = Dialogue.focus(d) || List.first(recent)
+
+    pick =
+      if is_binary(focus),
+        do: Enum.find(people, fn {_id, n} -> n == focus end),
+        else: FindContact.closest(said, people)
+
+    case pick do
+      {id, name} -> {:pick, [%{user_id: id, name: name, score: 0.0}]}
+      _ -> :none
+    end
+  end
+
+  defp nearest(decided, _said, _people, _d, _recent), do: decided
 
   ## Messages: a pending task {to, to_candidates, text}, never a made-up text (B, architect 11:45)
 
@@ -869,6 +897,22 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   end
 
   ## v1.55 §41.11: Risi sends an Official message itself after the read-back and a yes
+
+  # The words after a cancel at the start ("never mind, forget the message. Any new messages?"),
+  # when they are a request of their own (3 words or more); else nil.
+  defp after_cancel(text) do
+    re =
+      ~r/^\W*(?:(?:no|okay|ok|so)[,.]?\s+)*(?:(?:cancel|forget|scratch)(?:\s+(?:that|it|this|the message|the card|that message))?|never\s*mind)\b[\s,.!]*(?:(?:cancel|forget|scratch)(?:\s+(?:that|it|this|the message|the card|that message))?\b[\s,.!]*)?/iu
+
+    case Regex.run(re, text, return: :index) do
+      [{0, n} | _] ->
+        rest = text |> String.slice(n..-1//1) |> String.trim()
+        if length(String.split(rest)) >= 3, do: rest
+
+      _ ->
+        nil
+    end
+  end
 
   defp send_impl,
     do: Application.get_env(:risime, :risi_call_send_impl, RisiMe.Agent.CallSend)
@@ -1093,7 +1137,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         %{p | to: card[:to], to_candidates: []}
 
       true ->
-        case contact(said, FindContact.people(ctx.user_id), d) do
+        case contact(said, FindContact.people(ctx.user_id), d, FindContact.recent(ctx.user_id)) do
           {:one, %{name: n, user_id: id}} ->
             %{p | to: n, to_id: id, to_candidates: [], said: said}
 
@@ -1164,8 +1208,15 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
       dec.text != "" ->
         {dec.text, slot != "message_text"}
 
+      # Risi asked what to say and these words reached the model: the dictation check found
+      # them an instruction ("No, it's for Ruwan", "Who is it for again?"): never the text.
       slot == "message_text" ->
-        {Dialogue.strip_lead(text), false}
+        {p.text, false}
+
+      # "Send a message to Nimali saying thank you" with the text left out by the model: the
+      # words after "saying" are the text (the caller's own).
+      is_binary(said = Dialogue.said_text(text, p.said || p.to || dec.to)) ->
+        {said, false}
 
       Dialogue.said_already?(text) ->
         case earlier_text(ctx) do
@@ -1278,7 +1329,9 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         cancelled != nil and dec.request != "" ->
           dec.request
 
-        dec.request != "" and not ScheduleIntent.day_named?(text, today) and
+        # (The model's request names a day the caller didn't say only to answer Risi's question;
+        # else it may be a day the model made up: "at one" became "on Friday 16 October".)
+        d.awaiting != nil and dec.request != "" and not ScheduleIntent.day_named?(text, today) and
             ScheduleIntent.day_named?(dec.request, today) ->
           dec.request
 

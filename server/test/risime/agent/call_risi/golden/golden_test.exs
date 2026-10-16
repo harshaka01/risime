@@ -220,6 +220,13 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
       end
     end
 
+    defp write?(text),
+      do:
+        Regex.match?(
+          ~r/\b(?:add|make|book|schedule|put|block|set up|slot|remind|change the event)\b/i,
+          text
+        )
+
     # The card rows: `{state, tool}` by request id.
     def state(rid) do
       case :persistent_term.get({__MODULE__, :write, rid}, nil) do
@@ -272,6 +279,8 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
       intent =
         cond do
           is_map(env[:call_send]) -> {:send, env[:call_send]}
+          # A write request makes its card (the real turn's write route), never a read.
+          :persistent_term.get({__MODULE__, :cards}, false) and write?(text) -> :write
           is_map(env["__schedule"]) -> {:schedule_read, env["__schedule"]}
           env["__intent"] == "risi_items" -> :risi_items
           true -> RisiMe.Agent.ScheduleIntent.classify(text, ~D[2026-10-15])
@@ -322,10 +331,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
           :ok
 
         _ ->
-          write? =
-            Regex.match?(~r/\b(?:add|make|book|schedule|put|block|set up|slot|remind)\b/i, text)
-
-          if :persistent_term.get({__MODULE__, :cards}, false) or write? do
+          if :persistent_term.get({__MODULE__, :cards}, false) or write?(text) do
             title = if text =~ ~r/racing/i, do: "Discuss racing", else: "Appointment"
             put_state(rid, "pending", "risi_calendar_add")
 
@@ -465,6 +471,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
       :risi_claim_results,
       :risi_contacts,
       :risi_call_reads,
+      :risi_recent_contacts,
       :risi_call_send_impl,
       :risi_call_dict_pause_ms,
       :risi_call_dict_mmhm_ms,
@@ -481,6 +488,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     # find_contact: the caller's people (the fake turn drafts only to Nimali Perera).
     Application.put_env(:risime, :risi_contacts, fn _ -> Turn.people() end)
     Application.put_env(:risime, :risi_call_reads, Reads)
+    Application.put_env(:risime, :risi_recent_contacts, fn _ -> [] end)
     Application.put_env(:risime, :risi_call_send_impl, Send)
     # Dictation: a short pause check, no "Mm-hm" (its own test), silence ends after 4 s.
     Application.put_env(:risime, :risi_call_dict_pause_ms, 300)
@@ -978,7 +986,9 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
   You have one goal. Say your next words to Risi: short, natural spoken English as on a phone, \
   sometimes indirect ("tell her that…", "can you message…"), not always everything at once. \
   Never say you are an AI or a test. If Risi asks a question, answer it. If Risi did what you \
-  wanted, set "done" to true and "say" to "". Return JSON {"say": "...", "done": false}.
+  wanted, set "done" to true and "say" to "". While Risi is asking you something ("Send it?", \
+  "What should I say?", "Did you mean …?"), you are not done: answer it. Return JSON \
+  {"say": "...", "done": false}.
   """
 
   defp sim_say(goal, transcript, n, i) do

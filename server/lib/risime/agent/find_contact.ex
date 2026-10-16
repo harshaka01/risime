@@ -33,6 +33,56 @@ defmodule RisiMe.Agent.FindContact do
     _, _ -> []
   end
 
+  @doc """
+  The people of the caller's most recent chats, newest first (display names, at most `n`): the
+  Official chats Risi keeps (the messages' metadata only: who wrote in which chat, and when; never
+  the words). Tests: `config :risime, :risi_recent_contacts, fun`.
+  """
+  def recent(user_id, n \\ 3) do
+    case Application.get_env(:risime, :risi_recent_contacts) do
+      f when is_function(f, 1) -> f.(user_id)
+      _ -> recent_db(user_id, n)
+    end
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
+  end
+
+  defp recent_db(user_id, n) do
+    import Ecto.Query
+    convs = RisiMe.Agent.Memory.scope(user_id)
+
+    rows =
+      RisiMe.Repo.all(
+        from m in RisiMe.Agent.Memory.Message,
+          where: m.conversation_id in ^convs and m.from_risi == false and m.sender_id != ^user_id,
+          group_by: m.sender_id,
+          order_by: [desc: max(m.at)],
+          limit: ^n,
+          select: m.sender_id
+      )
+
+    names = Map.new(people(user_id))
+    for id <- rows, name = names[id], do: name
+  end
+
+  @doc "The one person whose name is closest to `said` (any score), or nil."
+  def closest(said, people) when is_binary(said) do
+    s = said |> spelled() |> latin() |> NameCheck.norm()
+
+    # Not every name: one that shares at least some sounds (30%).
+    with false <- s == "" or people == [],
+         {_id, name} = best <- Enum.max_by(people, fn {_id, n} -> score(s, n) end),
+         true <- score(s, name) >= 0.3 do
+      best
+    else
+      _ -> nil
+    end
+  end
+
+  def closest(_, _), do: nil
+
   @doc "Up to `max` display names (list_contacts: names only, read aloud)."
   def list(user_id, max \\ 10) do
     user_id |> people() |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> Enum.take(max)

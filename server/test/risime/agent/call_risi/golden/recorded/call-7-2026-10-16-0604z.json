@@ -4,19 +4,19 @@
       "text": "Tell her that I called her a couple of times and then she did not answer. And I'll call her back or call me back.",
       "tool": "more"
     },
-    "ms": 1082
+    "ms": 1127
   },
   "hello": {
     "decision": {
       "action": "reply",
-      "confidence": 1,
-      "say": "Hello. How can I help you?",
+      "confidence": 0.9,
+      "say": "Hello. Are you ready to send the message to Nimali?",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "none"
     },
-    "ms": 1616
+    "ms": 2006
   },
   "i just said it to you. just tell her that i called her. couple of times, but she did not answer and called me back.": {
     "decision": {
@@ -25,9 +25,9 @@
       "tab": "private",
       "text": "I called her a couple of times, but she did not answer. Please call me back.",
       "to": "Nimali Perera",
-      "tool": "confirm_open"
+      "tool": "message_draft"
     },
-    "ms": 1756
+    "ms": 1657
   },
   "nima lee.": {
     "decision": {
@@ -38,7 +38,7 @@
       "to": "Nima Lee",
       "tool": "message_draft"
     },
-    "ms": 1433
+    "ms": 1473
   },
   "so can you send the message to her on a private chat?": {
     "decision": {
@@ -49,6 +49,6 @@
       "to": "",
       "tool": "message_draft"
     },
-    "ms": 1330
+    "ms": 1351
   }
 }

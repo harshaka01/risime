@@ -10,7 +10,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1592
+      "ms": 1610
     }
   },
   "para-calendar-cancel-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1573
+      "ms": 1608
     }
   },
   "para-calendar-cancel-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1655
+      "ms": 1690
     }
   },
   "para-calendar-cancel-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1597
+      "ms": 1628
     }
   },
   "para-calendar-cancel-05": {
@@ -66,7 +66,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1638
+      "ms": 1671
     }
   },
   "para-calendar-cancel-06": {
@@ -80,7 +80,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1593
+      "ms": 1627
     }
   },
   "para-calendar-cancel-07": {
@@ -94,7 +94,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1605
+      "ms": 1637
     }
   },
   "para-calendar-cancel-08": {
@@ -108,7 +108,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1696
+      "ms": 1706
     }
   },
   "para-calendar-cancel-09": {
@@ -122,7 +122,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1597
+      "ms": 1642
     }
   },
   "para-calendar-cancel-10": {
@@ -136,7 +136,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1715
+      "ms": 1763
     }
   },
   "para-calendar-cancel-11": {
@@ -149,7 +149,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1388
+      "ms": 1427
     },
     "tell nimali good morning.": {
       "decision": {
@@ -160,7 +160,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1400
+      "ms": 1428
     }
   },
   "para-calendar-cancel-12": {
@@ -174,7 +174,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1784
+      "ms": 1652
     },
     "send nimali a message saying i'm on my way.": {
       "decision": {
@@ -185,7 +185,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1484
+      "ms": 1504
     }
   },
   "para-calendar-cancel-13": {
@@ -198,7 +198,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1399
+      "ms": 1428
     },
     "tell ruwan the meeting is at two.": {
       "decision": {
@@ -209,7 +209,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1444
+      "ms": 1479
     }
   },
   "para-calendar-cancel-14": {
@@ -218,12 +218,12 @@
         "action": "tool",
         "cancel_open": true,
         "confidence": 1,
-        "tab": "private",
+        "tab": "",
         "text": "Lunch at one",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1515
+      "ms": 1678
     },
     "message kamal: lunch at one.": {
       "decision": {
@@ -234,20 +234,20 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1423
+      "ms": 1319
     }
   },
   "para-calendar-cancel-15": {
     "can you send a message to nimali?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
-        "tab": "private",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1346
+      "ms": 1395
     },
     "cancel.": {
       "decision": {
@@ -258,14 +258,14 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1387
+      "ms": 1408
     },
     "dictation| >> cancel.": {
       "decision": {
         "text": "",
         "tool": "instruction"
       },
-      "ms": 535
+      "ms": 559
     }
   },
   "para-calendar-cancel-16": {
@@ -278,7 +278,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1330
+      "ms": 1353
     },
     "tell nimali i'll call tonight.": {
       "decision": {
@@ -289,7 +289,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1444
+      "ms": 1477
     }
   },
   "para-calendar-cancel-17": {
@@ -302,7 +302,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1404
+      "ms": 1435
     },
     "send her good morning instead.": {
       "decision": {
@@ -313,18 +313,18 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1379
+      "ms": 1544
     },
     "send nimali good night.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 1,
         "tab": "private",
         "text": "Good night",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1469
+      "ms": 1433
     }
   },
   "para-calendar-cancel-18": {
@@ -337,7 +337,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1430
+      "ms": 1462
     },
     "scratch that, say the shop opens at ten.": {
       "decision": {
@@ -349,7 +349,7 @@
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1851
+      "ms": 1892
     }
   },
   "para-calendar-cancel-19": {
@@ -362,7 +362,7 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1412
+      "ms": 1437
     },
     "tell kamal i'm sick today.": {
       "decision": {
@@ -373,7 +373,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1425
+      "ms": 1472
     }
   },
   "para-calendar-cancel-20": {
@@ -386,25 +386,25 @@
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1125
+      "ms": 1153
     },
     "dictation| >> actually never mind, cancel it.": {
       "decision": {
         "text": "",
         "tool": "instruction"
       },
-      "ms": 538
+      "ms": 558
     },
     "send a message to nimali.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1346
+      "ms": 1342
     }
   }
 }

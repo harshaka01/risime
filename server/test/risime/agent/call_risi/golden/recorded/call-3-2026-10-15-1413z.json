@@ -9,7 +9,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1780
+    "ms": 1769
   },
   "i don't know. from 9 to 10. discuss about racing": {
     "decision": {
@@ -21,31 +21,30 @@
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 2155
+    "ms": 2229
   },
   "rishi, i can't see that you have added something.": {
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "say": "The appointment is still waiting for your confirmation. Please tap Add on the card in your Risi chat to finalize it.",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "card_status"
     },
-    "ms": 1913
+    "ms": 1234
   },
   "so what's on my calendar on the 18th of october?": {
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "request": "Do you have anything on the 18th of October?",
+      "request": "What's on my calendar on the 18th of October?",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1357
+    "ms": 1669
   },
   "that's correct": {
     "decision": {
@@ -56,7 +55,7 @@
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1478
+    "ms": 1510
   },
   "the 16th?": {
     "decision": {
@@ -68,7 +67,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1644
+    "ms": 1481
   },
   "yeah, but do i have anything from, say, 2 a.m. until... until maybe like, you know, 10 p.m.": {
     "decision": {
@@ -80,19 +79,19 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 2097
+    "ms": 2149
   },
   "yeah, can you add an appointment tomorrow? just add an entry on my calendar and block it out from 10 to 12. discuss about risd.": {
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "request": "add an entry on my calendar and block it out from 10 to 12. discuss about RISD.",
+      "request": "add an appointment tomorrow from 10 to 12 to discuss about RISD",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1816
+    "ms": 1726
   },
   "yeah, yeah, that's for you, just to add that particular entry.": {
     "decision": {
@@ -103,6 +102,6 @@
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1210
+    "ms": 1251
   }
 }

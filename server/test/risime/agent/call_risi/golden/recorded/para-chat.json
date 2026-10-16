@@ -10,7 +10,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1799
+      "ms": 1840
     }
   },
   "para-chat-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1699
+      "ms": 1733
     }
   },
   "para-chat-03": {
@@ -32,13 +32,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "You're welcome. Have a good night.",
+        "say": "You're welcome. Have a good one.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1716
+      "ms": 1776
     }
   },
   "para-chat-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1726
+      "ms": 1782
     }
   },
   "para-chat-05": {
@@ -60,13 +60,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "You say thank you in Sinhala as 'Oba wada'. Would you like me to send that to someone?",
+        "say": "You say thank you in Sinhala as 'Oba wada'. Would you like me to send a message with that to someone?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 2033
+      "ms": 2144
     }
   },
   "para-chat-06": {
@@ -80,7 +80,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1892
+      "ms": 1927
     }
   },
   "para-chat-07": {
@@ -94,21 +94,20 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1674
+      "ms": 1713
     }
   },
   "para-chat-08": {
     "who wrote romeo and juliet?": {
       "decision": {
-        "action": "reply",
+        "action": "tool",
         "confidence": 1,
-        "say": "William Shakespeare wrote Romeo and Juliet.",
         "tab": "",
         "text": "",
         "to": "",
-        "tool": "none"
+        "tool": "unsupported"
       },
-      "ms": 1695
+      "ms": 1386
     }
   },
   "para-chat-09": {
@@ -122,7 +121,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1819
+      "ms": 1852
     }
   },
   "para-chat-10": {
@@ -130,13 +129,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "Yes, I can hear you perfectly.",
+        "say": "Yes, I hear you perfectly.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1711
+      "ms": 1743
     }
   },
   "para-chat-11": {
@@ -150,7 +149,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1798
+      "ms": 1858
     }
   },
   "para-chat-12": {
@@ -164,7 +163,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 2120
+      "ms": 2165
     }
   },
   "para-chat-13": {
@@ -178,7 +177,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1657
+      "ms": 1672
     }
   },
   "para-chat-14": {
@@ -192,7 +191,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1986
+      "ms": 2042
     }
   },
   "para-chat-15": {
@@ -206,7 +205,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1950
+      "ms": 1995
     }
   },
   "para-chat-16": {
@@ -219,21 +218,20 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1355
+      "ms": 1230
     }
   },
   "para-chat-17": {
     "what's the boiling point of water?": {
       "decision": {
-        "action": "reply",
+        "action": "tool",
         "confidence": 1,
-        "say": "The boiling point of water is 100 degrees Celsius or 212 degrees Fahrenheit at standard atmospheric pressure.",
         "tab": "",
         "text": "",
         "to": "",
-        "tool": "none"
+        "tool": "unsupported"
       },
-      "ms": 2049
+      "ms": 1391
     }
   },
   "para-chat-18": {
@@ -241,13 +239,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "Thank you! I'm glad to hear that. What can I do for you today?",
+        "say": "Thank you! I'm glad to hear that. How can I help you today?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1897
+      "ms": 1937
     }
   },
   "para-chat-19": {
@@ -255,13 +253,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "Keep your slides simple and focus on telling a clear story.",
+        "say": "Keep it simple and focus on one clear message. Use visuals to support your points, not replace them.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1816
+      "ms": 2028
     }
   },
   "para-chat-20": {
@@ -275,7 +273,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1710
+      "ms": 1720
     }
   }
 }
