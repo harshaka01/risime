@@ -106,3 +106,12 @@ Working rule from nightly.8 on: one release a day around 07:00 SLT; each item is
   - "More…" opens a searchable list of all languages;
   - each user's recent picks at the top;
   - the same picker for voice-note transcripts, typed messages and the always-translate setting.
+- **From the call-5 replay on srv15 (not in the hotfix):**
+  - "Can I have a meeting set up today for two?" is still routed as a calendar read. It should be an add at 2 pm, or
+    "2 pm?".
+  - On "Yeah.", the reply started with "I can't book it for you right now,". The claim guard caught the rest, but
+    this refusal-style line got through.
+  - `brief.ex` `due_today`: a promise with no due date gives `nil and …`, which raises BadBooleanError. Fix:
+    `&1.due != nil and …`.
+  - Empty "Fri 16 Oct:" card during a call: in `turn.ex` `finish`, skip `Audience.deliver` while a call runs and the
+    body is only the head line and the footer.

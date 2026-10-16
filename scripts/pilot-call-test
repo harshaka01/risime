@@ -12,6 +12,7 @@
 #
 #   PDT_SETUP=<setup dir> [PCT_CALLS="3 4"] scripts/pilot-call-test
 #   (call 3 = Harsha's 3rd call, 15 Oct 14:13Z; call 4 = an appointment added by voice, §41.9)
+#   (call 5 = Harsha's 16 Oct 04:43 SLT call: his lines plus far voices, noise and silence that made Whisper invent words)
 #
 # Writes <setup dir>/calls/: call1.json, call2.json (per-turn timings), the risi_call_transcript card from the phone
 # (callN-card.png/.xml/.txt) and the pilot's log lines of the call. Nothing secret is printed (OTP, token).
@@ -60,7 +61,15 @@ say c4c "Did you add it?"
 # Like Harsha's speech (15 Oct): Kokoro pads each clip (~0.4 s lead, ~0.5 s tail) and makes a comma a ~0.9 s pause,
 # so "1 s" between the parts of c1c was really ~1.9 s and "access, you add…" became two utterances. Trim the
 # padding to 50 ms and pauses inside a clip to 250 ms (c1c's 1 s pause is added after).
-for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c; do
+# Call 5 (Harsha 16 Oct 04:43 SLT, call 56f51277): his real lines; the made-up ones are played as what made
+# Whisper invent them: quiet far voices (babble at -30 dB under pink noise), noise, silence.
+say c5a "Good morning."
+say c5b "Do I have anything to do today?"
+say c5c "All right. Can I have a meeting set up today for two?"
+say c5f "Yeah."
+say b1 "you know it will be fun, yeah I did not know I was going to promote, and I tend to come out, so do I"
+say b2 "it's fascinating, isn't it, bye bye, ready, you're on"
+for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c c5a c5b c5c c5f; do
   "$PY" -I -c 'import sys, wave, numpy as np
 p = sys.argv[1]
 w = wave.open(p, "rb"); prm = w.getparams(); x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16); w.close()
@@ -83,6 +92,7 @@ o = wave.open(out, "wb"); o.setparams(p)
 o.writeframes(ws[0].readframes(ws[0].getnframes()))
 o.writeframes(b"\0" * (p.sampwidth * p.nchannels * (p.framerate - p.framerate // 10)))  # 1 s with the two 50 ms pads
 o.writeframes(ws[1].readframes(ws[1].getnframes())); o.close()' "$WORK/c1c.wav" "$WORK/c1c1.wav" "$WORK/c1c2.wav" || die "c1c clip"
+"$PY" -I scripts/pilot_call_noise_clips.py "$WORK" || die "noise clips"
 
 # ---------------------------------------------------------------- a session for the test number (dev OTP, never printed)
 before="$(grep -ac "\[DEV OTP\] $PHONE:" "$PILOT_LOG" || true)"
@@ -153,6 +163,7 @@ for n in $CALLS; do case "$n" in
   2) call 2 c2a c2b c2c ;;
   3) call 3 c3a c3b c3c c3d c3e c3f c3g c3h c3i ;;
   4) call 4 c4a c4b c4c ;;
+  5) call 5 c5a c5b c5req n_far1 n_noise c5f n_far2 n_silence ;;
 esac; done
 curl -s -o /dev/null "${H[@]}" -X POST "$API/auth/logout" || true
 echo "PCT DONE (out $OUT)"
