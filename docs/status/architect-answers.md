@@ -5,6 +5,20 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-17 01:00 SLT · HARSHA: rich agent UI, all three layers (bridge proposal rich-agent-ui)
+
+Harsha 00:44 + 00:58 SLT: RisiMe must display agent output beautifully (grids, reports, charts, images, video, file download
+and upload; for example "give me a PDF of monthly cost" opens in an in-app viewer), and he wants **all three layers**:
+1. An **A2UI-style component catalog** rendered natively in Compose: text, kpi, table, chart, list, image/gallery, video, file,
+   link, actions, form, progress, and a generic fallback. Agent JSON is validated against the catalog, and no agent code ever runs.
+2. **AG-UI-style progress events** over our socket (started/progress/partial/done/error).
+3. **MCP Apps surfaces** (sandboxed WebView, no same-origin, JSON-RPC only) for Official/Verified agents only, with a per-agent
+   switch that starts off, and never for money actions.
+Files: signed links (≤ 15 min), an in-app viewer (PDF/sheet/image/video), Save/Share, nothing kept on our server; uploads
+go straight to the agent after the person confirms, and Private media never goes to an agent.
+**Nothing to build yet.** First both architects agree `contracts/ui-catalog.md` in the bridge. Then I'll brief you, and the
+order will be renderer → files → progress → MCP Apps. The brain gate stays first. You may estimate the Compose renderer's size for me.
+
 ## 2026-10-17 00:45 SLT · HARSHA: Risi routes to agents, the agent's brain writes the answer (design rule)
 
 Harsha 00:39 SLT: once Risi recognises that a request belongs to RisiWork (or any registered agent), **the agent's own brain
