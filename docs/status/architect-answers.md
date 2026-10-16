@@ -5,6 +5,21 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 17:30 SLT · HARSHA: download Nemotron 3 Nano and test it ASAP
+
+Harsha 17:27: "Let's download nano and test it asap." This is his explicit OK under golden rule 10, with a daytime
+exception for today. (Super is parked for now: 80.3 GB of weights, ~96 GB needed, which doesn't fit spark2. Thanks for
+stopping at the check. A read-only memory check of spark is with RisiWork.)
+1. Use NVIDIA's own Nemotron 3 Nano (31.6B total / 3.2B active) in **NVFP4** (or FP8 if NVFP4 isn't
+   published). Check vLLM support in our container first: NemotronH is supported, so confirm Nano's
+   architecture is the same. Then download it, rate-limited, and log it in downloads.md ("approved by
+   Harsha 17:27, daytime").
+2. If it fits **beside risi-l1** with ≥ 10 GB headroom, test it beside risi-l1 with no swap, today.
+   Otherwise test it in the same swap window as Gemma-4-26B-A4B after nightly.12.
+3. Same gate and same measurements as 17:20. Post one table in his Risi chat: risi-l1 vs Gemma-4-26B-A4B
+   (and 31B if done) vs Nemotron 3 Nano, with pass rates per tool, the dictation cases, simulated callers,
+   p50/p95 first token, tok/s, Sinhala/Tamil script, false claims and memory.
+
 ## 2026-10-16 17:20 SLT · HARSHA: try Nemotron 3 Super NOW on spark2 (daytime download OK)
 
 Harsha 17:16: "Why don't we try the Super now." This is his explicit OK under golden rule 10, with a **daytime
