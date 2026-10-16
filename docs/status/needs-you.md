@@ -94,11 +94,9 @@ Harsha may want to check it in his Official chat with Shenika.
 **Fix order** (04:20): 4 (`last_from` vs `replied_since`, sender-filtered query, no 300 cut), 6, 7, 5 (30-day look-back + "in your
 Private chat" line), then 1, 2, 3, 9, 8, 10, 12, 11. The real-call replay gate comes first. Started.
 
-### Q-015 · 2026-10-17 05:05 SLT · [harsha] · blocking: no
-**Question:** "New app: try now" (nightly.12): Shenika's Test incoming call; call, take a phone call, call again; the
-Translate picker. **Options:** Works / Problems. **Default:** none. Topic `nightly12-try`.
-
 ## Answered
+- ANSWERED: Works (by Harsha, 2026-10-17 05:08 SLT). Q-015 nightly.12 try now (Test incoming call, call after a phone
+  call, the Translate picker). Nothing in it was behind a canary flag, so no flag to switch on (Translate was already on).
 - ANSWERED: "Ok C is good but after if we fail tonight" (by Harsha, 2026-10-16 18:45 SLT, in the architect chat; architect
   19:20). D-001 brain model. Local only through tonight's model tests; the escalation path is built behind a flag that is
   off, with no paid provider set. If no local model passes the call gate tonight: post the failing turns and the cost per
