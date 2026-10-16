@@ -225,7 +225,8 @@ fi
 up=0
 [ "$BASE" = 1 ] && up=1
 [ "$up" = 1 ] || for _ in $(seq 1 $((HEALTH_MAX_S/5))); do
-  docker inspect "$NAME" >/dev/null 2>&1 || { RESULT_STATE="candidate died while loading (memory floor or error)"; exit 4; }
+  # inspect also succeeds on an exited container (16 Oct: two candidates crashed and were waited on for 20 min)
+  [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" = true ] || { RESULT_STATE="candidate died while loading (memory floor or error)"; docker logs "$NAME" 2>&1 | grep -viE "api[_-]?key|token|secret" | grep -E "Error|error|raise|Exception|CUDA|memory|not supported|Unsupported" | grep -v "^\s*File " | tail -40 > "$REPO/results/model-swap/$(date -u +%Y%m%dT%H%MZ)-$KEY-startup.txt" 2>/dev/null || true; exit 4; }
   curl_auth -m 5 -f -o /dev/null "http://127.0.0.1:$PORT/v1/models" 2>/dev/null && { up=1; break; }
   [ $(( $(date +%s) - START )) -gt $WATCHDOG_S ] && break
   sleep 5
