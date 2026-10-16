@@ -470,6 +470,9 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   end
 
   defp draft(ctx, d, p, lang) do
+    # The caller's words as a sentence ("the car is ready" → "The car is ready").
+    {f, rest} = String.split_at(String.trim(p.text), 1)
+    p = %{p | text: String.upcase(f) <> rest}
     report(ctx, {:dialogue, %{d | awaiting: nil, pending: p}})
 
     Brain.tool_turn(
@@ -626,7 +629,16 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   @no_names ~w(you me myself him her them someone somebody anyone risi rishi it this that
                yourself everyone nobody)
 
-  defp no_name?(to), do: String.downcase(String.trim(to, " .,!?")) in @no_names
+  # "my friend", "a colleague": no name (Risi asks who).
+  defp no_name?(to) do
+    t = String.downcase(String.trim(to, " .,!?"))
+
+    t in @no_names or
+      Regex.match?(
+        ~r/^(?:my|a|an|the|our|her|his) (?:friend|colleague|contact|person|someone)s?$/u,
+        t
+      )
+  end
 
   ## Calendar
 

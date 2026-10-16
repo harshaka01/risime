@@ -9,19 +9,19 @@
       "to": "",
       "tool": "message_draft"
     },
-    "ms": 1558
+    "ms": 1548
   },
   "just tell me 10 names in my contacts.": {
     "decision": {
       "action": "tool",
       "cancel_open": false,
-      "request": "",
+      "request": "tell me 10 names in my contacts",
       "say": "",
       "text": "",
       "to": "",
       "tool": "list_contacts"
     },
-    "ms": 1265
+    "ms": 1546
   },
   "n-i-m-a-l-i.": {
     "decision": {
@@ -33,7 +33,7 @@
       "to": "Nimali",
       "tool": "message_draft"
     },
-    "ms": 1644
+    "ms": 1651
   },
   "what time is my next meeting?": {
     "decision": {
@@ -45,6 +45,6 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1448
+    "ms": 1420
   }
 }

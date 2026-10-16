@@ -49,7 +49,7 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   def message_line(summary) when is_binary(summary) do
     case Regex.run(~r/^Send to (.+?) \((?:Private|Official)\):\s*(.+)$/su, summary) do
       [_, to, text] ->
-        "Here's your message to #{to}: \"#{String.trim(text)}\". " <>
+        "Here's your message to #{to}: #{quoted(text)} " <>
           "Tap Send on the card in your Risi chat to send it, or tell me what to change."
 
       _ ->
@@ -238,8 +238,13 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   def ask_pick(options), do: "Did you mean #{or_names(options)}?"
 
   @doc "The read-back of the whole message before its card (the draft is not made yet)."
-  def confirm_line(to, text),
-    do: "I'll send #{to}: \"#{String.trim(text)}\". Shall I put it on a card?"
+  def confirm_line(to, text), do: "I'll send #{to}: #{quoted(text)} Shall I put it on a card?"
+
+  # "\"Call me.\"" / "\"Call me\".": one full stop, never ".\".".
+  defp quoted(text) do
+    t = String.trim(text)
+    if Regex.match?(~r/[.?!]$/u, t), do: "\"#{t}\"", else: "\"#{t}\"."
+  end
 
   @doc "A yes to Risi's yes-or-no question (no \"but\", \"wait\" or a change after it)."
   def yes?(text) when is_binary(text) do

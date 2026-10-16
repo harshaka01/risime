@@ -1,0 +1,342 @@
+{
+  "para-message-oneshot-01": {
+    "tell nimali that i'll be late for dinner.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I'll be late for dinner.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1407
+    }
+  },
+  "para-message-oneshot-02": {
+    "send a message to nima lee saying the parcel arrived.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "the parcel arrived.",
+        "to": "Nima Lee",
+        "tool": "message_draft"
+      },
+      "ms": 1352
+    }
+  },
+  "para-message-oneshot-03": {
+    "can you tell ruwan that the meeting is cancelled?": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "the meeting is cancelled",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1353
+    }
+  },
+  "para-message-oneshot-04": {
+    "message kamal and say i'm waiting outside.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I'm waiting outside.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1357
+    }
+  },
+  "para-message-oneshot-05": {
+    "no, say good evening instead.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "No, say good evening instead.",
+        "say": "",
+        "text": "Good evening",
+        "to": "Nimali Perera",
+        "tool": "message_draft"
+      },
+      "ms": 1517
+    },
+    "tell nimali good morning.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "Good morning",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1332
+    }
+  },
+  "para-message-oneshot-06": {
+    "actually, say i'll call at six.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I'll call at six.",
+        "to": "Nimali Perera",
+        "tool": "message_draft"
+      },
+      "ms": 1461
+    },
+    "send nimaali a message saying i'll call at five.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I'll call at five.",
+        "to": "Nimaali",
+        "tool": "message_draft"
+      },
+      "ms": 1394
+    }
+  },
+  "para-message-oneshot-07": {
+    "tell ruvan that i left the keys with the guard.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I left the keys with the guard.",
+        "to": "Ruvan",
+        "tool": "message_draft"
+      },
+      "ms": 1420
+    }
+  },
+  "para-message-oneshot-08": {
+    "let nimali know that the doctor's appointment is on monday.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "The doctor's appointment is on Monday.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1437
+    }
+  },
+  "para-message-oneshot-09": {
+    "text kamal: see you at the airport.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "see you at the airport.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1371
+    }
+  },
+  "para-message-oneshot-10": {
+    "tell nee mali that i called her a couple of times and she did not answer.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I called you a couple of times and you did not answer.",
+        "to": "Nee Mali",
+        "tool": "message_draft"
+      },
+      "ms": 1528
+    }
+  },
+  "para-message-oneshot-11": {
+    "send a message to nimali saying hi, how was your trip?": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "hi, how was your trip?",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1411
+    }
+  },
+  "para-message-oneshot-12": {
+    "could you tell ruwan that i'll pay him back tomorrow?": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I'll pay you back tomorrow",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1396
+    }
+  },
+  "para-message-oneshot-13": {
+    "message nimalee, tell her the cake is in the fridge.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "the cake is in the fridge.",
+        "to": "Nimalee",
+        "tool": "message_draft"
+      },
+      "ms": 1431
+    }
+  },
+  "para-message-oneshot-14": {
+    "hello?": {
+      "decision": {
+        "action": "reply",
+        "cancel_open": false,
+        "request": "",
+        "say": "I'm here. The message to Kamal is ready for you to send.",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1545
+    },
+    "tell kamal that the printer is fixed.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "The printer is fixed.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1352
+    }
+  },
+  "para-message-oneshot-15": {
+    "change it to: i'm stuck in traffic, start without me.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I'm stuck in traffic, start without me.",
+        "to": "Nimali Perera",
+        "tool": "message_draft"
+      },
+      "ms": 1542
+    },
+    "tell nimali i'm stuck in traffic.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "I'm stuck in traffic.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1393
+    }
+  },
+  "para-message-oneshot-16": {
+    "send ruwan a message: the gate code is four five six.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "the gate code is four five six.",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1417
+    }
+  },
+  "para-message-oneshot-17": {
+    "tell nimali that she did a great job today.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "she did a great job today",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1418
+    }
+  },
+  "para-message-oneshot-18": {
+    "ask kamal if he can join the call at noon.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "Ask Kamal if he can join the call at noon.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1490
+    }
+  },
+  "para-message-oneshot-19": {
+    "tell n-i-m-a-l-i that the tickets are booked.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "The tickets are booked.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1394
+    }
+  },
+  "para-message-oneshot-20": {
+    "send a message to nimali saying thank you.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "thank you",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1330
+    },
+    "send it.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "request": "",
+        "say": "",
+        "text": "",
+        "to": "",
+        "tool": "confirm_open"
+      },
+      "ms": 1424
+    }
+  }
+}

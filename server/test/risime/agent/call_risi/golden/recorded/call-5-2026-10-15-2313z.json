@@ -9,7 +9,7 @@
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1440
+    "ms": 1437
   },
   "do i have anything to do today?": {
     "decision": {
@@ -19,9 +19,9 @@
       "say": "",
       "text": "",
       "to": "",
-      "tool": "calendar_read"
+      "tool": "promises_read"
     },
-    "ms": 1474
+    "ms": 1548
   },
   "good morning.": {
     "decision": {
@@ -33,18 +33,18 @@
       "to": "",
       "tool": "none"
     },
-    "ms": 1407
+    "ms": 1412
   },
   "yeah.": {
     "decision": {
-      "action": "tool",
+      "action": "ask",
       "cancel_open": false,
-      "request": "meeting today for two",
-      "say": "",
+      "request": "",
+      "say": "What would you like to call this meeting?",
       "text": "",
       "to": "",
-      "tool": "calendar_add"
+      "tool": "none"
     },
-    "ms": 1345
+    "ms": 1415
   }
 }

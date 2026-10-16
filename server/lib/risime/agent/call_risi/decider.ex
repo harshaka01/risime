@@ -67,11 +67,12 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   then asks who). Never use action "ask" for a message's recipient or text. Never write a message \
   yourself. When the user says they already said it ("I just said it"), "text" = the message they \
   said before in this call.
-  - "cancel_open": cancel the open card (only when the open state has one).
+  - "cancel_open": cancel the open card or the open task (only when the open state has one).
   - "confirm_open": the user approves the open card ("yes", "that's right", "send it", "add it").
   - "card_status": the user asks whether the open card was added or sent, or says they can't see it.
   - "capabilities": the user asks what Risi can do.
-  - "list_contacts": the user asks for names in their contacts or who they can message.
+  - "list_contacts": the user asks to hear names from their contacts ("tell me 10 names in my \
+  contacts"). Never for a request to send a message.
   "cancel_open": true only when the user says to cancel ("cancel that", "never mind", "forget \
   it", "start again"). If they also ask for something new in the same words (a new message, a \
   new event), "tool" is that new request with its slots; tool "cancel_open" only when they ask \

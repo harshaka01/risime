@@ -419,7 +419,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     utter(pid, 2, "To Nimali.")
 
     assert_receive {:turn_run,
-                    %{call_send: %{"to" => "Nimali", "text" => "hey, how are you doing?"}}},
+                    %{call_send: %{"to" => "Nimali", "text" => "Hey, how are you doing?"}}},
                    2_000
 
     assert said(pid, 2) =~ "Tap Send"

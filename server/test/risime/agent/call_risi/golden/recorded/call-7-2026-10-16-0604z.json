@@ -4,12 +4,12 @@
       "action": "reply",
       "cancel_open": false,
       "request": "",
-      "say": "Hello. The message to Nimali is ready to send whenever you are.",
+      "say": "Hello. The message to Nimali is ready for you to send.",
       "text": "",
       "to": "",
       "tool": "none"
     },
-    "ms": 1561
+    "ms": 1555
   },
   "i just said it to you. just tell her that i called her. couple of times, but she did not answer and called me back.": {
     "decision": {
@@ -21,7 +21,7 @@
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 1922
+    "ms": 1913
   },
   "nima lee.": {
     "decision": {
@@ -33,7 +33,7 @@
       "to": "Nima Lee",
       "tool": "message_draft"
     },
-    "ms": 1536
+    "ms": 1533
   },
   "so can you send the message to her on a private chat?": {
     "decision": {
@@ -45,7 +45,7 @@
       "to": "",
       "tool": "message_draft"
     },
-    "ms": 1193
+    "ms": 1198
   },
   "tell her that i called her a couple of times and then she did not answer. and i'll call her back or call me back.": {
     "decision": {
@@ -57,6 +57,6 @@
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 1881
+    "ms": 1871
   }
 }

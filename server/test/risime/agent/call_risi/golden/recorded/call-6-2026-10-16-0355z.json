@@ -13,15 +13,15 @@
   },
   "cancel that.": {
     "decision": {
-      "action": "reply",
+      "action": "tool",
       "cancel_open": true,
       "request": "",
-      "say": "Okay, I've cancelled that. How else can I help you?",
+      "say": "",
       "text": "",
       "to": "",
       "tool": "cancel_open"
     },
-    "ms": 1594
+    "ms": 1376
   },
   "good morning, and i'm just testing whether you can send a message on behalf of me.": {
     "decision": {
@@ -33,7 +33,7 @@
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 1764
+    "ms": 1773
   },
   "how are you doing?": {
     "decision": {
@@ -69,7 +69,7 @@
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 1248
+    "ms": 1397
   },
   "rishi, what else can you do?": {
     "decision": {
@@ -81,7 +81,7 @@
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1329
+    "ms": 1287
   },
   "we see i'm asking to send a message to nimali. but the content should be, hey, how are you doing? this is a message just to make sure. receive and send a message to you.": {
     "decision": {
@@ -93,7 +93,7 @@
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 1848
+    "ms": 1860
   },
   "what time do i have the next meeting?": {
     "decision": {
@@ -105,7 +105,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1488
+    "ms": 1495
   },
   "yes, send it.": {
     "decision": {
@@ -117,6 +117,6 @@
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1432
+    "ms": 1412
   }
 }

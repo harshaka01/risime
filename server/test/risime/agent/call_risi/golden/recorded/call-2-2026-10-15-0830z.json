@@ -9,7 +9,7 @@
       "to": "",
       "tool": "promises_read"
     },
-    "ms": 1538
+    "ms": 1542
   },
   "let me see. i need to listen to it.": {
     "decision": {
@@ -21,7 +21,7 @@
       "to": "",
       "tool": "none"
     },
-    "ms": 1186
+    "ms": 1177
   },
   "let me see. i need to listen to it. did i promise anything today or tomorrow?": {
     "decision": {
@@ -33,7 +33,7 @@
       "to": "",
       "tool": "promises_read"
     },
-    "ms": 1438
+    "ms": 1548
   },
   "you should have access, you add the notes and calendar": {
     "decision": {
@@ -45,6 +45,6 @@
       "to": "",
       "tool": "promises_read"
     },
-    "ms": 1549
+    "ms": 1557
   }
 }
