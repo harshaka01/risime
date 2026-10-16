@@ -37,6 +37,10 @@ callers 30/30. **Options:** Works / Problems. **Default:** stays canary. On "Wor
 until Call Risi itself (RISI_CALL_RISI) is accepted, since v3 only runs on Call Risi. Topic `brain-v3-loop-try`.
 
 ## Answered
+- ANSWERED: "Ok C is good but after if we fail tonight" (by Harsha, 2026-10-16 18:45 SLT, in the architect chat; architect
+  19:20). D-001 brain model. Local only through tonight's model tests; the escalation path is built behind a flag that is
+  off, with no paid provider set. If no local model passes the call gate tonight: post the failing turns and the cost per
+  call, and ask Harsha to add the key himself (`nano .env`). Not posted to the Risi chat (architect 19:20).
 - ANSWERED: "try Gemma-4, and if it fails then add commercial" (by Harsha, 2026-10-16 10:19 SLT, via the architect).
   Q-007 commercial model. No commercial model for now; Gemma-4 swap test right after v3 (architect 10:22).
 - ANSWERED: Problems (by Harsha, 2026-10-16 11:35 SLT). Q-008 brain v3 try now. His 06:04Z call: the recipient
