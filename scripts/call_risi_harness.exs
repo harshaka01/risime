@@ -132,7 +132,9 @@ room = "harness-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: fa
 
 user = Ecto.UUID.generate()
 dev = Ecto.UUID.generate()
-{token, _} = LiveKit.participant_token(config, LiveKit.identity(user, dev), room, "audio", System.os_time(:second))
+# v1.53 §41.10 (PHONE_STT): the caller sends `risi.stt` finals (a Call Risi room: data allowed).
+phone_stt = System.get_env("PHONE_STT")
+{token, _} = LiveKit.participant_token(config, LiveKit.identity(user, dev), room, "audio", System.os_time(:second), false, phone_stt != nil)
 me = self()
 
 {:ok, _} =
@@ -147,6 +149,7 @@ me = self()
     # No database here: the call tools "what can you do?" lists, and no §41.8 titles device.
     caps: ~w(risi_calendar_check risi_items set_reminder memory_search),
     cal?: false,
+    stt?: phone_stt != nil,
     post: fn _conv, _body, risi -> send(me, {:transcript, risi}) end
   })
 
@@ -154,6 +157,7 @@ caller_args =
   ["-I", env.("CALLER"), "--url", "ws://127.0.0.1:#{lk_port}", "--token", token] ++
     if(b = System.get_env("BARGE_WAV"), do: ["--barge", b], else: []) ++
     if(e = System.get_env("ECHO_DB"), do: ["--echo-db", e], else: []) ++
+    if(phone_stt, do: ["--phone-stt", phone_stt], else: []) ++
     ["--rounds", System.get_env("ROUNDS", "1")] ++
     String.split(env.("CALLER_WAVS"), ",")
 
@@ -202,6 +206,11 @@ IO.puts("routes: #{inspect(Enum.frequencies_by(turns, & &1.route))} statuses: #{
 IO.puts("stt models: #{inspect(Enum.frequencies_by(turns, & &1.stt_model))}")
 IO.puts("per turn: " <> Jason.encode!(Enum.map(turns, &Map.take(&1, ~w(utt route after_end_ms stt_ms first_token_ms tts_first_ms)a))))
 IO.puts("caller: " <> Jason.encode!(caller))
+
+if p = caller["phone_stt"] do
+  IO.puts("phone stt (v1.53 §41.10): " <> Jason.encode!(p))
+  IO.puts("learning-log decisions: " <> Jason.encode!(acc |> Map.get(:runs, []) |> Enum.reverse() |> Enum.map(& &1.decision)))
+end
 
 if t = acc[:transcript] do
   IO.puts("transcript lines (synthetic test speech):")

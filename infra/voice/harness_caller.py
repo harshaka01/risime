@@ -8,6 +8,9 @@ Risi's audio keeps coming) and an echo mode (Risi's audio is fed back into the c
 --echo-db, like a phone on speaker without echo cancellation). Prints one JSON object on stdout.
 
   python3 -I harness_caller.py --url ws://127.0.0.1:17896 --token T [--echo-db -6] [--barge WAV] a.wav b.wav
+  --phone-stt FILE (contract v1.53 §41.10): act as a phone that recognises its own speech: after
+  Risi's {"t":"mode","mode":"phone"} on "risi.stt", send FILE's [{"text","conf"}] (one per clip) as
+  `final` packets ~--phone-delay-ms after each clip; Risi's mode/speaking packets are counted.
   --wait-answer [--turn-log server.log]: behave like a person (pilot-call-test): after each clip wait
   until Risi's answer has finished (not just its holding line), then speak the next clip.
 """
@@ -59,9 +62,17 @@ class Caller:
         self.gaps = None  # a list while an answer is being measured
         self.answer_on = False
         self.silent_since = None
+        # v1.53 §41.10 (--phone-stt)
+        self.risi_identity = None
+        self.stt_mode = None
+        self.risi_speaking = False
+        self.stt_rx = []  # [(t_mono, packet)] from Risi on "risi.stt"
+        self.stt_seq = 0
+        self.stt_sent = []
 
     async def connect(self, url, token):
         self.room.on("track_subscribed", self.on_track)
+        self.room.on("data_received", self.on_data)
         await self.room.connect(url, token, rtc.RoomOptions(auto_subscribe=True))
         track = rtc.LocalAudioTrack.create_audio_track("mic", self.source)
         opts = rtc.TrackPublishOptions()
@@ -69,8 +80,34 @@ class Caller:
         await self.room.local_participant.publish_track(track, opts)
         asyncio.create_task(self.mic_idle())
 
-    def on_track(self, track, _pub, _p):
+    def on_data(self, packet):
+        if getattr(packet, "topic", None) != "risi.stt":
+            return
+        try:
+            msg = json.loads(bytes(packet.data).decode("utf-8"))
+        except ValueError:
+            return
+        self.stt_rx.append((time.monotonic(), msg))
+        if msg.get("t") == "mode":
+            self.stt_mode = msg.get("mode")
+        elif msg.get("t") == "speaking":
+            self.risi_speaking = msg.get("on") is True
+
+    async def send_final(self, text, conf, delay_s):
+        await asyncio.sleep(delay_s)
+        if self.stt_mode != "phone" or self.risi_identity is None:
+            return
+        self.stt_seq += 1
+        pkt = {"t": "final", "seq": self.stt_seq, "text": text, "conf": conf, "lang": "en"}
+        if self.risi_speaking:
+            pkt["during_risi"] = True
+        await self.room.local_participant.publish_data(
+            json.dumps(pkt), reliable=True, destination_identities=[self.risi_identity], topic="risi.stt")
+        self.stt_sent.append({"seq": self.stt_seq, "conf": conf, "during_risi": self.risi_speaking})
+
+    def on_track(self, track, _pub, p):
         if track.kind == rtc.TrackKind.KIND_AUDIO:
+            self.risi_identity = p.identity
             self.risi.set()
             asyncio.create_task(self.hear(track))
 
@@ -192,6 +229,8 @@ async def main():
                     help="after each clip wait until Risi's answer has finished (2.5 s quiet, 45 s cap)")
     ap.add_argument("--turn-log", default=None,
                     help="the server log: with --wait-answer, a new final 'call risi turn:' line ends the answer")
+    ap.add_argument("--phone-stt", default=None, help="JSON [{text, conf}] per clip: send them as risi.stt finals")
+    ap.add_argument("--phone-delay-ms", type=int, default=700)
     ap.add_argument("wavs", nargs="+")
     a = ap.parse_args()
 
@@ -202,13 +241,20 @@ async def main():
     out["greeting"] = await c.wait_quiet(timeout=20)
 
     clips = [(p, load(p)) for p in a.wavs]
+    phone = None
+    if a.phone_stt:
+        with open(a.phone_stt) as f:
+            phone = json.load(f)
     for _ in range(a.rounds):
-        for path, pcm in clips:
+        for i, (path, pcm) in enumerate(clips):
             c.first_loud_after = None
             if a.wait_answer and a.turn_log:
                 c.mark_log(a.turn_log)
             await c.play(pcm)
             c.mark = time.monotonic()
+            if phone is not None and i < len(phone):
+                asyncio.create_task(c.send_final(phone[i]["text"], phone[i].get("conf"),
+                                                 a.phone_delay_ms / 1000.0))
             c.gaps_start()
             spoke_from = c.loud_frames
             if a.wait_answer:
@@ -269,6 +315,13 @@ async def main():
         c.mark = None
         await c.wait_quiet()
 
+    if phone is not None:
+        out["phone_stt"] = {
+            "mode_rx": [m.get("mode") for _, m in c.stt_rx if m.get("t") == "mode"],
+            "speaking_on_rx": sum(1 for _, m in c.stt_rx if m.get("t") == "speaking" and m.get("on") is True),
+            "speaking_off_rx": sum(1 for _, m in c.stt_rx if m.get("t") == "speaking" and m.get("on") is False),
+            "finals_sent": c.stt_sent,
+        }
     await c.room.disconnect()
     print(json.dumps(out))
 

@@ -490,6 +490,25 @@ defmodule RisiMe.Agent.SpeechHttpTest do
       assert field(compare, "priority") == "batch"
     end
 
+    test "Call Risi chunks send temperature_fallback=false; notes and compare send none" do
+      rec =
+        stub(fn conn, _body ->
+          case conn.request_path do
+            "/v1/audio/compare" -> Req.Test.json(conn, %{"results" => []})
+            _ -> Req.Test.json(conn, %{"text" => "hi", "language" => "en", "model" => "m"})
+          end
+        end)
+
+      assert {:ok, _} = Http.transcribe("a", language: "en", temperature_fallback: false)
+      assert {:ok, _} = Http.transcribe("a", priority: "live")
+      assert {:ok, _} = Http.compare("a")
+
+      [{_, compare, _}, {_, note, _}, {_, call, _}] = Agent.get(rec, & &1)
+      assert field(call, "temperature_fallback") == "false"
+      assert field(note, "temperature_fallback") == nil
+      assert field(compare, "temperature_fallback") == nil
+    end
+
     test "fallback_transcribe asks omnilingual-ctc-1b by name, live, no hint" do
       rec =
         stub(fn conn, body ->

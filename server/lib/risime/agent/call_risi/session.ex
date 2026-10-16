@@ -15,7 +15,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   require Logger
 
   alias RisiMe.Agent.CallRisi
-  alias RisiMe.Agent.CallRisi.{Brain, Media}
+  alias RisiMe.Agent.CallRisi.{Brain, Media, PhoneStt}
 
   @join_ms 10_000
   @caller_ms 45_000
@@ -97,6 +97,20 @@ defmodule RisiMe.Agent.CallRisi.Session do
            # Device test 15 Oct: the caller started speaking before Risi was audible: Risi's
            # pieces wait (`held`, in order) until the words arrive (or `@listen_ms`).
            listen: nil,
+           # v1.53 §41.10: the caller's phone recognises the speech (`call_risi_stt`). `stt_mode`
+           # :server | :asked (mode sent, the worker's ack pending) | :phone. In :phone the audio
+           # only times the turns: `stt_pending` holds the utterances waiting for their final
+           # (≤ 3 s), `stt_wait` a final that came before its utterance. The phone's text lives
+           # only in the turn and the transcript, like the server's.
+           stt?:
+             Map.get_lazy(args, :stt?, fn -> PhoneStt.capable?(args.user_id, args.device_id) end),
+           stt_mode: :server,
+           stt_misses: 0,
+           stt_pending: %{},
+           stt_wait: nil,
+           speech_open?: false,
+           barge_at: nil,
+           phone_n: 1_000_000,
            ended?: false
          }}
 
@@ -162,6 +176,27 @@ defmodule RisiMe.Agent.CallRisi.Session do
     end
   end
 
+  # §41.10: an utterance with no final from the phone within 3 s of its end.
+  def handle_info({:stt_miss, utt}, %{stt_mode: :phone} = st) do
+    case Map.pop(st.stt_pending, utt) do
+      {nil, _} ->
+        {:noreply, st}
+
+      {info, pending} ->
+        clear? = (info.ev["speech_ms"] || 0) >= PhoneStt.clear_speech_ms()
+        misses = if clear?, do: st.stt_misses + 1, else: st.stt_misses
+        st = release(%{st | stt_pending: pending, stt_misses: misses}, true)
+
+        if misses >= PhoneStt.max_misses(),
+          do: stt_fallback(st, info, "no_final"),
+          else: {:noreply, st}
+    end
+  end
+
+  # A final that came while the caller was still speaking: its utterance never came.
+  def handle_info({:stt_pair, at}, %{stt_mode: :phone, stt_wait: %{final: %{at: at} = f}} = st),
+    do: phone_final(%{st | stt_wait: nil}, f, nil)
+
   def handle_info({:EXIT, _pid, _reason}, st), do: {:noreply, st}
   def handle_info(_msg, st), do: {:noreply, st}
 
@@ -169,8 +204,14 @@ defmodule RisiMe.Agent.CallRisi.Session do
   def handle_cast({:end, reason}, st), do: finish(st, reason)
 
   # Each utterance starts with `speech_start`: whether Risi was speaking then (its echo window).
-  defp heard_start(%{"ev" => "speech_start", "speaking" => s}, st) when is_boolean(s),
-    do: %{st | barged?: s}
+  defp heard_start(%{"ev" => "speech_start", "speaking" => s}, st) when is_boolean(s) do
+    st = %{st | barged?: s, speech_open?: true}
+    # §41.10: speech that began over Risi's voice and beat its echo is clear barge-in energy.
+    if s, do: %{st | barge_at: mono()}, else: st
+  end
+
+  defp heard_start(%{"ev" => "barge_in"}, st), do: %{st | barge_at: mono()}
+  defp heard_start(%{"ev" => "utterance"}, st), do: %{st | speech_open?: false}
 
   defp heard_start(_ev, st), do: st
 
@@ -180,7 +221,102 @@ defmodule RisiMe.Agent.CallRisi.Session do
     st = %{st | caller?: true}
     # Like answering a phone: Risi speaks first (utterance 0, no user turn to time).
     st = %{st | turn: new_turn(0, nil, st)}
-    {:noreply, speak(st, @greeting, :greeting) |> put_in([:turn, :brain_done?], true)}
+    st = speak(st, @greeting, :greeting) |> put_in([:turn, :brain_done?], true)
+
+    # v1.53 §41.10: the phone may recognise the caller's speech; the worker acks the mode.
+    st =
+      if st.stt? do
+        Media.impl().command(st.media, PhoneStt.mode_cmd("phone"))
+        %{st | stt_mode: :asked}
+      else
+        st
+      end
+
+    {:noreply, st}
+  end
+
+  # §41.10: the worker sent `mode` to the phone (an older worker never acks: server STT stays).
+  defp media(%{"ev" => "stt_mode", "mode" => "phone"}, %{stt_mode: :asked} = st) do
+    Logger.info("call risi: stt=phone call=#{st.args.call_id}")
+    {:noreply, %{st | stt_mode: :phone}}
+  end
+
+  defp media(%{"ev" => "stt_mode", "mode" => "server"}, %{stt_mode: m} = st) when m != :server,
+    do: {:noreply, %{st | stt_mode: :server}}
+
+  defp media(%{"ev" => "stt_mode"}, st), do: {:noreply, st}
+
+  # §41.10: a final from the phone drives the turn (never logged).
+  defp media(%{"ev" => "stt", "t" => "final"} = ev, %{stt_mode: :phone} = st) do
+    case PhoneStt.final(ev) do
+      {:ok, f} ->
+        f = Map.put(f, :at, mono())
+        st = %{st | stt_misses: 0}
+
+        # A final still waiting for its utterance goes first (on its own).
+        st =
+          case st.stt_wait do
+            %{final: prev, ref: ref} ->
+              Process.cancel_timer(ref)
+              {:noreply, st} = phone_final(%{st | stt_wait: nil}, prev, nil)
+              st
+
+            nil ->
+              st
+          end
+
+        case Enum.max_by(st.stt_pending, &elem(&1, 0), fn -> nil end) do
+          {utt, info} ->
+            phone_final(%{st | stt_pending: %{}}, f, {utt, info})
+
+          nil when st.speech_open? ->
+            ref = Process.send_after(self(), {:stt_pair, f.at}, PhoneStt.pair_wait_ms())
+            {:noreply, %{st | stt_wait: %{final: f, ref: ref}}}
+
+          nil ->
+            phone_final(st, f, nil)
+        end
+
+      :error ->
+        {:noreply, st}
+    end
+  end
+
+  # §41.10: on-device recognition stopped: the server's speech-to-text for the rest of the call.
+  defp media(%{"ev" => "stt", "t" => "off"} = ev, %{stt_mode: :phone} = st) do
+    latest =
+      case Enum.max_by(st.stt_pending, &elem(&1, 0), fn -> nil end) do
+        {_utt, info} -> info
+        nil -> nil
+      end
+
+    stt_fallback(st, latest, "off:" <> to_string(ev["reason"]), false)
+  end
+
+  defp media(%{"ev" => "stt"}, st), do: {:noreply, st}
+
+  # §41.10: in phone mode the audio only times the turn; its words come as the phone's final.
+  defp media(%{"ev" => "utterance", "utt" => utt} = ev, %{stt_mode: :phone} = st) do
+    end_ms = mono() - (ev["eot_wait_ms"] || 0)
+
+    info = %{
+      ev: ev,
+      start_ms: end_ms - (ev["speech_ms"] || 0),
+      end_ms: end_ms,
+      during_tts?: st.barged?
+    }
+
+    st = %{st | barged?: false}
+
+    case st.stt_wait do
+      %{final: f, ref: ref} ->
+        Process.cancel_timer(ref)
+        phone_final(%{st | stt_wait: nil}, f, {utt, info})
+
+      nil ->
+        Process.send_after(self(), {:stt_miss, utt}, PhoneStt.miss_ms())
+        {:noreply, %{st | stt_pending: Map.put(st.stt_pending, utt, info)}}
+    end
   end
 
   # Device test 15 Oct ("Do you have anything" … 1 s … "on the 18th?"): Risi had begun to answer
@@ -235,7 +371,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
     Task.start(fn ->
       r =
         try do
-          RisiMe.Agent.Speech.transcribe(wav, language: "en")
+          RisiMe.Agent.Speech.transcribe(wav, language: "en", temperature_fallback: false)
         catch
           _, _ -> {:error, :failed}
         end
@@ -413,6 +549,97 @@ defmodule RisiMe.Agent.CallRisi.Session do
       {:noreply, %{st | turn: nil}}
     else
       {:noreply, st}
+    end
+  end
+
+  ## Phone speech-to-text (v1.53 §41.10)
+
+  defp mono, do: System.monotonic_time(:millisecond)
+
+  # One final, paired with its utterance (`{utt, info}`) or on its own (the audio missed it).
+  defp phone_final(st, f, paired) do
+    {utt, info, st} =
+      case paired do
+        {utt, info} ->
+          {utt, info, st}
+
+        nil ->
+          n = st.phone_n + 1
+          {n, %{ev: %{}, start_ms: f.at, end_ms: f.at, during_tts?: false}, %{st | phone_n: n}}
+      end
+
+    barge? = is_integer(st.barge_at) and f.at - st.barge_at <= PhoneStt.barge_window_ms()
+
+    case PhoneStt.judge(f, barge?) do
+      {:ok, text} ->
+        phone_turn(%{st | unclear?: false}, utt, info, text, f.at)
+
+      # Unsure: one "Sorry, I didn't catch that." in a row, and only while Risi is free.
+      {:unclear, _} when st.unclear? == false and st.turn == nil ->
+        turn =
+          new_turn(utt, nil, st)
+          |> Map.merge(%{brain_done?: true, stt_model: "phone", end_ms: info.end_ms})
+
+        st = %{st | turn: turn, unclear?: true}
+        {:noreply, speak(st, CallRisi.Hearing.unclear_line(), :answer)}
+
+      _ ->
+        {:noreply, st}
+    end
+  end
+
+  defp phone_turn(st, utt, info, text, at) do
+    t = st.turn
+
+    if is_map(t) and t.brain_done? == false and
+         t.route not in [nil, "chat", "capabilities", "write_status"] do
+      # Risi is checking: the words join the question (as the server's side transcription does).
+      held_fragment(release(st, true), utt, text)
+    else
+      st = release(st, false)
+
+      {prefix, st} =
+        case take_unanswered(st) do
+          {"", st} -> take_fragment(st, info.start_ms)
+          {p, st} -> {p, %{st | last_user: nil}}
+        end
+
+      st = cancel_turn(st, :replaced)
+      words = String.trim(prefix <> " " <> text)
+
+      ctx =
+        brain_ctx(st, utt)
+        |> Map.merge(%{filler?: true, stt_model: "phone", stt_ms: max(at - info.end_ms, 0)})
+
+      {:ok, pid} = Task.start_link(fn -> Brain.run_text(ctx, words) end)
+
+      turn =
+        new_turn(utt, pid, st)
+        |> Map.merge(%{
+          eot_wait_ms: info.ev["eot_wait_ms"],
+          end_ms: info.end_ms,
+          prefix: prefix,
+          text: words
+        })
+
+      {:noreply, %{st | turn: turn}}
+    end
+  end
+
+  # Back to the server's speech-to-text for the rest of the call; the utterance that tipped it
+  # (if any) is transcribed by the server now.
+  defp stt_fallback(st, info, why, tell_phone? \\ true) do
+    if tell_phone?, do: Media.impl().command(st.media, PhoneStt.mode_cmd("server"))
+    Logger.info("call risi: stt=server (#{why}) call=#{st.args.call_id}")
+    if match?(%{ref: _}, st.stt_wait), do: Process.cancel_timer(st.stt_wait.ref)
+    st = %{st | stt_mode: :server, stt_pending: %{}, stt_wait: nil}
+
+    case info do
+      %{ev: %{"pcm16k" => _} = ev, end_ms: e, during_tts?: d} ->
+        media(Map.put(ev, "eot_wait_ms", mono() - e), %{st | barged?: d})
+
+      _ ->
+        {:noreply, st}
     end
   end
 
@@ -748,6 +975,9 @@ defmodule RisiMe.Agent.CallRisi.Session do
     timings =
       "eot=#{t.eot_wait_ms};stt=#{t.stt_ms};tok=#{t.first_token_ms};piece=#{t.first_piece_ms};" <>
         "tts=#{t.tts_first_ms};first=#{after_end}"
+
+    # v1.53 §41.10: the phone's words are never recorded, only where they came from.
+    timings = if t.stt_model == "phone", do: timings <> ";src=phone", else: timings
 
     Logger.info("call risi turn: #{timings} route=#{t.route} status=#{status}")
 

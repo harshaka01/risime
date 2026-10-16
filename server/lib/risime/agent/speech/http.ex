@@ -33,6 +33,9 @@ defmodule RisiMe.Agent.Speech.Http do
     service ignores the field.
   * **Fallback** (incident 2026-10-14): `fallback_transcribe/2` asks the fast CPU model
     (omniASR-CTC-1B int8) by name; `Speech.transcribe_note/2` uses it after a timeout.
+  * **No temperature fallback** (Harsha 2026-10-16): `opts[:temperature_fallback]` `false`
+    (Call Risi's chunks only) is sent as the multipart field `temperature_fallback=false`
+    (temperature 0 only); voice notes, compare and evals send none.
   * **Language hint** (decision 071 amendment d): `opts[:language_hint]` (`["si", "en"]`) is
     sent as the multipart field `language_hint=si,en` on transcribe and compare (and the
     per-model fallback); omitted when empty.
@@ -327,6 +330,13 @@ defmodule RisiMe.Agent.Speech.Http do
 
       fields =
         if is_binary(opts[:language]), do: fields ++ [language: opts[:language]], else: fields
+
+      # Harsha 2026-10-16 (made-up words): Call Risi's chunks ask for temperature 0 only (no
+      # re-decoding at higher temperatures on noise). An older service ignores the field.
+      fields =
+        if opts[:temperature_fallback] == false,
+          do: fields ++ [temperature_fallback: "false"],
+          else: fields
 
       fields =
         if is_binary(opts[:prompt]) and opts[:prompt] != "",

@@ -83,7 +83,10 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
     # v1 calls are English-first (the start reply's `lang`): naming the language skips the service's
     # detection pass (~250 ms measured). An admin's manual model for it still applies (SpeechRoutes).
-    case RisiMe.Agent.Speech.transcribe(wav, language: Map.get(ctx, :lang, "en")) do
+    case RisiMe.Agent.Speech.transcribe(wav,
+           language: Map.get(ctx, :lang, "en"),
+           temperature_fallback: false
+         ) do
       {:ok, %{text: _} = r} ->
         ms = System.monotonic_time(:millisecond) - t0
         prefix = String.trim(prefix)
@@ -147,7 +150,13 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   line (it was said once for this question).
   """
   def run_text(ctx, text) do
-    report(ctx, {:stt, %{text: text, lang: "en", model: nil, ms: 0}})
+    # v1.53 §41.10: words the phone recognised carry `stt_model: "phone"` and their latency.
+    report(
+      ctx,
+      {:stt,
+       %{text: text, lang: "en", model: Map.get(ctx, :stt_model), ms: Map.get(ctx, :stt_ms, 0)}}
+    )
+
     answer(ctx, text, "en")
   end
 
