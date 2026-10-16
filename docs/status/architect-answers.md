@@ -5,6 +5,24 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 22:10 SLT · HARSHA: public address risicloud.ai/marketplace, signed-in allow-listed users only
+
+Harsha 21:56 SLT: "Have a public address risicloud.ai/marketplace but after cloud authentication only for the selected
+users starting harsha@codegen.co.uk". This replaces "no public route yet" in the 22:05 entry, item 7.
+- **Sign-in:** OIDC against Keycloak realm `aoa` with its **own client `risi-marketplace`** (separable; not the
+  `risime` client). Authorization code + PKCE, public client, redirect `https://risicloud.ai/marketplace/auth/callback`.
+  RisiWork owns Keycloak, so I'm asking them in the bridge to create it. Harsha may have to do it by hand with kcadm,
+  as with /admin today.
+- **Allow-list:** only allow-listed accounts get past sign-in. Everyone else gets a polite "not open yet" page and no
+  data. The list lives in the marketplace's own DB or config, **never hard-coded**, and starts with one entry: the
+  account Harsha signs in with (harsha@codegen.co.uk). An admin can add people later. Log every sign-in to the audit.
+- **Route:** risicloud.ai is served by **spark's** Caddy, which is RisiWork's, so `/marketplace` needs a Caddy route
+  there to the marketplace on spark2. Don't expose any spark2 port publicly. Propose the safest link in a few lines
+  in needs-you, for example a listener on spark2's **private LAN address only**, firewalled to spark's IP, or another
+  way. Any ufw/sudo step goes to Harsha as an exact command. I'll agree the Caddy side with RisiWork.
+- **Until the route exists:** develop and test on loopback. The registry API (phase 0) needs no page. Add the
+  signed-in page shell (sign-in, allow-list, an "agents" list read-only) as the first phase 1 piece.
+
 ## 2026-10-16 22:05 SLT · HARSHA: build the marketplace now, separable from RisiMe
 
 Harsha 21:53 SLT: **"if root has capacity build the marketplace now but in a different folder structure where we can
