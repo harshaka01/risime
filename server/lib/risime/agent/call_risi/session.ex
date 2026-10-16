@@ -823,6 +823,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
   defp dict_checked(%{dict: d} = st, r, n, ended?) do
     ended? = ended? or Map.get(d, :end_after?) == true
     d = Map.delete(d, :end_after?)
+    pieces = d.new
 
     case CallRisi.Dictation.apply(d, n, r, ended?) do
       {:more, d} ->
@@ -846,7 +847,13 @@ defmodule RisiMe.Agent.CallRisi.Session do
             {p, _} -> p
           end
 
-        st = %{st | dict: nil, dialogue: %{dl | dictation: nil, pending: pending}}
+        # The turn writes its words to the transcript itself (device test 16 Oct: "Hello." twice).
+        lines =
+          Enum.reduce(pieces, st.lines, fn piece, ls ->
+            drop_first(ls, &(&1["who"] == "user" and &1["text"] == piece))
+          end)
+
+        st = %{st | dict: nil, lines: lines, dialogue: %{dl | dictation: nil, pending: pending}}
         utt = d.utt || 1
         {:noreply, start_text_turn(cancel_turn(st, :merged), utt, words, true)}
     end
