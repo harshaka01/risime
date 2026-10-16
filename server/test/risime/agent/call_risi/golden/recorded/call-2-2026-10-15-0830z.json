@@ -1,0 +1,50 @@
+{
+  "did i promise anything on tuesday?": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "Did I promise anything on Tuesday?",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "promises_read"
+    },
+    "ms": 1515
+  },
+  "did i promise anything today or tomorrow?": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "Did I promise anything today or tomorrow?",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "promises_read"
+    },
+    "ms": 1471
+  },
+  "let me see. i need to listen to it.": {
+    "decision": {
+      "action": "reply",
+      "cancel_open": false,
+      "request": "",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "none"
+    },
+    "ms": 1091
+  },
+  "you should have access, you add the notes and calendar": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "Did I promise anything today or tomorrow?",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "promises_read"
+    },
+    "ms": 1458
+  }
+}

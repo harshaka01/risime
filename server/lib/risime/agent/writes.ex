@@ -329,6 +329,45 @@ defmodule RisiMe.Agent.Writes do
 
   def act(_conv, _user, _device, _env), do: :ok
 
+  @doc """
+  Call Risi brain v3 (Harsha's call 75ec8683: "cancel that"): cancels `user`'s pending card of
+  `request_id` exactly like its Cancel tap (`cancelled`, the sealed args wiped). A user with a
+  `risi_items` device gets a silent `confirm_update` so the card closes (§34.2: a state the app
+  doesn't know shows as "Closed"). `:ok` when a pending card was cancelled, else `:none`.
+  """
+  def cancel_request(user, request_id) do
+    with {:ok, rid} <- Ecto.UUID.cast(request_id),
+         %Write{} = w <-
+           Repo.one(
+             from w in Write,
+               where: w.user_id == ^user and w.request_id == ^rid and w.state == "pending",
+               order_by: [desc: w.inserted_at],
+               limit: 1
+           ) do
+      finish(w, "cancelled")
+
+      if RisiMe.Devices.any_risi_items?(user) and is_binary(w.card_conversation_id) do
+        Out.post(w.card_conversation_id, "Cancelled.", %{
+          "kind" => "confirm_update",
+          "write_id" => w.write_id,
+          "state" => "cancelled",
+          "by_request_id" => request_id,
+          "call_ref" => nil,
+          "made_by" => RisiMe.Agent.MadeBy.rule(),
+          "notify" => []
+        })
+      end
+
+      :ok
+    else
+      _ -> :none
+    end
+  rescue
+    e ->
+      Logger.warning("Risi cancel failed: #{inspect(e.__struct__)}")
+      :none
+  end
+
   defp cancel(%Write{state: "pending"} = w) do
     finish(w, "cancelled")
     :ok

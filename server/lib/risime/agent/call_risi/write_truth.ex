@@ -105,6 +105,32 @@ defmodule RisiMe.Agent.CallRisi.WriteTruth do
 
   def status_line(%{} = write, why, state_fun) do
     s = state_fun.(write[:request_id])
+
+    if match?(%{tool: "send_message"}, s) or write[:route] == "message_write",
+      do: message_status(s),
+      else: write_status(s, write, why)
+  end
+
+  # Harsha's call 75ec8683: a message card is never "added" and has no Add button (§42.2:
+  # [Send], [Edit], Cancel).
+  defp message_status(%{state: st}) when st in ~w(done running),
+    do: "Yes, it went: your message was sent from your phone."
+
+  defp message_status(%{state: "pending"}),
+    do:
+      "It isn't sent yet: the message waits on a card in your Risi chat. " <>
+        "Tap Send on it to send it, or Cancel."
+
+  defp message_status(%{state: "cancelled"}),
+    do: "That message was cancelled, so nothing was sent."
+
+  defp message_status(%{state: "confirmed"}),
+    do: "You tapped Send, but it didn't go through, so it isn't sent. Tap Send again to retry."
+
+  defp message_status(_),
+    do: "Nothing was sent. Tell me who the message is for and what it should say."
+
+  defp write_status(s, write, why) do
     where = target(s, write)
 
     case s do
@@ -166,6 +192,11 @@ defmodule RisiMe.Agent.CallRisi.WriteTruth do
     {where, what} = parts(summary, today)
 
     cond do
+      # Harsha's call 75ec8683: a message card is read back with its real buttons, never
+      # "I haven't added it yet. … Tap Add".
+      String.starts_with?(summary, "Send to ") ->
+        RisiMe.Agent.CallRisi.Dialogue.message_line(summary)
+
       voice_confirm? and where ->
         "I haven't added it yet. I've drafted it: " <> what <> ". Shall I add it to #{where}?"
 

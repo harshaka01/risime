@@ -1,0 +1,104 @@
+{
+  "id": "harsha-2026-10-15-call",
+  "lang": "en",
+  "script": "latin",
+  "tags": [
+    "multi_turn",
+    "pilot_replay",
+    "capability",
+    "calendar",
+    "fragment",
+    "follow_up",
+    "complaint",
+    "week"
+  ],
+  "now": "2026-10-15T07:11:00Z",
+  "turns": [
+    {
+      "say": "What can you do?",
+      "expect": {
+        "route": "capabilities",
+        "must": [
+          "calendar",
+          "reminders",
+          "promises"
+        ]
+      }
+    },
+    {
+      "say": "Check my calendar for today and tomorrow?",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-15",
+          "2026-10-17"
+        ],
+        "must": [
+          "today",
+          "3 pm",
+          "tomorrow",
+          "11 am",
+          "Call Ruwan"
+        ],
+        "must_not": [
+          "Thu 15 Oct",
+          "Fri 16 Oct"
+        ]
+      }
+    },
+    {
+      "say": "Do you have anything",
+      "expect": null
+    },
+    {
+      "say": "on the 18th?",
+      "continues": true,
+      "after_ms": 1000,
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-18",
+          "2026-10-19"
+        ],
+        "must": [
+          "10:30 am"
+        ],
+        "text": "Do you have anything on the 18th?"
+      }
+    },
+    {
+      "say": "Why can't you get the calendar information?",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-18",
+          "2026-10-19"
+        ],
+        "must": [
+          "10:30 am"
+        ]
+      }
+    },
+    {
+      "say": "Give me the entire week… tell me the important",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-15",
+          "2026-10-19"
+        ],
+        "must": [
+          "3 pm",
+          "12 noon",
+          "10:30 am"
+        ]
+      }
+    }
+  ],
+  "src": "synthetic",
+  "checked": false,
+  "checked_by": null,
+  "checked_on": null,
+  "note": "Harsha's real call on the pilot, 15 Oct 07:11-07:13Z, his own words (no names); the calendar data is synthetic. Was: generic answer, card text 'Fri 16 Oct: From: your phone calendars · Risi', 'I still can't see your calendar', card text again, 'I'm still busy with your last request'.",
+  "golden_id": "call-1-2026-10-15-0711z"
+}

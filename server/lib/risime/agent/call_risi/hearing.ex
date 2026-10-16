@@ -38,7 +38,10 @@ defmodule RisiMe.Agent.CallRisi.Hearing do
     # A barge-in utterance must be at least this loud to be the caller (else it is echo).
     echo_rms: 1_400,
     # Short: a blocklisted phrase is dropped when the speech is under this (or ≤ 4 words).
-    short_ms: 1_500
+    short_ms: 1_500,
+    # v3: "Sorry, I didn't catch that." only for speech this long, this long after Risi's voice.
+    clear_ms: 700,
+    echo_after_ms: 1_500
   ]
 
   # Whisper's well-known inventions on noise and silence, and those of Harsha's 04:43 call.
@@ -77,6 +80,23 @@ defmodule RisiMe.Agent.CallRisi.Hearing do
 
   @doc "The once-in-a-row line for an unclear utterance."
   def unclear_line, do: "Sorry, I didn't catch that."
+
+  @doc """
+  Brain v3 (architect P0 E; Harsha's call 75ec8683: "Sorry, I didn't catch that." right after
+  Risi's own answer): did the caller clearly speak? Only then is an unclear utterance worth a
+  "Sorry". Not when it began while Risi was speaking (`during_tts?`), not within the echo window
+  after Risi went quiet (`since_risi_ms` < `echo_after_ms`, default 1.5 s), not when it is short
+  (`speech_ms` < `clear_ms`, default 700 ms). Anything else unclear is dropped silently.
+  """
+  def clear_speech?(facts) when is_map(facts) do
+    cfg = cfg()
+    since = facts[:since_risi_ms]
+    ms = facts[:speech_ms]
+
+    facts[:during_tts?] != true and
+      not (is_integer(since) and since < cfg[:echo_after_ms]) and
+      is_integer(ms) and ms >= cfg[:clear_ms]
+  end
 
   @doc "See the moduledoc."
   def judge(r, audio \\ %{})

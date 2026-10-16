@@ -105,7 +105,7 @@ defmodule RisiMe.Agent.LLM do
     body = %{
       "model" => model_alias,
       "messages" => messages,
-      "temperature" => 0.2,
+      "temperature" => Map.get(req, :temperature, 0.2),
       "top_p" => 0.8,
       "max_tokens" => Map.get(req, :max_tokens, 800),
       "chat_template_kwargs" => %{"enable_thinking" => false},

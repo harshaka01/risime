@@ -1,0 +1,50 @@
+{
+  "all right. can i have a meeting set up today for two?": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "set up a meeting today for two",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "calendar_add"
+    },
+    "ms": 1331
+  },
+  "do i have anything to do today?": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "Do I have anything to do today?",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "promises_read"
+    },
+    "ms": 1738
+  },
+  "good morning.": {
+    "decision": {
+      "action": "reply",
+      "cancel_open": false,
+      "request": "",
+      "say": "Good morning. How can I help you today?",
+      "text": "",
+      "to": "",
+      "tool": "none"
+    },
+    "ms": 1337
+  },
+  "yeah.": {
+    "decision": {
+      "action": "ask",
+      "cancel_open": false,
+      "request": "",
+      "say": "Who would you like to meet with, and what is the meeting about?",
+      "text": "",
+      "to": "",
+      "tool": "none"
+    },
+    "ms": 1493
+  }
+}

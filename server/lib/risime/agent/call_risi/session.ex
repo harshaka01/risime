@@ -111,6 +111,12 @@ defmodule RisiMe.Agent.CallRisi.Session do
            speech_open?: false,
            barge_at: nil,
            phone_n: 1_000_000,
+           # Architect P0 2026-10-16: brain v3 (one model decision a turn) for this caller, the
+           # call's open state (RisiMe.Agent.CallRisi.Dialogue) and when Risi last went quiet
+           # (its echo window: an unclear utterance right after it is dropped silently).
+           v3?: Map.get_lazy(args, :v3?, fn -> CallRisi.BrainV3.on_for?(args.user_id) end),
+           dialogue: CallRisi.Dialogue.new(),
+           risi_quiet_at: nil,
            ended?: false
          }}
 
@@ -410,7 +416,16 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
     st = cancel_turn(st, :replaced)
     wav = wav16k(pcm)
-    ctx = brain_ctx(st, utt) |> Map.merge(%{speech_ms: ev["speech_ms"], during_tts?: st.barged?})
+
+    ctx =
+      brain_ctx(st, utt)
+      |> Map.merge(%{
+        speech_ms: ev["speech_ms"],
+        during_tts?: st.barged?,
+        since_risi_ms: since_risi(st, start_ms),
+        held?: prefix != ""
+      })
+
     st = %{st | barged?: false}
     {:ok, pid} = Task.start_link(fn -> Brain.run(ctx, wav, prefix) end)
 
@@ -427,6 +442,8 @@ defmodule RisiMe.Agent.CallRisi.Session do
   end
 
   defp media(%{"ev" => "said", "seq" => seq, "interrupted" => false}, st) do
+    st = %{st | risi_quiet_at: mono()}
+
     case Map.pop(st.pieces, seq) do
       {{utt, text, kind, store}, pieces} ->
         st = answered(st, utt, kind)
@@ -506,6 +523,23 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   defp brain({:write_ask, text}, st), do: {:noreply, %{st | write_ask: text}}
 
+  # Brain v3: the call's open state, and the card a turn made (its kind from its route).
+  defp brain({:dialogue, %{} = d}, st), do: {:noreply, %{st | dialogue: d}}
+
+  defp brain({:card, %{} = c}, st) do
+    card = Map.merge(c, CallRisi.Dialogue.message_parts(c[:summary]) || %{})
+
+    {:noreply,
+     %{st | dialogue: %{CallRisi.Dialogue.get(st.dialogue) | card: card, awaiting: nil}}}
+  end
+
+  defp brain({:write, %{summary: s, request_id: rid} = w}, st) when is_binary(s) do
+    kind = if w[:route] == "reminder", do: "reminder", else: "calendar"
+    card = %{request_id: rid, kind: kind, summary: s}
+    d = %{CallRisi.Dialogue.get(st.dialogue) | card: card, awaiting: nil}
+    {:noreply, %{st | write: w, write_ask: nil, dialogue: d}}
+  end
+
   defp brain({:write, %{} = w}, st), do: {:noreply, %{st | write: w, write_ask: nil}}
 
   defp brain({:write, nil}, %{write: %{} = w} = st),
@@ -574,18 +608,31 @@ defmodule RisiMe.Agent.CallRisi.Session do
       {:ok, text} ->
         phone_turn(%{st | unclear?: false}, utt, info, text, f.at)
 
-      # Unsure: one "Sorry, I didn't catch that." in a row, and only while Risi is free.
+      # Unsure: one "Sorry, I didn't catch that." in a row, and only while Risi is free (v3:
+      # and only when the caller clearly spoke, never in Risi's echo window).
       {:unclear, _} when st.unclear? == false and st.turn == nil ->
-        turn =
-          new_turn(utt, nil, st)
-          |> Map.merge(%{brain_done?: true, stt_model: "phone", end_ms: info.end_ms})
+        facts = %{
+          during_tts?: info.during_tts?,
+          speech_ms: info.ev["speech_ms"],
+          since_risi_ms: since_risi(st, info.start_ms)
+        }
 
-        st = %{st | turn: turn, unclear?: true}
-        {:noreply, speak(st, CallRisi.Hearing.unclear_line(), :answer)}
+        if st.v3? and not CallRisi.Hearing.clear_speech?(facts),
+          do: {:noreply, st},
+          else: unclear_turn(st, utt, info)
 
       _ ->
         {:noreply, st}
     end
+  end
+
+  defp unclear_turn(st, utt, info) do
+    turn =
+      new_turn(utt, nil, st)
+      |> Map.merge(%{brain_done?: true, stt_model: "phone", end_ms: info.end_ms})
+
+    st = %{st | turn: turn, unclear?: true}
+    {:noreply, speak(st, CallRisi.Hearing.unclear_line(), :answer)}
   end
 
   defp phone_turn(st, utt, info, text, at) do
@@ -609,7 +656,12 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
       ctx =
         brain_ctx(st, utt)
-        |> Map.merge(%{filler?: true, stt_model: "phone", stt_ms: max(at - info.end_ms, 0)})
+        |> Map.merge(%{
+          filler?: true,
+          stt_model: "phone",
+          stt_ms: max(at - info.end_ms, 0),
+          held?: prefix != ""
+        })
 
       {:ok, pid} = Task.start_link(fn -> Brain.run_text(ctx, words) end)
 
@@ -742,6 +794,23 @@ defmodule RisiMe.Agent.CallRisi.Session do
   # A fragment said while holding: "Risi, stop" stops; one that changes the request (another
   # day, a calendar follow-up) restarts it with the merged words (no second holding line);
   # anything else is merged into the question's line and the wait goes on.
+  # Brain v3 (architect P0 C): a fragment said while Risi works on the question is never acted
+  # on alone: "Risi, stop" stops; anything else restarts the question with all the words, and
+  # the model decides again on the whole.
+  defp held_fragment(%{v3?: true} = st, utt, text) do
+    t = st.turn
+
+    if Regex.match?(@stop, text) do
+      {:noreply, add_line(cancel_turn(st, :barge_in), :user, text, nil, utt)}
+    else
+      merged = String.trim((t.text || "") <> " " <> text)
+      lines = drop_first(st.lines, &(&1["who"] == "user" and &1["text"] == t.text))
+      st = cancel_turn(%{st | lines: lines}, :merged)
+      st = start_text_turn(st, utt, merged, false)
+      {:noreply, %{st | turn: %{st.turn | root: t.root}}}
+    end
+  end
+
   defp held_fragment(st, utt, text) do
     t = st.turn
     merged = String.trim((t.text || "") <> " " <> text)
@@ -820,13 +889,19 @@ defmodule RisiMe.Agent.CallRisi.Session do
       once: st.once,
       unclear_last?: st.unclear?,
       cal?: st.cal?,
-      caps: Map.get(st.args, :caps)
+      caps: Map.get(st.args, :caps),
+      v3?: st.v3?,
+      dialogue: st.dialogue
     }
   end
 
+  # How long after Risi last went quiet an utterance began (nil: Risi hasn't spoken yet).
+  defp since_risi(%{risi_quiet_at: at}, start_ms) when is_integer(at), do: start_ms - at
+  defp since_risi(_st, _start_ms), do: nil
+
   # A turn from words already transcribed (a merged or late fragment).
   defp start_text_turn(st, utt, text, filler?, decision \\ nil) do
-    ctx = brain_ctx(st, utt) |> Map.merge(%{filler?: filler?, decision: decision})
+    ctx = brain_ctx(st, utt) |> Map.merge(%{filler?: filler?, decision: decision, held?: true})
     {:ok, pid} = Task.start_link(fn -> Brain.run_text(ctx, text) end)
     %{st | turn: %{new_turn(utt, pid, st) | text: text}}
   end
@@ -929,10 +1004,13 @@ defmodule RisiMe.Agent.CallRisi.Session do
       do: Media.impl().command(st.media, %{"cmd" => "stop_speaking"})
 
     if t.utt > 0 and t.spoken != [],
-      do: record(t, st, if(why == :barge_in, do: :barged, else: :replaced))
+      do: record(t, st, if(why in [:barge_in, :merged], do: why, else: :replaced) |> barged())
 
     %{st | turn: nil, pieces: %{}}
   end
+
+  defp barged(:barge_in), do: :barged
+  defp barged(why), do: why
 
   defp add_line(st, who, text, kind, utt) do
     line =
@@ -961,11 +1039,11 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
     status_s =
       cond do
-        status in [:ok, :barged, :replaced] and is_integer(after_end) and
+        status in [:ok, :barged, :replaced, :merged] and is_integer(after_end) and
             after_end > 2 * @budget_ms ->
           "over_budget"
 
-        status in [:ok, :barged, :replaced, :no_speech, :ignored] ->
+        status in [:ok, :barged, :replaced, :merged, :no_speech, :ignored] ->
           "ok"
 
         true ->

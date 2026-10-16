@@ -109,7 +109,9 @@ defmodule RisiMe.Agent.CallRisi.Brain do
             answer(ctx, text, r.language)
 
           # Unsure what was said: one "Sorry, I didn't catch that." in a row, then silence.
-          match?({:unclear, _}, outcome) and Map.get(ctx, :unclear_last?) != true ->
+          # v3 (architect P0 E): only when the caller clearly spoke, never Risi's own echo.
+          match?({:unclear, _}, outcome) and Map.get(ctx, :unclear_last?) != true and
+              (Map.get(ctx, :v3?) != true or Hearing.clear_speech?(ctx)) ->
             say(ctx, Hearing.unclear_line(), :answer)
             report(ctx, {:done, %{status: :ok, request_id: nil}})
 
@@ -160,7 +162,16 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     answer(ctx, text, "en")
   end
 
+  # Brain v3 (architect P0 2026-10-16, flag RISI_CALL_BRAIN): one model decision per turn.
   defp answer(ctx, text, lang) do
+    if Map.get(ctx, :v3?) == true,
+      do: RisiMe.Agent.CallRisi.BrainV3.answer(ctx, text, lang),
+      else: legacy_answer(ctx, text, lang)
+  end
+
+  @doc false
+  # Today's (v2) brain: the router's rules and the call's special cases. Also v3's fallback.
+  def legacy_answer(ctx, text, lang) do
     {route, range} = Map.get(ctx, :decision) || decide(text, ctx)
     report(ctx, {:route, route})
     report(ctx, {:decided, {route, range}})
@@ -265,7 +276,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
   # §41.9: a clear yes confirms the caller's own pending card like tapping Add (flag
   # RISI_CALL_VOICE_CONFIRM); Risi says "Added" only from the write's own done row.
-  defp write_status(ctx, :confirm) do
+  @doc false
+  def write_status(ctx, :confirm) do
     write = Map.get(ctx, :write)
 
     with %{request_id: rid} <- write,
@@ -294,7 +306,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   end
 
   # "I can't see it": re-checks the write's row and says what it finds; never insists.
-  defp write_status(ctx, why),
+  def write_status(ctx, why),
     do: say_text(ctx, WriteTruth.status_line(Map.get(ctx, :write), why))
 
   # A correction of the card being made goes to the write turn as a change of it (the turn's
@@ -420,7 +432,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   end
 
   # The user's local date (their zone; UTC if unknown).
-  defp today(ctx) do
+  @doc false
+  def today(ctx) do
     case Map.get(ctx, :today) do
       %Date{} = d ->
         d
@@ -436,7 +449,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     end
   end
 
-  defp caps(ctx) do
+  @doc false
+  def caps(ctx) do
     case Map.get(ctx, :caps) do
       names when is_list(names) ->
         names
@@ -526,7 +540,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
   ## A tool route: the filler at once, then the Risi chat's own turn (§25), spoken from its results.
 
-  defp tool_turn(ctx, text, lang, route, range) do
+  @doc false
+  def tool_turn(ctx, text, lang, route, range) do
     if Map.get(ctx, :filler?, true),
       do: say(ctx, Fillers.pick(route, lang, ctx.filler_n), :filler)
 
@@ -549,6 +564,14 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       |> then(fn e ->
         if route == "ledger_items", do: Map.put(e, "__intent", "risi_items"), else: e
       end)
+      # Brain v3: a message with both slots from the caller's words: the turn drafts exactly
+      # that (no model writes the text).
+      |> then(fn e ->
+        case range do
+          {:send, to, body} -> Map.put(e, "__send", %{"to" => to, "text" => body})
+          _ -> e
+        end
+      end)
 
     if route == "calendar_read" and is_map(range),
       do: report(ctx, {:topic, %{route: route, range: Map.delete(range, :window)}})
@@ -556,6 +579,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     # Harsha's 3rd call: the call's write (its card's truth is read by this request id).
     write = if route in @write_routes, do: %{request_id: request_id, route: route, last?: true}
     report(ctx, {:write, write})
+    # Brain v3: the message card this turn makes is the call's open card.
+    write = write || if(route == "message_write", do: %{request_id: request_id, route: route})
 
     # §41.8: the phone's titles for this one answer, asked at once (in parallel with the turn).
     cal = if route == "calendar_read" and is_map(range), do: cal_request(ctx, range)
@@ -668,8 +693,16 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
       # Harsha's 3rd call: the confirm card this turn made (its summary is spoken, never "added").
       {:risi_voice_card, ^rid, summary} ->
-        if this = Map.get(ctx, :this_write),
-          do: report(ctx, {:write, Map.put(this, :summary, summary)})
+        case Map.get(ctx, :this_write) do
+          %{route: "message_write"} ->
+            report(ctx, {:card, %{request_id: rid, kind: "message", summary: summary}})
+
+          %{} = this ->
+            report(ctx, {:write, Map.put(this, :summary, summary)})
+
+          _ ->
+            :ok
+        end
 
         wait_answer(w, route, question, {:card, summary})
 
@@ -840,7 +873,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   end
 
   # Speaks `text` piece by piece; with `stored`, the transcript keeps `stored` instead (once).
-  defp say_text(ctx, text, stored \\ nil) do
+  @doc false
+  def say_text(ctx, text, stored \\ nil) do
     {pieces, rest} = Sentences.feed("", Sentences.clean(text) <> " ", true)
     pieces = pieces ++ Sentences.flush(rest)
 
@@ -885,8 +919,9 @@ defmodule RisiMe.Agent.CallRisi.Brain do
 
   defp turn_impl, do: Application.get_env(:risime, :risi_call_turn, RisiMe.Agent.Turn)
 
-  defp say(_ctx, nil, _kind), do: :ok
-  defp say(ctx, text, kind), do: report(ctx, {:piece, text, kind})
+  @doc false
+  def say(_ctx, nil, _kind), do: :ok
+  def say(ctx, text, kind), do: report(ctx, {:piece, text, kind})
 
   defp report(ctx, event), do: send(ctx.pid, {:brain, ctx.utt, event})
 end

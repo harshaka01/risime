@@ -191,11 +191,21 @@ defmodule RisiMe.Agent.Turn do
     today = ctx.now |> Clock.local(ctx.tz) |> NaiveDateTime.to_date()
     # P0 2026-10-15: a Call Risi voice turn hands its own schedule range (the call's follow-up
     # topic: "on the 18th?" after a calendar question); every other request classifies its text.
+    # Call Risi brain v3: a call hands a message whose recipient and text are the caller's own
+    # words (`__send`): the turn drafts exactly that, no model writes it.
     intent =
-      case {env["__schedule"], env["__intent"]} do
-        {%{from: %Date{}, to: %Date{}} = r, _} -> {:schedule_read, Map.put_new(r, :now?, false)}
-        {_, "risi_items"} -> :risi_items
-        _ -> ScheduleIntent.classify(question, today)
+      case {env["__schedule"], env["__intent"], env["__send"]} do
+        {_, _, %{"to" => to, "text" => t}} when is_binary(to) and is_binary(t) ->
+          :send_message
+
+        {%{from: %Date{}, to: %Date{}} = r, _, _} ->
+          {:schedule_read, Map.put_new(r, :now?, false)}
+
+        {_, "risi_items", _} ->
+          :risi_items
+
+        _ ->
+          ScheduleIntent.classify(question, today)
       end
 
     # v1.35 §34.5: a tap on a name question's chip; §34.2: every other open card is superseded.
@@ -269,6 +279,7 @@ defmodule RisiMe.Agent.Turn do
 
     result =
       cond do
+        intent == :send_message -> forced_send(st, ctx, env["__send"])
         clarified -> resolve_clarify(st, ctx, clarified)
         schedule -> forced_read(st, ctx)
         intent == :risi_items -> forced_items(st, ctx)
@@ -1755,6 +1766,25 @@ defmodule RisiMe.Agent.Turn do
         "tool" => "calendar_check",
         "args" => args
       })
+    end
+  end
+
+  # Call Risi brain v3 (Harsha's call 75ec8683: Risi made up "Hi Shenika, how are you"): the
+  # call's message, both slots from the caller's own words, is the `send_message` step itself
+  # (the same authorisation, recipient check and card as a model's step; no model call).
+  defp forced_send(st, ctx, %{"to" => to, "text" => text}) do
+    allowed = Tools.allowed(ctx)
+    ctx = Map.put(ctx, :allowed_names, Enum.map(allowed, & &1.name))
+
+    if Enum.any?(allowed, &(&1.name == "send_message")) do
+      out = %{"tool" => "send_message", "args" => %{"to" => to, "text" => text}}
+      action(out, st, ctx, allowed)
+    else
+      answer_final(
+        st,
+        ctx,
+        "I can't send messages for you from here yet, so nothing was drafted."
+      )
     end
   end
 

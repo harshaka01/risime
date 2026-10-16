@@ -1,0 +1,80 @@
+{
+  "id": "harsha-2026-10-15-call-2",
+  "lang": "en",
+  "script": "latin",
+  "tags": [
+    "multi_turn",
+    "pilot_replay",
+    "thinking_aloud",
+    "promise",
+    "follow_up",
+    "complaint"
+  ],
+  "now": "2026-10-15T07:11:00Z",
+  "turns": [
+    {
+      "say": "Let me see. I need to listen to it.",
+      "expect": {
+        "silent": true
+      }
+    },
+    {
+      "say": "Did I promise anything today or tomorrow?",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-15",
+          "2026-10-17"
+        ],
+        "must": [
+          "Call Ruwan",
+          "5 pm"
+        ],
+        "must_not": [
+          "busy",
+          "access"
+        ]
+      }
+    },
+    {
+      "say": "You should have access, you add the notes and calendar",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-15",
+          "2026-10-17"
+        ],
+        "must": [
+          "Call Ruwan"
+        ],
+        "must_not": [
+          "access",
+          "Thu 15 Oct"
+        ]
+      }
+    },
+    {
+      "say": "Did I promise anything on Tuesday?",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-20",
+          "2026-10-21"
+        ],
+        "must": [
+          "Lotusbay",
+          "5 pm"
+        ],
+        "must_not": [
+          "busy"
+        ]
+      }
+    }
+  ],
+  "src": "synthetic",
+  "checked": false,
+  "checked_by": null,
+  "checked_on": null,
+  "note": "Harsha's 2nd real call, 15 Oct ~08:30Z, his words; was: thinking aloud answered, 'I don't have access to your personal commitments', card text spoken. Calendar data synthetic.",
+  "golden_id": "call-2-2026-10-15-0830z"
+}

@@ -1,0 +1,194 @@
+{
+  "id": "harsha-2026-10-15-call-3",
+  "lang": "en",
+  "script": "latin",
+  "tags": [
+    "multi_turn",
+    "pilot_replay",
+    "all_day",
+    "window",
+    "follow_up",
+    "write",
+    "honesty",
+    "confirmation",
+    "complaint"
+  ],
+  "now": "2026-10-15T14:13:00Z",
+  "cards": true,
+  "extra_events": [
+    {
+      "kind": "risi_calendar_event",
+      "title": "Free up calendar on 18th Oct whole day",
+      "start": "2026-10-18T00:00:00",
+      "mins": 60
+    },
+    {
+      "kind": "busy",
+      "title": null,
+      "start": "2026-10-18T00:00:00",
+      "mins": 60
+    },
+    {
+      "kind": "risi_calendar_event",
+      "title": "Send SSH access for iPhone stuff by 6 PM tomorrow",
+      "start": "2026-10-16T18:00:00",
+      "mins": 60
+    }
+  ],
+  "turns": [
+    {
+      "say": "Do you have anything on the 18th of October?",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-18",
+          "2026-10-19"
+        ],
+        "must": [
+          "free up calendar, all day",
+          "10:30 am"
+        ],
+        "must_not": [
+          "midnight",
+          "1 am",
+          "18th Oct"
+        ]
+      }
+    },
+    {
+      "say": "Yeah, but do I have anything from, say, 2 a.m. until... until maybe like, you know, 10 p.m.",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-18",
+          "2026-10-19"
+        ],
+        "must": [
+          "between 2 am and 10 pm",
+          "all day",
+          "10:30 am"
+        ],
+        "must_not": [
+          "ask me directly",
+          "check your phone",
+          "midnight"
+        ]
+      }
+    },
+    {
+      "say": "So what's on my calendar on the 18th of October?",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-18",
+          "2026-10-19"
+        ],
+        "must": [
+          "all day"
+        ],
+        "must_not": [
+          "midnight"
+        ]
+      }
+    },
+    {
+      "say": "The 16th?",
+      "expect": {
+        "route": "calendar_read",
+        "range": [
+          "2026-10-16",
+          "2026-10-17"
+        ],
+        "must": [
+          "send SSH access for iPhone stuff",
+          "6 to 7 pm",
+          "Call Ruwan"
+        ],
+        "must_not": [
+          "by 6 PM tomorrow"
+        ]
+      }
+    },
+    {
+      "say": "Yeah, can you add an appointment tomorrow? Just add an entry on my calendar and block it out from 10 to 12. discuss about RISD.",
+      "expect": {
+        "route": "calendar_write",
+        "must": [
+          "haven't added it yet",
+          "Risi chat",
+          "Tap Add"
+        ],
+        "must_not": [
+          "I've added",
+          "I have added"
+        ]
+      }
+    },
+    {
+      "say": "I don't know. From 9 to 10. discuss about racing",
+      "expect": {
+        "route": "calendar_write",
+        "text_starts": "Change the event I just asked you to add:",
+        "must": [
+          "Discuss racing",
+          "Tap Add"
+        ],
+        "must_not": [
+          "I've added",
+          "I have added",
+          "It will be"
+        ]
+      }
+    },
+    {
+      "say": "That's correct",
+      "expect": {
+        "route": "write_status",
+        "must": [
+          "haven't added it yet",
+          "Tap Add"
+        ],
+        "must_not": [
+          "Was that for me",
+          "I've added",
+          "I have added"
+        ]
+      }
+    },
+    {
+      "say": "Yeah, yeah, that's for you, just to add that particular entry.",
+      "expect": {
+        "route": "write_status",
+        "must": [
+          "haven't added it yet"
+        ],
+        "must_not": [
+          "Was that for me",
+          "I've added",
+          "I have added"
+        ]
+      }
+    },
+    {
+      "say": "Rishi, I can't see that you have added something.",
+      "expect": {
+        "route": "write_status",
+        "must": [
+          "isn't added yet",
+          "hasn't been confirmed"
+        ],
+        "must_not": [
+          "I have added",
+          "I've added",
+          "you should see"
+        ]
+      }
+    }
+  ],
+  "src": "synthetic",
+  "checked": false,
+  "checked_by": null,
+  "checked_on": null,
+  "note": "Harsha's 3rd real call on the pilot (srv10), 15 Oct 14:13-14:17Z, his words; calendar data synthetic but shaped like his (an all-day Risi Calendar item stored 00:00-01:00, the same block on the phone). Was: 'midnight to 1 am' for the all-day item, 'just ask me directly' for the 2 am-10 pm window, a correction on the chat route, 'Was that for me?' after 'That's correct', and 'I have added the racing discussion' / 'but I have added the entry' with nothing added. Turn 5 joins his two write utterances (he said 'tomorrow' in the first); a write with no day asks 'Which day?' (root 15 Oct).",
+  "golden_id": "call-3-2026-10-15-1413z"
+}

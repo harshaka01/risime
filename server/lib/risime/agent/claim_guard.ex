@@ -22,7 +22,7 @@ defmodule RisiMe.Agent.ClaimGuard do
 
   require Logger
 
-  @verbs "added|saved|scheduled|set|sent|booked|created|put|blocked|reminded|updated|changed|moved|cancell?ed|deleted|removed|noted|entered|logged|inserted"
+  @verbs "added|saved|scheduled|set|sent|booked|created|put|blocked|reminded|updated|changed|moved|cancell?ed|cleared|deleted|removed|noted|entered|logged|inserted"
   @do_verbs "add|save|schedule|set|send|book|create|put|block|remind|update|change|move|cancel|delete|remove|note|enter|log|insert"
 
   @claims [
@@ -118,9 +118,21 @@ defmodule RisiMe.Agent.ClaimGuard do
 
   @doc "The honest status of the request's action (no successful result)."
   def honest(request_id) do
-    states = results(request_id) |> Enum.map(& &1.state)
+    rows = results(request_id)
+    states = Enum.map(rows, & &1.state)
+    # Harsha's call 75ec8683: a message card's buttons are Send / Edit / Cancel, never Add.
+    message? = rows != [] and Enum.all?(rows, &(&1[:tool] == "send_message"))
 
     cond do
+      message? and "pending" in states ->
+        "I've drafted it. Tap Send to send it, or Cancel."
+
+      message? and Enum.any?(states, &(&1 in ~w(void confirmed))) ->
+        "That didn't go through, so nothing was sent."
+
+      message? ->
+        "Nothing was sent."
+
       "pending" in states ->
         "I've drafted it. Tap Add to confirm."
 
@@ -177,8 +189,8 @@ defmodule RisiMe.Agent.ClaimGuard do
           |> Enum.map_reduce(said?, fn s, said? ->
             cond do
               # The honest line already asks for the tap: the model's own "please tap Add" goes.
-              s != line and String.contains?(line, "Tap Add") and
-                  Regex.match?(~r/\btap\b.*\b(?:add|confirm)\b/iu, s) ->
+              s != line and String.contains?(line, ["Tap Add", "Tap Send"]) and
+                  Regex.match?(~r/\btap\b.*\b(?:add|confirm|send)\b/iu, s) ->
                 {nil, said?}
 
               not claim_sentence?(s) ->
