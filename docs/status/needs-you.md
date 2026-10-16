@@ -49,6 +49,25 @@ only (decision 095; CLAUDE.md role row added), loopback, its own DB, plus the si
 `risi-marketplace`, allow-list from its own data). It pauses builds during tonight's model swaps. The spark → spark2
 link proposal follows in marketplace/STATUS.md; root copies it here with any exact ufw command for Harsha.
 
+### Q-012 · 2026-10-17 00:00 SLT · [harsha] · blocking: no (marketplace only)
+**Question:** push the marketplace phase 0 commit. It's built and green (58 tests, 0 failures, only `marketplace/`, 62
+files, no secrets in it) but the auto-mode permission check refused the helper's push to main, so root doesn't push it
+for the helper. If you're happy with it, run on spark2:
+`git -C /home/harsha/development/risime/.claude/worktrees/agent-a295187c0f8bc4739 push origin HEAD:main`
+Its DB password and keys are kept in `~/secrets/marketplace.env` (600). **Options:** pushed / not yet.
+**Default:** it waits; nothing else depends on it tonight.
+
+### Q-013 · 2026-10-17 00:00 SLT · [harsha] · blocking: no (public marketplace route)
+**Question:** the spark → spark2 link for risicloud.ai/marketplace. Proposal A (preferred): a second marketplace
+listener on spark2's LAN address only (`10.20.20.15:4601`, `/marketplace/*` only), spark's Caddy `handle /marketplace* {
+reverse_proxy 10.20.20.15:4601 }` (RisiWork), and ufw open to spark only. First check the LAN works (decision 015 found it
+closed on 10-06), on spark: `ping -c3 10.20.20.15 && nc -zv 10.20.20.15 22`. Then on spark2 (gx10-e23a):
+`sudo ufw allow proto tcp from 10.20.20.14 to 10.20.20.15 port 4601 comment 'risi-marketplace: spark Caddy only'`
+(undo: `sudo ufw delete allow proto tcp from 10.20.20.14 to 10.20.20.15 port 4601`). B (fallback): a path on spark2's own
+Caddy that answers only spark's IP with a shared header secret (weaker). Plus the Keycloak client `risi-marketplace`
+(public, standard flow, PKCE S256, redirect https://risicloud.ai/marketplace/auth/callback).
+**Options:** A / B / later. **Default:** later; it stays on loopback.
+
 ## Answered
 - ANSWERED: "Ok C is good but after if we fail tonight" (by Harsha, 2026-10-16 18:45 SLT, in the architect chat; architect
   19:20). D-001 brain model. Local only through tonight's model tests; the escalation path is built behind a flag that is
