@@ -30,6 +30,8 @@ retried_with. Compare runs every model with language=si and the prompt when the 
 adds script + romanised per result.
 
 Live first (incident 2026-10-14, docs/status/incident-2026-10-14-sinhala-slow.md):
+  temperature_fallback  form field on /v1/audio/transcriptions (default true): false = temperature 0
+                only, no re-decoding at higher temperatures (Call Risi chunks, 2026-10-16)
   priority      form field on every endpoint: live (voice notes) | normal (default: call chunks) |
                 batch (compare default, evals). The GPU slots go to live first, then normal, then
                 batch, FIFO within a class (WHISPER_PRIORITY=off: plain FIFO as before).
@@ -209,6 +211,7 @@ _req = threading.local()  # the request's priority (FastAPI runs each sync reque
 
 def set_priority(p):
     _req.priority = p if p in PRIORITIES else "normal"
+    _req.temperature_fallback = True  # every request starts from the default (threads are reused)
 
 
 def current_priority():
@@ -231,6 +234,18 @@ def set_hotwords(raw):
 
 def current_hotwords():
     return getattr(_req, "hotwords", [])
+
+
+def set_temperature_fallback(on):
+    """Harsha 2026-10-16 04:52 (Call Risi hearing): a call chunk asks for temperature 0 only.
+    Re-decoding at higher temperatures is a known source of made-up text on noise and silence."""
+    _req.temperature_fallback = bool(on)
+
+
+def temperatures(temperature):
+    if temperature > 0:
+        return temperature
+    return [0.0, 0.2, 0.4, 0.6, 0.8, 1.0] if getattr(_req, "temperature_fallback", True) else 0.0
 
 
 class PrioritySlots:
@@ -557,7 +572,7 @@ def run(name, audio, language=None, prompt=None, temperature=0.0, vad_filter=Tru
                 # script prompt is kept, never replaced).
                 segments, info = m.transcribe(
                     audio, language=lang or None, initial_prompt=prompt or None,
-                    temperature=temperature if temperature > 0 else [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                    temperature=temperatures(temperature),
                     beam_size=BEAM_SIZE, vad_filter=vad_filter,
                     condition_on_previous_text=False,
                     hotwords=(", ".join(hot) if hot else None))
@@ -677,10 +692,12 @@ def transcriptions(request: Request,
                    language_hint: str | None = Form(None),
                    hint_mode: str | None = Form(None),
                    priority: str | None = Form(None),
-                   hotwords: str | None = Form(None)):
+                   hotwords: str | None = Form(None),
+                   temperature_fallback: bool = Form(True)):
     auth(request)
     set_priority(priority or "normal")
     set_hotwords(hotwords)
+    set_temperature_fallback(temperature_fallback)
     loaded, _ = pool.status()
     if DEFAULT not in loaded:
         return err(503, "model loading")
