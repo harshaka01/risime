@@ -42,6 +42,16 @@ recognise on the device. It goes to the Risi chat with the "try now".
 **Options:** ready now / later.
 **Default:** the running worker stays (`~/risime-voice/KEEP`).
 
+### Q-005 · 2026-10-16 05:4x SLT · [harsha] · blocking: no (Q-001 still works by hand)
+**Question:** you asked me to change `deploy/keycloak-init/configure.py` so the `risime` client keeps its web
+origins and redirects on every deploy, always with web origin `https://risime.risicloud.ai` and redirect
+`https://risime.risicloud.ai/admin/auth/callback`, then add a line to `claude/RisiCloud-shared-status.md`. Neither
+file is on spark2. Searched: the whole disk, and harshaka01 on GitHub under risicloud, RisiCloud, risi-cloud, aoa and
+risicloud-infra. Keycloak runs on another host (risicloud.ai = 203.189.69.77). Was that message meant for the
+RisiCloud session?
+**Options:** a) send it to the RisiCloud session; b) give root the repo URL (and SSH access) and root makes the change.
+**Default:** a). Root changes nothing in RisiCloud.
+
 ## Answered
 - ANSWERED: Kokoro "for now" (by Harsha, 2026-10-16 04:49 SLT). Question: voice pick 1–4 (topic `voice-pick`).
 - ANSWERED: Problems (by Harsha, 2026-10-16 04:46 SLT). Question: "Calls: try now" (topic `risi-calls-try`). It led to
