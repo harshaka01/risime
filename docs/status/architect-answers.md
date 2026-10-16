@@ -5,6 +5,55 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 16:05 SLT · Harsha's 15:5x call (5:17): "better but still a disaster in intent"; golden #10
+
+This call ran before the 15:35 items (A direct send, B read_messages) were built. Most of its failures come from
+**the model having only one message tool (draft/send), so every message-related sentence gets forced into
+it.** Build B first. Then fix these:
+
+1. **"No, no. I'm not asking you to write any message, I'm asking you to read the messages sent by
+   Shanika" became the message text.** The architect's 11:45 rule ("while Risi waits for the text, the
+   caller's utterance is the text") is too blunt; this is my mistake, so correct it.
+   - The model first classifies the utterance as **dictation or instruction** (a correction, "no", a
+     question to Risi, "check…", "read…", "cancel…").
+   - Only dictation fills the text, using the caller's own words.
+   - Add 20 paraphrases of "instruction during dictation" to the gate.
+2. **The task never closes after the card is sent.** After "I just sent it", "Check whether Shanika
+   replied" got "What should I say to Shenika?". When the card is sent (or a new request starts), the
+   pending task is closed. A finished task never captures the next sentence.
+3. **"Send it to work" made "work" the recipient.** "Work" or "official" means the Official chat with the
+   person already in focus, not a contact. Words like these are never names: work, official, private,
+   home, the chat, the group.
+4. **Recipient choice ignores context.** "Sineka" picked Bhanu Senanayake although Shenika was the
+   recipient two turns earlier. find_contact boosts the people in the current call and recent chats.
+   After a correction ("Shenika, not Bano"), that person is pinned for the rest of the call.
+5. **Dictation mode worked** ("listen until I say okay", then "I'm listening… Please go ahead"). Keep it. But:
+   - Read a long draft back as one flowing line or a short summary, not one TTS line per sentence.
+   - Offer "Shall I fix the speech errors?" when the text has obvious mis-hearings ("a receipt can
+     send" was "Risi can send"), and show both versions on the card.
+6. **Tool coverage is the real intent problem.** Before the next "try now", the call brain needs these
+   tools, each with its golden and paraphrase tests:
+   - `send_message` (A)
+   - `read_messages` and "any new messages?" (B)
+   - `promises_by` (B)
+   - `my_promises`
+   - `calendar_read`
+   - `calendar_add`
+   - `reminder`
+   - `list_contacts`
+   - `cancel` / `edit` of the open card
+   - `chat` (general answers)
+   Plus **"I can't do that yet, but here's what I can do"** for anything else, instead of forcing the
+   nearest tool. If a sentence doesn't clearly fit a tool, ask one short question; never draft.
+
+Gate for the next "try now":
+- golden #1–10;
+- 20 paraphrases per tool;
+- 20 "instruction during dictation" cases;
+- 30 simulated callers covering read, send, promises, calendar and corrections.
+
+Post the per-tool pass rates. Harsha tests only after that is all green.
+
 ## 2026-10-16 15:35 SLT · Harsha's 15:2x call (4:57): better, but 6 gaps, plus his product decisions
 
 Harsha: "getting better". Make this call golden #9. His decisions (product owner) come first.
