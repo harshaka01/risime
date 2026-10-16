@@ -5,6 +5,32 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 10:15 SLT · Brain v3 addendum: contacts, a second golden call, model bake-off
+
+Harsha's 10:0x call (2:12, still the old brain) adds failures v3 must cover. Add it as golden call #5.
+1. "Hello, how are you, this is a text message that's given by Harsha" → recipient = Harsha. The author of
+   the text is not the recipient. The recipient is missing, so ask "Who should I send it to?".
+2. **Contact lookup is broken.** Shanika is not found (spelled S-H-E-N-I-K-A, heard as "Seneca"), even
+   though Risi offered "Shenika, Shanika" in the same call and drafted to "Shenika" in the 09:2x call.
+   Shirazi is not found either, although he is a real RisiMe user Harsha chats with. Build one
+   `find_contact` tool for the brain:
+   - Search Harsha's RisiMe contacts, the members of his chats, and recent chat partners.
+   - Match fuzzily and phonetically (edit distance plus a sound-alike key, Sinhala and Tamil names
+     transliterated), and return the top 3 with a score.
+   - Act on 1 clear match. Ask "Did you mean Shanika or Shenika?" when there are 2–3. Never say "not
+     found" while a match scores ≥ 0.6.
+   - Spelling a name out letter by letter must work.
+3. "Just tell me 10 names in my contacts" → it read the calendar and promises instead. Add a
+   `list_contacts` tool (names only, read aloud, max 10).
+4. A request that has nothing to do with the open task must not reuse the last tool's output.
+
+**Q-007 (model):** this is Harsha's decision (paid service). The architect recommends a commercial model for
+the v3 turn decision now; risi-l1 takes over later, task by task, from the learning log, per the model
+cascade. Make the model a setting, so v3 is built either way. Run every golden call on risi-l1 and on the
+candidate, and post the pass rate and the p50/p95 first-token latency of each to Harsha's Risi chat. He
+decides on those numbers. While a commercial model is on: send only the call turns and tool results,
+never private-chat content without a per-action yes, and no new data store at the provider.
+
 ## 2026-10-16 09:40 SLT · P0 Call Risi brain: understanding by the model, not keyword rules
 
 Harsha's 09:2x call (2:58, transcript below) shows the call brain still routes by regex
