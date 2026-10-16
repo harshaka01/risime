@@ -5,6 +5,33 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 14:05 SLT · Voice notes in Official chats (Harsha's photos of Regina's phone, 13:56)
+
+1. **Regina gets no Translate on transcripts.** `RISI_VOICE_TRANSLATE` is still `canary` (dev users only),
+   the same mistake as Shirazi's transcription on 14 Oct. Harsha is turning it `on` himself with
+   `scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_VOICE_TRANSLATE", "on", "harsha")'`. Log it in
+   pilot-ops.md.
+   - **New rule:** any feature Harsha has tested and accepted goes from `canary` to `on` the same day, with
+     one line in his Risi chat ("X is now on for everyone; say 'canary' to undo").
+   - List every flag still on `canary` in your next status message.
+2. **The Risi action-items card crowds the transcript.** The card sits between a voice note and its
+   transcript, or right under it, and pushes the text off screen. Fix:
+   - Order: voice note → its transcript (with Translate) → the card.
+   - Collapse the card to one line by default ("Risi · 2 action items ›"), and tap to expand.
+   - Never draw the card over message content.
+3. **Translate picker** (queued for the next APK since 05:19): Harsha asks again. It ships with the next
+   APK, which shouldn't wait any longer for brain v3 work: release it as soon as the call fixes (11:50) are
+   green. The picker has en/si/ta first, then "More languages…" (search), on voice-note transcripts and
+   typed messages.
+4. **Extraction quality, from the same screens:**
+   - "send the accounts to Ko Jin **today**" got due **13:54**, the second it was said. "Today" with no
+     time means end of the working day (18:00 local), shown as "today".
+   - "Turn on the camera" became a **promise**. Momentary requests during a call or chat ("turn on the
+     camera", "can you hear me") are not commitments. Add negatives to the extraction eval.
+   - Regina's own Tamil voice note produced no action items. It contains "bill … check … file … pdf …
+     vechirukken" ("I've checked the bills and saved a PDF to the file"): a status update, so none is
+     correct. Make sure Tamil notes are actually sent to extraction (check the log).
+
 ## 2026-10-16 11:50 SLT · P0 calls (Harsha 11:42): incoming call doesn't ring; "already in a call" after a phone call
 
 Two urgent call bugs from real use. Give them to the android role (and server where noted), ahead of the
