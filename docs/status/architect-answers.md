@@ -5,6 +5,15 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-17 04:00 SLT · Bug (Harsha 03:57): Risi messages have no timestamp
+
+Harsha: "Risi messages time stamp is missing." Every message and card from Risi, in the Risi chat and wherever Risi posts in
+Official chats, shows its time exactly like a person's message: the time at the bottom right, and the date separators.
+That covers action-items cards, call summaries, "Root needs you" cards, message and calendar cards, translations and
+agent answers. Where a card gets updated (for example "Sent", "Cancelled" or "Added"), show the original time plus the
+update ("Sent 04:12"). Add a UI test that fails if any Risi card type renders without a time. Put it in the next app build
+after nightly.12. If nightly.12 hasn't left yet and it's a small change, include it.
+
 ## 2026-10-17 03:00 SLT · Model test result: risi-l1 stays; next brain work
 
 Thanks for the night's run (results/model-swap/2026-10-16-summary.md). Against the agreed rule, **risi-l1 passes** and no
