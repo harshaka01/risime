@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.53 (Release 0.3)
+# RisiMe Wire Protocol — v1.54 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -11132,7 +11132,8 @@ Under every `voice_transcript` (§37.6) with `status` `ok` or `unclear`, every m
   Sinhala or Tamil letters**, the phone shows **"Translate to Sinhala / English / Tamil"** without the text's own
   language (§37.13.3 `language`).
 - One tap calls **`POST /api/v1/risi/translate`** (auth; `risi_translate_request.json`):
-  `{"conversation_id": "grp:…", "message_id": timeuuid, "target": "en" | "si" | "ta"}`
+  `{"conversation_id": "grp:…", "message_id": timeuuid, "target": "en" | "si" | "ta"}` (v1.54: or any code in
+  `translate_languages`, below; another one is `422 bad_request`)
   → **`200`** (`risi_translate_reply.json`):
   `{"conversation_id", "message_id", "target", "source_language": "si" | "ta" | "en" | null, "text": str (≤ 4000),
   "label": "Translated by Risi", "made_by": {"model": alias, "provider": "risime", "at", "also": []}}`.
@@ -11155,6 +11156,14 @@ Under every `voice_transcript` (§37.6) with `status` `ok` or `unclear`, every m
   when it shows a transcript (or a typed si/ta message) whose language isn't the target, and shows it expanded. A
   `PUT` without `always_translate` keeps the stored value. Settings → Risi: "Always translate voice notes to:
   Off / English / Sinhala / Tamil".
+- **More languages (v1.54, architect 2026-10-16 14:05 item 3; proposal 2026-10-16-translate-languages):** `GET` /
+  `PUT /api/v1/me/risi/voice` gain the read-only `"translate_languages": ["si", "en", "ta", "hi", …]`: every target
+  this server translates to, lowercase ISO 639-1 codes (639-3 only where no 639-1 code exists). Present only while
+  `translate_available` is true; absent = `["en", "si", "ta"]`; ignored on a `PUT` (`me_risi_voice_reply_v154.json`).
+  `target` and `always_translate` accept any listed code. The phone shows Sinhala / English / Tamil (without the
+  text's own language), then "More languages…": a searchable list of `translate_languages`, the user's recent picks
+  (this phone, up to 5) first; without the field, the three buttons only. Unchanged: "Wrong language?" (§37.13.1)
+  stays `si | ta | en`, and §37.13.3 detection stays si / ta / en.
 
 #### 37.13.3 The text's language
 - A transcript's `language` (§37.6). After v1.49 the language always matches the text's script (Sinhala letters →
@@ -12053,6 +12062,10 @@ barge-in and fallback.
   - the capability only with an on-device recogniser.
 
 ## Changelog
+- **v1.54** (2026-10-16, architect 14:05 item 3; proposal 2026-10-16-translate-languages): §37.13.2 Translate to
+  more languages: the read-only `translate_languages` on `/me/risi/voice` (present only with `translate_available`;
+  absent = en/si/ta), `target` and `always_translate` take any listed code, the picker's "More languages…".
+  Additive; without the field every reply is byte-identical to v1.53.
 - **v1.53** (2026-10-16, Harsha 04:52 SLT, P0 hearing): §41.10, the caller's English speech recognised on the phone
   (capability `call_risi_stt`, data topic `risi.stt`: `partial`, `final`, `off`, `mode`, `speaking`). The server's
   speech-to-text stays the fallback, with a voice-activity gate and low-confidence drops. Additive.

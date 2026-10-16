@@ -354,7 +354,7 @@ defmodule RisiMe.Agent.VoiceTranslateTest do
                })
                |> json_response(404)
 
-      assert translate_conn(w.b, %{conversation_id: w.og, message_id: id, target: "fr"}).status ==
+      assert translate_conn(w.b, %{conversation_id: w.og, message_id: id, target: "xx"}).status ==
                422
 
       assert %{"error" => "not_available"} =
@@ -390,7 +390,7 @@ defmodule RisiMe.Agent.VoiceTranslateTest do
         |> json_response(200)
       end
 
-      assert get.() == %{
+      assert Map.delete(get.(), "translate_languages") == %{
                "transcribe" => true,
                "action_items" => true,
                "always_translate" => "off",
@@ -404,7 +404,7 @@ defmodule RisiMe.Agent.VoiceTranslateTest do
         |> put("/api/v1/me/risi/voice", @ex_put)
         |> json_response(200)
 
-      assert reply == Jason.decode!(@ex_voice_reply)
+      assert Map.delete(reply, "translate_languages") == Jason.decode!(@ex_voice_reply)
       assert VoiceTranslate.always_translate(w.a.user.id) == "en"
 
       # A PUT without the field keeps it.

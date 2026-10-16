@@ -141,7 +141,8 @@ defmodule RisiMeWeb.MeController do
       do:
         Map.merge(setting, %{
           always_translate: RisiMe.Agent.VoiceTranslate.always_translate(user),
-          translate_available: true
+          translate_available: true,
+          translate_languages: RisiMe.Agent.VoiceTranslate.targets()
         }),
       else: setting
   end

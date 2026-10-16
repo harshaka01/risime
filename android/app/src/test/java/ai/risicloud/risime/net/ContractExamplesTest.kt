@@ -779,6 +779,8 @@ class ContractExamplesTest {
             "risi_translate_reply.json" to { s -> obj(s).also { require(str(it, "label") == "Translated by Risi" && str(it, "source_language") == "ta" && "text" in it) } },
             "me_risi_voice_put_v149.json" to { s -> ProtocolJson.decodeFromString<RisiVoiceSettings>(s).also { require(it.transcribe && it.actionItems) } },
             "me_risi_voice_reply_v149.json" to { s -> ProtocolJson.decodeFromString<RisiVoiceSettings>(s).also { require(it.transcribe && it.actionItems && obj(s)["translate_available"]!!.jsonPrimitive.boolean) } },
+            // v1.54 §37.13.2: the server's translate targets for "More languages…".
+            "me_risi_voice_reply_v154.json" to { s -> ProtocolJson.decodeFromString<RisiVoiceSettings>(s).also { require(it.translateLanguages!!.take(3).toSet() == setOf("si", "en", "ta") && "fr" in it.translateLanguages!!) } },
         )
     }
 

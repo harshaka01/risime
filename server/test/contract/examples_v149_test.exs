@@ -317,10 +317,14 @@ defmodule RisiMe.Contract.ExamplesV149Test do
 
       assert conn.()
              |> put("/api/v1/me/risi/voice", example("me_risi_voice_put_v149.json"))
-             |> json_response(200) == example("me_risi_voice_reply_v149.json")
+             |> json_response(200)
+             |> Map.delete("translate_languages") == example("me_risi_voice_reply_v149.json")
 
-      assert conn.() |> get("/api/v1/me/risi/voice") |> json_response(200) ==
-               example("me_risi_voice_reply_v149.json")
+      # v1.54 adds `translate_languages` (examples_v154_test.exs).
+      assert conn.()
+             |> get("/api/v1/me/risi/voice")
+             |> json_response(200)
+             |> Map.delete("translate_languages") == example("me_risi_voice_reply_v149.json")
 
       # Not a conversation the caller is in: 403 not_available.
       assert conn.()
