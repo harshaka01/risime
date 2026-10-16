@@ -16,7 +16,9 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 M="$HOME/.local/bin/mise exec --"
 LOGD="$HOME/risime-logs/health-heal-test"; mkdir -p "$LOGD"; LOG="$LOGD/$(date -u +%m%d-%H%M).log"
-avail_gb() { awk '/MemAvailable/ {print int($2/1048576)}' /proc/meminfo; }
+# spark2's watermark setting makes MemAvailable read near 0 with ~20 GB free (16 Oct: two release runs timed out
+# waiting here): the larger of MemAvailable and MemFree.
+avail_gb() { awk '/^MemAvailable/ {a=$2} /^MemFree/ {f=$2} END {print int((a>f?a:f)/1048576)}' /proc/meminfo; }
 for _ in $(seq 1 60); do [ "$(avail_gb)" -ge "${HHTEST_MIN_GB:-3}" ] && break; sleep 30; done
 [ "$(avail_gb)" -ge "${HHTEST_MIN_GB:-3}" ] || { echo "HHTEST FAIL MemAvailable < ${HHTEST_MIN_GB:-3} GB for 30 min (spark2 reads MemAvailable low by design)"; exit 1; }
 export ERL_EPMD_ADDRESS=127.0.0.1 MIX_TEST_PARTITION=hh

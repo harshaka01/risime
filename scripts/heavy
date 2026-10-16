@@ -7,7 +7,7 @@ LOCK="${HEAVY_LOCK:-$HOME/risime-logs/heavy.lock}"; MIN="${HEAVY_MIN_GB:-3}"
 exec 9>"$LOCK"
 echo "heavy: waiting for the lock ($LOCK)" >&2
 flock 9
-while [ $(( $(awk '/MemAvailable/ {print $2}' /proc/meminfo) / 1048576 )) -lt "$MIN" ]; do
+while [ $(( $(awk '/^MemAvailable/ {a=$2} /^MemFree/ {f=$2} END {print (a>f?a:f)}' /proc/meminfo) / 1048576 )) -lt "$MIN" ]; do
   pgrep -f '^bash [^ ]*/scripts/nightly-release [0-9]' >/dev/null && echo "heavy: a release is running; waiting" >&2
   sleep 30
 done
