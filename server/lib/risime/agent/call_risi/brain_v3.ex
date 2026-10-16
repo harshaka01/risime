@@ -273,9 +273,11 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
     awaiting = d.awaiting || %{}
     card = d.card || %{}
 
+    # A recipient is a person's name: "you", "me", "Risi" (the device test: "send a message to
+    # you") is no recipient, so Risi asks who it is for.
     to =
       [dec.to, awaiting[:to], card[:to]]
-      |> Enum.find("", &(is_binary(&1) and &1 != ""))
+      |> Enum.find("", &(is_binary(&1) and &1 != "" and not no_name?(&1)))
 
     body =
       cond do
@@ -313,6 +315,11 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         )
     end
   end
+
+  @no_names ~w(you me myself him her them someone somebody anyone risi rishi it this that
+               yourself everyone nobody)
+
+  defp no_name?(to), do: String.downcase(String.trim(to, " .,!?")) in @no_names
 
   ## Calendar
 

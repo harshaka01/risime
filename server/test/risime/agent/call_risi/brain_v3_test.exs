@@ -398,6 +398,33 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     refute line =~ "haven't added"
   end
 
+  test "'you' or 'Risi' is no recipient: Risi asks who, keeps the text, then drafts it" do
+    pid = call!()
+
+    script(%{
+      # The device test: Whisper lost the name ("send a message to, … hey, how are you doing?").
+      "Send a message to you saying hey, how are you doing?" => %{
+        "tool" => "message_draft",
+        "action" => "tool",
+        "to" => "you",
+        "text" => "hey, how are you doing?"
+      },
+      "To Nimali." => %{"tool" => "message_draft", "action" => "tool", "to" => "Nimali"}
+    })
+
+    utter(pid, 1, "Send a message to you saying hey, how are you doing?")
+    assert said(pid, 1) == "Who should I send it to?"
+    refute_received {:turn_run, _}
+
+    utter(pid, 2, "To Nimali.")
+
+    assert_receive {:turn_run,
+                    %{call_send: %{"to" => "Nimali", "text" => "hey, how are you doing?"}}},
+                   2_000
+
+    assert said(pid, 2) =~ "Tap Send"
+  end
+
   test "'cancel that' cancels the open card for real, also when the model wrote a reply" do
     pid = call!()
 

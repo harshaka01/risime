@@ -70,15 +70,16 @@ say c5b "Do I have anything to do today?"
 say c5c "All right. Can I have a meeting set up today for two?"
 say c5f "Yeah."
 # Call 6 (Harsha 16 Oct 03:55Z, call 75ec8683; brain v3): the message dialogue, his words (his contact is
-# "Nimali": the test account has no such friend, so the draft ends in "I couldn't find Nimali in your contacts").
+# "Ruwan" (Whisper hears it; Kokoro's "Nimali" came out as "to"): the test account has no such friend, so a
+# draft ends in "I couldn't find Ruwan in your contacts").
 say c6a "How are you doing?"
 say c6b "What time do I have the next meeting?"
 say c6c "Rishi, what else can you do?"
-say c6d "Can you send a message to Nimali?"
-say c6e "No, just cancel that and then start a new message. I'll tell you the message, and listen to my message first. Just say, good morning, Nimali. How are you doing?"
-say c6f1 "We see I'm asking to send a message to Nimali. But the content should be, hey, how are you doing? This is a message just to make sure."
+say c6d "Can you send a message to Ruwan?"
+say c6e "No, just cancel that and then start a new message. I'll tell you the message, and listen to my message first. Just say, good morning, Ruwan. How are you doing?"
+say c6f1 "We see I'm asking to send a message to Ruwan. But the content should be, hey, how are you doing? This is a message just to make sure."
 say c6f2 "receive and send a message to you."
-say c6g "No, no, no. I want to send a message to Nimali. So you should ask what the message should be, and then I'll tell you."
+say c6g "No, no, no. I want to send a message to Ruwan. So you should ask what the message should be, and then I'll tell you."
 say c6h "Good morning, and I'm just testing whether you can send a message on behalf of me."
 say c6i "Cancel that."
 say b1 "you know it will be fun, yeah I did not know I was going to promote, and I tend to come out, so do I"
