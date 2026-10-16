@@ -1,0 +1,25 @@
+{
+  "id": "harsha-2026-10-16-call-8",
+  "golden_id": "call-8-2026-10-16-0430z",
+  "lang": "en",
+  "script": "latin",
+  "brain": "v3",
+  "tags": ["multi_turn", "pilot_replay", "message", "author_not_recipient", "find_contact", "spelled_name", "list_contacts", "no_reuse"],
+  "now": "2026-10-16T03:40:00Z",
+  "src": "synthetic",
+  "note": "From the architect's 10:15 SLT addendum (Harsha's 10:0x SLT call on the old brain): only the lines quoted there; the full transcript was not in the repo. His friend's name is replaced by Nimali, and his own (the author) is kept as Harsha. Was: the author taken as the recipient; a spelled name not found; 'tell me 10 names in my contacts' read the calendar and promises.",
+  "checked": false,
+  "checked_by": null,
+  "checked_on": null,
+  "turns": [
+    {"say": "Can you send a message? Hello, how are you, this is a text message that's given by Harsha.",
+     "expect": {"route": "message_write", "must": ["Who should I send it to"], "must_not": ["Harsha?"], "no_send": true, "no_filler": true}},
+    {"say": "N-I-M-A-L-I.",
+     "expect": {"route": "message_write", "send_to": "Nimali", "send_has": ["text message"], "must": ["Tap Send"],
+                "must_not": ["not found", "couldn't find", "Who should I send"]}},
+    {"say": "Just tell me 10 names in my contacts.",
+     "expect": {"route": "contacts", "must": ["Nimali Perera", "Ruwan Silva"], "must_not": ["calendar", "promise", "Tap Send"]}},
+    {"say": "What time is my next meeting?",
+     "expect": {"route": "calendar_read", "must": ["10"], "must_not": ["Nimali Perera, Ruwan"]}}
+  ]
+}

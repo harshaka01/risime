@@ -5,7 +5,8 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   Risi waits for), today's date and time zone and the tools, and returns one JSON decision:
 
       %{"tool" => "none" | "calendar_read" | "calendar_add" | "reminder_add" | "promises_read" |
-                  "message_draft" | "cancel_open" | "confirm_open" | "card_status" | "capabilities",
+                  "message_draft" | "list_contacts" | "cancel_open" | "confirm_open" |
+                  "card_status" | "capabilities",
         "action" => "reply" | "ask" | "tool",
         "cancel_open" => bool, "request" => str, "say" => str, "text" => str, "to" => str}
 
@@ -21,7 +22,7 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   @callback decide(input :: map, ctx :: map) :: {:ok, map} | {:error, term}
 
   @tools ~w(none calendar_read calendar_add reminder_add promises_read message_draft cancel_open
-            confirm_open card_status capabilities)
+            confirm_open card_status capabilities list_contacts)
 
   @schema %{
     "type" => "object",
@@ -56,15 +57,21 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   request in their words (day, time, title).
   - "reminder_add": set a reminder. "request" as above.
   - "promises_read": their promises, commitments, reminders, to-dos or follow-ups.
-  - "message_draft": send a message to a person. "to" = the person's name. "text" = the exact \
-  message the user dictated, in their words, without lead-ins such as "just say", "tell her", "the \
-  message is", "the content should be". If the user did not say what the message should say, \
-  "text" = "" (Risi then asks what it should say: never use action "ask" for that). Never write \
-  a message yourself.
+  - "message_draft": send a message to a person. "to" = the person who gets it, as the user said \
+  it (Risi looks it up in their contacts). The author of the text is not the recipient ("this is \
+  a message from Harsha", "given by Harsha": Harsha wrote it; "to" = "" unless they name who gets \
+  it). "text" = the message the user dictated, in their words, without lead-ins such as "just \
+  say", "tell her that", "the message is", "the content should be"; "tell her that I called her" \
+  may become "I called you". If the user did not say what the message should say, "text" = "" \
+  (Risi then asks what it should say). If they name nobody ("send it to her"), "to" = "" (Risi \
+  then asks who). Never use action "ask" for a message's recipient or text. Never write a message \
+  yourself. When the user says they already said it ("I just said it"), "text" = the message they \
+  said before in this call.
   - "cancel_open": cancel the open card (only when the open state has one).
   - "confirm_open": the user approves the open card ("yes", "that's right", "send it", "add it").
   - "card_status": the user asks whether the open card was added or sent, or says they can't see it.
   - "capabilities": the user asks what Risi can do.
+  - "list_contacts": the user asks for names in their contacts or who they can message.
   "cancel_open": true only when the user says to cancel ("cancel that", "never mind", "forget \
   it", "start again"). If they also ask for something new in the same words (a new message, a \
   new event), "tool" is that new request with its slots; tool "cancel_open" only when they ask \
@@ -90,9 +97,13 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   5. "Yes", "send it", "that is correct", "add it" about the open card → tool "confirm_open" \
   (never a new draft). A bare "yes", "okay" or "yeah" with no open card and no question from Risi \
   → a short "reply".
-  6. A complaint about Risi's last answer ("you should have access", "why can't you get it", \
+  6. When "Open task" is a message, it stays open while the user talks about something else; \
+  their next words about that message continue it. When "Open task" is "none", nothing is \
+  pending: a bare "yeah" or "okay" repeats no earlier request (rule 5). A new request that has \
+  nothing to do with Risi's last answer never gets the last tool again.
+  7. A complaint about Risi's last answer ("you should have access", "why can't you get it", \
   "anything else?") → the same tool as that answer again, never "capabilities".
-  7. Unused fields: "" (strings), "none", false.
+  8. Unused fields: "" (strings), "none", false.
   """
 
   @doc "The decision's system prompt (its hash is in the learning log)."
@@ -127,6 +138,7 @@ defmodule RisiMe.Agent.CallRisi.Decider do
     """
     Now: #{input.now} (#{input.tz}).
     Open card: #{Dialogue.card_line(input.dialogue)}
+    Open task: #{Dialogue.pending_line(input.dialogue)}
     Risi is waiting for: #{Dialogue.awaiting_line(input.dialogue)}
 
     Call so far:

@@ -1,0 +1,62 @@
+{
+  "hello": {
+    "decision": {
+      "action": "reply",
+      "cancel_open": false,
+      "request": "",
+      "say": "Hello. The message to Nimali is ready to send whenever you are.",
+      "text": "",
+      "to": "",
+      "tool": "none"
+    },
+    "ms": 1561
+  },
+  "i just said it to you. just tell her that i called her. couple of times, but she did not answer and called me back.": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "",
+      "say": "",
+      "text": "I just said it to you. Just tell her that I called her. couple of times, but she did not answer and called me back.",
+      "to": "Nimali Perera",
+      "tool": "message_draft"
+    },
+    "ms": 1922
+  },
+  "nima lee.": {
+    "decision": {
+      "action": "ask",
+      "cancel_open": false,
+      "request": "",
+      "say": "Got it, Nima Lee. What should the message say?",
+      "text": "",
+      "to": "Nima Lee",
+      "tool": "message_draft"
+    },
+    "ms": 1536
+  },
+  "so can you send the message to her on a private chat?": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "message_draft"
+    },
+    "ms": 1193
+  },
+  "tell her that i called her a couple of times and then she did not answer. and i'll call her back or call me back.": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "",
+      "say": "",
+      "text": "Tell her that I called her a couple of times and then she did not answer. And I'll call her back or call me back.",
+      "to": "Nimali Perera",
+      "tool": "message_draft"
+    },
+    "ms": 1881
+  }
+}

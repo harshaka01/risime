@@ -1,0 +1,50 @@
+{
+  "can you send a message? hello, how are you, this is a text message that's given by harsha.": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "",
+      "say": "",
+      "text": "Hello, how are you, this is a text message that's given by Harsha.",
+      "to": "",
+      "tool": "message_draft"
+    },
+    "ms": 1558
+  },
+  "just tell me 10 names in my contacts.": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "list_contacts"
+    },
+    "ms": 1265
+  },
+  "n-i-m-a-l-i.": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "",
+      "say": "",
+      "text": "Hello, how are you, this is a text message that's given by Harsha.",
+      "to": "Nimali",
+      "tool": "message_draft"
+    },
+    "ms": 1644
+  },
+  "what time is my next meeting?": {
+    "decision": {
+      "action": "tool",
+      "cancel_open": false,
+      "request": "What time is my next meeting?",
+      "say": "",
+      "text": "",
+      "to": "",
+      "tool": "calendar_read"
+    },
+    "ms": 1448
+  }
+}

@@ -530,7 +530,7 @@ defmodule RisiMe.Agent.CallRisi.Session do
     card = Map.merge(c, CallRisi.Dialogue.message_parts(c[:summary]) || %{})
 
     {:noreply,
-     %{st | dialogue: %{CallRisi.Dialogue.get(st.dialogue) | card: card, awaiting: nil}}}
+     %{st | dialogue: %{CallRisi.Dialogue.get(st.dialogue) | card: card, awaiting: nil, pending: nil}}}
   end
 
   defp brain({:write, %{summary: s, request_id: rid} = w}, st) when is_binary(s) do

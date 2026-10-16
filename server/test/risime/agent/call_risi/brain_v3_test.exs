@@ -265,7 +265,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
   setup do
     keys = ~w(risi_call_media risi_speech risi_call_llm risi_call_turn risi_call_runs
               risi_agent_flags risi_call_write_state risi_call_decider risi_call_cancel
-              risi_call_hold_ms risi_call_neutral_ms)a
+              risi_call_hold_ms risi_call_neutral_ms risi_contacts)a
 
     prev = for k <- keys, do: {k, Application.get_env(:risime, k)}
     me = self()
@@ -389,7 +389,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
 
     utter(pid, 2, "Good morning, and I'm testing this.")
     assert_receive {:decided, "Good morning, and I'm testing this.", d}, 2_000
-    assert d.awaiting == %{slot: "message_text", to: "Nimali"}
+    assert %{slot: "message_text", to: "Nimali"} = d.awaiting
     assert_receive {:turn_run, env}, 2_000
     assert env[:call_send] == %{"to" => "Nimali", "text" => "Good morning, and I'm testing this."}
     line = said(pid, 2)
@@ -539,5 +539,221 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     utter(pid, 1, "How are you doing?")
     assert_receive {:decided, "How are you doing?", _}, 2_000
     assert said(pid, 1) == "Legacy here."
+  end
+
+  ## Harsha's call 97edc028 (06:04Z) and the architect's 11:45 fix: the message loop
+
+  describe "find_contact" do
+    alias RisiMe.Agent.FindContact
+
+    @people [
+      {"1", "Shenika Fernando"},
+      {"2", "Shanika Silva"},
+      {"3", "Shirazi Hameed"},
+      {"4", "Nimali Perera"}
+    ]
+
+    test "a misheard name: one clear match is used, 2–3 near ones are offered" do
+      assert {:one, %{name: "Nimali Perera"}} =
+               FindContact.decide(FindContact.find("Nima Lee", @people))
+
+      # "Shani Kao" (Whisper) sounds like both: ask once.
+      assert {:pick, [_, _] = two} = FindContact.decide(FindContact.find("Shani Kao", @people))
+      assert Enum.map(two, & &1.name) |> Enum.sort() == ["Shanika Silva", "Shenika Fernando"]
+
+      # With one of them only, it's a clear match (no question).
+      one = Enum.reject(@people, &(elem(&1, 0) == "2"))
+
+      assert {:one, %{name: "Shenika Fernando"}} =
+               FindContact.decide(FindContact.find("Shani Kao", one))
+    end
+
+    test "spelled letter by letter, exact, Sinhala script, and never 'none' at ≥ 0.6" do
+      assert {:one, %{name: "Shenika Fernando", score: 1.0}} =
+               FindContact.decide(FindContact.find("S-H-E-N-I-K-A", @people))
+
+      assert {:one, %{name: "Shenika Fernando"}} =
+               FindContact.decide(FindContact.find("Shenika", @people))
+
+      assert {:one, %{name: "Nimali Perera"}} =
+               FindContact.decide(FindContact.find("නිමාලි", @people))
+
+      # The §34.5 case: "Shutazi" is offered as Shirazi, never "not found".
+      assert {:pick, [%{name: "Shirazi Hameed"}]} =
+               FindContact.decide(FindContact.find("Shutazi", @people))
+
+      assert FindContact.decide(FindContact.find("Bartholomew", @people)) == :none
+    end
+  end
+
+  describe "Dialogue (architect 11:45)" do
+    test "grounding is soft: the model's honest rewording of 'tell her that …' passes" do
+      said =
+        "Tell her that I called her a couple of times and then she did not answer. " <>
+          "And I'll call her back or call me back."
+
+      assert Dialogue.grounded?(
+               "I called you a couple of times but you didn't answer. Please call me back.",
+               said
+             )
+
+      refute Dialogue.grounded?("Hi Nimali, how are you", "Can you send a message to Nimali?")
+    end
+
+    test "strip_lead takes only the lead-in off the caller's words" do
+      assert Dialogue.strip_lead("Tell her that I called her a couple of times.") ==
+               "I called her a couple of times."
+
+      assert Dialogue.strip_lead("Just say, good morning.") == "Good morning."
+      assert Dialogue.strip_lead("Good morning, Nimali.") == "Good morning, Nimali."
+    end
+
+    test "a non-answer, and what Risi says instead of the same question" do
+      for t <- ["Hello", "Hello?", "Sorry?", "What?", "Can you hear me?"],
+          do: assert(Dialogue.non_answer?(t), t)
+
+      refute Dialogue.non_answer?("Hello Nimali, how are you?")
+
+      d = %{awaiting: %{slot: "message_text", to: "Nimali Perera", question: "?"}}
+      line = Dialogue.heard_line("Hello", d)
+      assert line =~ ~s(I heard "Hello")
+      assert line =~ "or say cancel"
+      refute line =~ "What should I say"
+    end
+  end
+
+  test "call 7: the name is looked up when given, the text is kept, 'Hello' keeps the task" do
+    Application.put_env(:risime, :risi_contacts, fn _ ->
+      [{"u1", "Nimali Perera"}, {"u2", "Ruwan Silva"}]
+    end)
+
+    pid = call!()
+    text = "Tell her that I called her a couple of times and then she did not answer."
+
+    script(%{
+      "So can you send the message to her on a private chat?" => %{
+        "tool" => "message_draft",
+        "action" => "tool",
+        "to" => "her"
+      },
+      # risi-l1 talked back instead of the tool: the words are still the name.
+      "Nima Lee." => %{"action" => "ask", "say" => "Got it, Nima Lee. What should it say?"},
+      text => %{
+        "tool" => "message_draft",
+        "action" => "tool",
+        "to" => "Nima Lee",
+        "text" => "I called you a couple of times but you didn't answer."
+      }
+    })
+
+    utter(pid, 1, "So can you send the message to her on a private chat?")
+    assert said(pid, 1) == "Who should I send it to?"
+
+    utter(pid, 2, "Nima Lee.")
+    assert said(pid, 2) == "What should I say to Nimali Perera?"
+    refute_received {:turn_run, _}
+
+    # A non-answer: what Risi heard and a choice (never the question again); the task stays.
+    utter(pid, 3, "Hello?")
+    line = said(pid, 3)
+    assert line =~ ~s(I heard "Hello?")
+    refute line =~ "What should I say"
+
+    utter(pid, 4, text)
+    assert_receive {:turn_run, env}, 3_000
+
+    assert env[:call_send] == %{
+             "to" => "Nimali Perera",
+             "text" => "I called you a couple of times but you didn't answer."
+           }
+
+    assert said(pid, 4) =~ "Tap Send"
+  end
+
+  test "two near names: asked once with the text kept; the name picks; no holding line" do
+    Application.put_env(:risime, :risi_contacts, fn _ ->
+      [{"u1", "Shenika Fernando"}, {"u2", "Shanika Silva"}]
+    end)
+
+    pid = call!()
+
+    script(%{
+      "Send a message to Shani Kao saying I'll be late." => %{
+        "tool" => "message_draft",
+        "action" => "tool",
+        "to" => "Shani Kao",
+        "text" => "I'll be late."
+      }
+    })
+
+    utter(pid, 1, "Send a message to Shani Kao saying I'll be late.")
+    line = said(pid, 1)
+    assert line =~ "Did you mean"
+    assert line =~ "Shenika Fernando" and line =~ "Shanika Silva"
+    refute line =~ "One moment"
+
+    # The name alone answers (no model call needed).
+    utter(pid, 2, "Shenika.")
+    assert_receive {:turn_run, env}, 3_000
+    assert env[:call_send] == %{"to" => "Shenika Fernando", "text" => "I'll be late."}
+  end
+
+  test "a reworded text that doesn't match is read back and confirmed; yes drafts it" do
+    Application.put_env(:risime, :risi_contacts, fn _ -> [{"u1", "Nimali Perera"}] end)
+    pid = call!()
+
+    script(%{
+      "Message Nimali." => %{"tool" => "message_draft", "action" => "tool", "to" => "Nimali"},
+      "Tell her the meeting moved." => %{
+        "tool" => "message_draft",
+        "action" => "tool",
+        "to" => "Nimali",
+        "text" => "Hi Nimali, our sync has been rescheduled to Friday."
+      }
+    })
+
+    utter(pid, 1, "Message Nimali.")
+    assert said(pid, 1) == "What should I say to Nimali Perera?"
+
+    utter(pid, 2, "Tell her the meeting moved.")
+    line = said(pid, 2)
+    assert line =~ "I'll send Nimali Perera:"
+    assert line =~ "Shall I put it on a card?"
+    refute_received {:turn_run, _}
+
+    utter(pid, 3, "Yes.")
+    assert_receive {:turn_run, %{call_send: %{"to" => "Nimali Perera"}}}, 3_000
+  end
+
+  test "the model asking the same question twice: the second time Risi says what it heard" do
+    pid = call!()
+    q = "Which meeting do you mean?"
+
+    script(%{
+      "Move the meeting." => %{"action" => "ask", "say" => q},
+      "The one with the team." => %{"action" => "ask", "say" => q}
+    })
+
+    utter(pid, 1, "Move the meeting.")
+    assert said(pid, 1) == q
+    utter(pid, 2, "The one with the team.")
+    line = said(pid, 2)
+    assert line =~ ~s(I heard "The one with the team.")
+    refute line == q
+  end
+
+  test "list_contacts reads names only" do
+    Application.put_env(:risime, :risi_contacts, fn _ ->
+      [{"u1", "Nimali Perera"}, {"u2", "Ruwan Silva"}]
+    end)
+
+    pid = call!()
+
+    script(%{
+      "Tell me 10 names in my contacts." => %{"tool" => "list_contacts", "action" => "tool"}
+    })
+
+    utter(pid, 1, "Tell me 10 names in my contacts.")
+    assert said(pid, 1) == "Here are 2 of your contacts: Nimali Perera and Ruwan Silva."
   end
 end

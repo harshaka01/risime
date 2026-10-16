@@ -140,6 +140,13 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     @moduledoc false
     @friends %{"nimali" => "Nimali Perera"}
 
+    def people,
+      do: [
+        {"f-nimali", "Nimali Perera"},
+        {"f-ruwan", "Ruwan Silva"},
+        {"f-kamal", "Kamal Jayasuriya"}
+      ]
+
     defp ev(kind, title, s, mins) do
       e = if mins, do: NaiveDateTime.add(s, mins * 60)
 
@@ -322,7 +329,8 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
       :risi_call_write_state,
       :risi_call_decider,
       :risi_call_cancel,
-      :risi_claim_results
+      :risi_claim_results,
+      :risi_contacts
     ]
 
     prev = for k <- keys, do: {k, Application.get_env(:risime, k)}
@@ -332,6 +340,8 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     Application.put_env(:risime, :risi_call_llm, LLM)
     Application.put_env(:risime, :risi_call_write_state, &Turn.state/1)
     Application.put_env(:risime, :risi_call_cancel, &Turn.cancel/2)
+    # find_contact: the caller's people (the fake turn drafts only to Nimali Perera).
+    Application.put_env(:risime, :risi_contacts, fn _ -> Turn.people() end)
 
     Application.put_env(:risime, :risi_claim_results, fn rid ->
       case Turn.state(rid) do
@@ -372,6 +382,8 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     @calls
     |> File.ls!()
     |> Enum.filter(&String.ends_with?(&1, ".json"))
+    # GOLDEN_ONLY=call-5: one call (live debugging).
+    |> Enum.filter(&String.contains?(&1, System.get_env("GOLDEN_ONLY") || ""))
     |> Enum.sort()
     |> Enum.map(&(Path.join(@calls, &1) |> File.read!() |> Jason.decode!()))
   end
@@ -489,7 +501,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     {errs, _} =
       c["turns"]
       |> Enum.with_index(1)
-      |> Enum.flat_map_reduce(nil, fn {t, utt}, _ ->
+      |> Enum.flat_map_reduce([], fn {t, utt}, prev_qs ->
         if t["continues"], do: Process.sleep(t["after_ms"] || 1_000)
         flush()
 
@@ -512,7 +524,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
 
         case t["expect"] do
           nil ->
-            {[], utt}
+            {[], []}
 
           exp ->
             cmds = if exp["silent"], do: says(utt, [], 2_000), else: says(utt)
@@ -520,7 +532,18 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
             cancelled = cancelled?()
             heard(pid, cmds)
             route = receive_route(utt)
-            {check(utt, exp, cmds, runs, route, cancelled), nil}
+            qs = questions(cmds)
+
+            # Architect 11:45: never the same question twice in a row.
+            rep =
+              for q <- qs, q in prev_qs, do: "unsafe t#{utt}: repeated question #{inspect(q)}"
+
+            filler =
+              for c <- cmds,
+                  exp["no_filler"] == true and c["text"] in Fillers.all(),
+                  do: "t#{utt}: a holding line before a question: #{inspect(c["text"])}"
+
+            {check(utt, exp, cmds, runs, route, cancelled) ++ rep ++ filler, qs}
         end
       end)
 
@@ -528,6 +551,23 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     receive do: ({:posted, _} -> :ok), after: (2_000 -> :ok)
     missing = missing()
     errs ++ for(m <- missing, do: "not recorded: #{inspect(m)} (record live: GOLDEN_RECORD=1)")
+  end
+
+  @doc false
+  # The questions Risi asked in a turn (normalised sentences ending in "?").
+  def questions(cmds) do
+    cmds
+    |> Enum.map(& &1["text"])
+    |> Enum.reject(&(&1 in Fillers.all()))
+    |> Enum.join(" ")
+    |> String.split(~r/(?<=[.!?])\s+/u, trim: true)
+    |> Enum.filter(&String.ends_with?(&1, "?"))
+    |> Enum.map(
+      &(&1
+        |> String.downcase()
+        |> String.replace(~r/[^\p{L}\p{N}]+/u, " ")
+        |> String.trim())
+    )
   end
 
   defp check(utt, exp, cmds, runs, route, cancelled) do

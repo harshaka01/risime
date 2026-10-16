@@ -1,0 +1,28 @@
+{
+  "id": "harsha-2026-10-16-call-7",
+  "golden_id": "call-7-2026-10-16-0604z",
+  "lang": "en",
+  "script": "latin",
+  "brain": "v3",
+  "tags": ["multi_turn", "pilot_replay", "message", "pending_task", "find_contact", "misheard_name", "reported_speech", "non_answer", "repeated_question"],
+  "now": "2026-10-16T06:04:00Z",
+  "src": "synthetic",
+  "note": "Harsha's real call 97edc028 on the pilot (v0.3.0-nightly.11-srv3), 16 Oct 06:04Z, his words; his friend's name is replaced by Nimali (a test friend) and Whisper's misspelling of it by 'Nima Lee'. Was: 'What should I say to <the raw misspelling>?' (the name never looked up), the text he gave dropped by a 'Did you mean …?', 'Hello' restarting the question, and 'What should I say to …?' three times while he gave the text twice (the grounding check rejected the model's honest rewording of 'tell her that I called her …'), with 'One moment…' before every question.",
+  "checked": false,
+  "checked_by": null,
+  "checked_on": null,
+  "turns": [
+    {"say": "So can you send the message to her on a private chat?",
+     "expect": {"route": "message_write", "must": ["Who should I send it to"], "no_send": true, "no_filler": true}},
+    {"say": "Nima Lee.",
+     "expect": {"route": "message_write", "must": ["What should I say to Nimali"], "must_not": ["Nima Lee", "Did you mean"],
+                "no_send": true, "no_filler": true}},
+    {"say": "Tell her that I called her a couple of times and then she did not answer. And I'll call her back or call me back.",
+     "expect": {"route": "message_write", "send_to": "Nimali", "send_has": ["couple of times"],
+                "must": ["Tap Send"], "must_not": ["What should I say", "Did you mean", "Tap Add"]}},
+    {"say": "Hello",
+     "expect": {"no_send": true, "must_not": ["What should I say", "sent", "added"]}},
+    {"say": "I just said it to you. Just tell her that I called her. couple of times, but she did not answer and called me back.",
+     "expect": {"route_in": ["message_write", "chat", "write_status"], "must_not": ["What should I say", "Who should I send", "Did you mean", "I've sent"]}}
+  ]
+}
