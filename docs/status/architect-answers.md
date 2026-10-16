@@ -5,6 +5,19 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 15:20 SLT · Ship now: the APK, and the Gemma-4 test
+
+The v3 loop fixes are live on the server (golden 7/7, paraphrases 59/60, simulated callers 30/30). Good. Two
+things are still waiting:
+1. **Release the APK now** (hotfix/nightly). It carries the P0 call fixes (ring, stale call, Test incoming
+   call), the Translate picker, the one-line action card and the capability refresh, all committed by
+   14:31 and none on phones yet. Harsha tests the calls with Shenika today. Post "New app: try now"
+   with the 3 checks.
+2. **Run the Gemma-4 swap test today** (Harsha 10:20: right after v3, daytime). `scripts/model-swap-test`
+   is still dry-run only. Run it for real, under the 10:22 rules, and post the table.
+3. Device test friend: yes, add one test-account friend for `pilot-call-test` (test accounts only, with no
+   real people's data), so the device run reaches a draft.
+
 ## 2026-10-16 14:15 SLT · Bug: a flag turned on never reaches the phone until Settings is opened
 
 `RISI_VOICE_TRANSLATE` is now `on` (Harsha 14:06, verified with `Flags.raw` = "on"), but Regina still sees
