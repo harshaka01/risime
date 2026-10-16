@@ -44,7 +44,11 @@ OUT="$REPO/results/model-swap/$STAMP-$CAND.md"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 log() { echo "[$(date +%H:%M:%S)] $*" >&2; }
 die() { echo "model-swap-test: $*" >&2; exit "${2:-2}"; }
-avail_gb() { awk '/MemAvailable/ {printf "%.1f", $2/1048576}' /proc/meminfo; }
+# spark2's watermark makes MemAvailable read near 0 with ~20 GB free (root 2026-10-16): the larger of MemAvailable and
+# MemFree, for the preflight, the floor and the peak.
+avail_gb() { awk '/^MemAvailable/ {a=$2} /^MemFree/ {f=$2} END {printf "%.1f", (a>f?a:f)/1048576}' /proc/meminfo; }
+# What stopping risi-l1 frees: its engine's measured GPU memory (unified memory on the GB10), else 0.34 x total.
+live_gpu_gb() { nvidia-smi --query-compute-apps=process_name,used_memory --format=csv,noheader,nounits 2>/dev/null | awk -F', ' '/VLLM::EngineCore/ {s+=$2} END {if (s>0) printf "%.1f", s/1024}'; }
 total_gb() { awk '/MemTotal/ {printf "%.1f", $2/1048576}' /proc/meminfo; }
 lt() { python3 -I -c "import sys; sys.exit(0 if float('$1') < float('$2') else 1)"; }
 cand_field() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1]))["llm"][sys.argv[2]]; print(d[sys.argv[3]])' "$REPO/eval/risi/candidates.json" "$KEY" "$1"; }
@@ -111,7 +115,7 @@ PY
     echo "BLOCK: $DIR has .incomplete/.part files (download unfinished)"; bad=1; fi
   # memory: after risi-l1 stops it frees about its share (0.34 x total); the candidate needs mem+KV+overhead+floor
   local need tot; tot=$(total_gb); need=$(python3 -I -c "print($(cand_field mem_gb)+$KV_GB+$OVERHEAD_GB+$FLOOR_GB)")
-  local freed; freed=$(python3 -I -c "print(round(0.34*$tot,1))")
+  local freed; freed=$(live_gpu_gb); [ -n "$freed" ] || freed=$(python3 -I -c "print(round(0.34*$tot,1))")
   local after; after=$(python3 -I -c "print(round($(avail_gb)+$freed,1))")
   echo "memory: candidate share $(python3 -I -c "print(round($(cand_field mem_gb)+$KV_GB,1))") GB (weights/mem_gb $(cand_field mem_gb) + KV $KV_GB); MemAvailable now $(avail_gb) GB, risi-l1 would free ~$freed GB -> ~$after GB; needs ~$need GB (share+$OVERHEAD_GB overhead+$FLOOR_GB floor)"
   lt "$after" "$need" && { echo "BLOCK: not enough memory for $CAND even with risi-l1 stopped"; bad=1; }
