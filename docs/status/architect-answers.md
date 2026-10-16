@@ -5,6 +5,26 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-17 04:25 SLT · Addendum to 04:20: Shakya HAS written; find out why Risi didn't see it
+
+Harsha 04:13 SLT: "I asked about Shakya and he has sent messages but Risi was not actioning what I was saying." Two faults:
+1. **Wrong question answered (certain, code):** `Reads.official_line/4` only reads her messages if they're newer than
+   Harsha's last one, otherwise it says "Not yet…". He asked to *read* Shakya's messages. Fix as 04:20 item 4
+   (`last_from` reads the latest messages whatever the order, quoting up to 3 with times).
+2. **Data (find out today, on this call's logs, report in needs-you before any fix):**
+   a. Which user_id did find_contact pick for "Shakya Adhikari"? Is there more than one account/contact for him?
+   b. Are his messages since yesterday 16:35 in `RisiMe.Agent.Memory` for Harsha's scope? If not: which chat are they
+      in (1:1 Official, group, E2EE chat Risi isn't a member of, Private) and why memory doesn't hold them (ingestion lag,
+      scope, sealing, buffer)?
+   c. `mine` counts Harsha's messages in **any** chat where Shakya wrote, groups included, so a group post by Harsha
+      makes "Not yet" fire and "your last message to Shakya" can be a group post. Restrict to the 1:1 Official chat,
+      and name the group when the answer comes from one.
+   d. The `limit 300` across all Official chats over 3 days: check it isn't cutting his messages on a busy day; filter
+      by sender in the query instead.
+   If the messages are in a chat Risi can't read, Risi must say exactly that ("His messages are in a chat I can't read: …"),
+   never "hasn't written".
+Same for Shenika ("I don't see any Official messages…"): run a–d for her too.
+
 ## 2026-10-17 04:20 SLT · STOP-THE-LINE: Harsha's 04:0x call failed; the gate tests the wrong thing
 
 Harsha 04:05 SLT, after a 7-minute Call Risi (transcript in his Risi chat): "you write most useless risi brain and risi voice".
