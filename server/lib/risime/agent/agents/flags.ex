@@ -68,7 +68,10 @@ defmodule RisiMe.Agents.Flags do
     "RISI_CALL_VOICE_CONFIRM" => :risi_call_voice_confirm,
     # Architect P0 2026-10-16 (Harsha's call 75ec8683): Call Risi brain v3, one model decision
     # per turn (RisiMe.Agent.CallRisi.BrainV3); `v3` = on, `legacy` = off; canary = Harsha first.
-    "RISI_CALL_BRAIN" => :risi_call_brain_v3
+    "RISI_CALL_BRAIN" => :risi_call_brain_v3,
+    # Contract v1.55 §41.11 (decision 094): on a call, Risi sends Official messages on a voice
+    # yes (RisiMe.Agent.CallSend); canary = RISI_DEV_USERS.
+    "RISI_CALL_SEND" => :risi_call_send
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
@@ -86,7 +89,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_PRIVATE_TRANSCRIBE" => "off",
     "RISI_LIVE_FAST" => "off",
     "RISI_CALL_VOICE_CONFIRM" => "canary",
-    "RISI_CALL_BRAIN" => "canary"
+    "RISI_CALL_BRAIN" => "canary",
+    "RISI_CALL_SEND" => "canary"
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000

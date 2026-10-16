@@ -152,9 +152,20 @@ defmodule RisiMe.Agent.Turn do
   # root before any routing; the brain does not run for it.
   defp do_run(conv, env, request_id, asker) do
     case RisiMe.Agent.RootInbox.intercept(conv, env, request_id, asker) do
-      :pass -> brain(conv, env, request_id, asker)
+      :pass -> undo_or_brain(conv, env, request_id, asker)
       result -> result
     end
+  end
+
+  # v1.55 §41.11: a typed "undo that" in the Risi chat while a voice send is in its 2-minute
+  # window deletes Risi's post (the `undone` record is the reply); no model call.
+  defp undo_or_brain(conv, env, request_id, asker) do
+    text = env["text"]
+
+    if RisiMe.Groups.Tabs.risi_chat?(conv) and RisiMe.Agent.CallSend.typed_undo?(text, asker) and
+         match?({:ok, _}, RisiMe.Agent.CallSend.undo(asker, :last)),
+       do: :ok,
+       else: brain(conv, env, request_id, asker)
   end
 
   defp brain(conv, env, request_id, asker) do

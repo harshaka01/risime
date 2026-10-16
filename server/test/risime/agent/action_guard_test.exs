@@ -426,9 +426,10 @@ defmodule RisiMe.Agent.ActionGuardTest do
       # `SpeechCompare.label_reply`: a dev user's own reply labels a compare clip, reviewed
       # 2026-10-14: not consequential; `PermissionFixit.act`: the asker's [Allow] resumes the
       # same turn, whose tools run through the guard, §43.3; `Voice.transcript_language`: a
-      # member's "Wrong language?" re-transcribes Risi's own post, §37.13.1.)
+      # member's "Wrong language?" re-transcribes Risi's own post, §37.13.1; `CallSend.act`: the
+      # caller's own Undo deletes Risi's own voice-sent post within 2 minutes, v1.55 §41.11.)
       reviewed =
-        ~w(CalendarActions.act CalendarV2.act_titles Commitments.act LedgerActions.act PermissionFixit.act
+        ~w(CalendarActions.act CalendarV2.act_titles CallSend.act Commitments.act LedgerActions.act PermissionFixit.act
            Reminders.act SpeechCompare.label_reply Voice.transcript_delete
            Voice.transcript_language Writes.act)
 

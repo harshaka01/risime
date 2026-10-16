@@ -110,7 +110,7 @@ defmodule RisiMeWeb.MeController do
   @doc "`GET /api/v1/me/risi/voice` (v1.41 §37.7): `{\"transcribe\": bool, \"action_items\": bool}`."
   def risi_voice(conn, _params) do
     user = conn.assigns.current_user.id
-    json(conn, with_translate(RisiMe.Agent.Voice.setting(user), user))
+    json(conn, RisiMe.Agent.Voice.setting(user) |> with_translate(user) |> with_send(user))
   end
 
   @doc """
@@ -123,8 +123,9 @@ defmodule RisiMeWeb.MeController do
     translate? = RisiMe.Agent.VoiceTranslate.enabled_for?(user)
 
     with :ok <- put_always_translate(user, params, translate?),
+         :ok <- put_voice_send(user, params),
          {:ok, setting} <- RisiMe.Agent.Voice.put_setting(user, params) do
-      json(conn, with_translate(setting, user))
+      json(conn, setting |> with_translate(user) |> with_send(user))
     else
       {:error, :bad_request} -> ApiError.send_error(conn, 422, :bad_request)
     end
@@ -134,6 +135,15 @@ defmodule RisiMeWeb.MeController do
     do: RisiMe.Agent.VoiceTranslate.put_always_translate(user, v)
 
   defp put_always_translate(_user, _params, _translate?), do: :ok
+
+  # v1.55 §41.11: `voice_send` (optional; ignored while RISI_CALL_SEND is off for the user).
+  defp put_voice_send(user, %{"voice_send" => v}) when is_boolean(v),
+    do: RisiMe.Agent.CallSend.put_voice_send(user, v)
+
+  defp put_voice_send(_user, %{"voice_send" => v}) when not is_nil(v), do: {:error, :bad_request}
+  defp put_voice_send(_user, _params), do: :ok
+
+  defp with_send(setting, user), do: RisiMe.Agent.CallSend.with_setting(setting, user)
 
   # The v1.41 shape unchanged while Translate isn't available to the user (absent = false).
   defp with_translate(setting, user) do

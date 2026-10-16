@@ -17,7 +17,7 @@ defmodule RisiMe.Agent.RisiKindsExamplesTest do
     call_transcribe call_transcript call_transcript_compare commitment commitment_update confirm
     confirm_update digest discussion_card draft discussion_summary error escalation event_card
     event_update google_reconnect item_clarify item_due item_nudge item_overdue item_update
-    message_sent needs_permission note_card notes_saved ops_alert reminder reminder_set report risi_call_transcript skill_done
+    message_sent needs_permission note_card notes_saved ops_alert reminder reminder_set report risi_call_transcript sent_for skill_done
     skill_needed summary voice_transcript
   )
 

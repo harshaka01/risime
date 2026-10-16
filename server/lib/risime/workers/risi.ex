@@ -241,6 +241,10 @@ defmodule RisiMe.Workers.Risi do
         a when a in ~w(event_accept event_decline event_suggest suggestion_use suggestion_keep) ->
           RisiMe.Agent.CalendarActions.act(conv, user, env)
 
+        # v1.55 §41.11: Undo of a message Risi sent by voice (the caller's own leaf only).
+        "undo_send" ->
+          RisiMe.Agent.CallSend.act(conv, user, env)
+
         # v1.27 §27.5: item actions (and done) on ledger items, in the actor's Risi chat.
         a
         when a in ~w(item_confirm item_decline item_edit item_reopen item_calendar item_remind item_not_mine item_claim) ->
