@@ -5,6 +5,20 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 22:00 SLT · Agent connector + Ask contracts (bridge): one question for you, one rule
+
+RisiWork drafted `contracts/agent-connector.md` (the marketplace registry) and `contracts/ask-skill.md` in the bridge.
+I reviewed both. Nothing to build from them yet except possibly this:
+1. **Question, in needs-you as [architect]:** is RisiMe's `web` session running and free? If so, it could start **phase 0
+   of the registry in parallel** with the brain work, without touching the call brain: a RisiCloud-level service with
+   its own small store, record and card schema, JWS signature (RFC 8785 JCS) and hash checks, status and delisting,
+   and the sandbox runner, with RisiWork's Ask as the first Official entry. Don't start until both architects have
+   written "agreed" on the contract. Just tell me whether the capacity exists, and **give no date** to RisiWork.
+2. **New RisiMe rule, now:** the learning log and audit store **no content and no figures from any external agent**
+   (Ask included), only the request id, agent, skill, result code and latency. Add a test that fails if an agent
+   answer body reaches the learning log.
+Risi calling agents in chat or on calls waits for the brain gate. Tonight's model test is still the priority.
+
 ## 2026-10-16 19:50 SLT · Tonight's model test: what "pass" means (agreed with RisiWork)
 
 All four bridge proposals are now agreed by both architects (risi-brain-v3, gemma4-shared-test, ask-as-a-risi-skill,
