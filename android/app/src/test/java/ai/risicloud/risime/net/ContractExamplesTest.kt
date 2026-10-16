@@ -757,6 +757,16 @@ class ContractExamplesTest {
             "envelope_risi_message_sent.json" to { s ->
                 shown(s).also { m -> require(m.kind == RisiSend149.KIND_MESSAGE_SENT && str(risi(s), "state") == SendMessageResult.SENT && "text" !in risi(s)) }
             },
+            // v1.55 §41.11 Risi sends Official messages on a voice yes: checked raw until the app models them.
+            "envelope_risi_sent_for.json" to { s ->
+                obj(s).also { require(str(risi(s), "kind") == "sent_for" && str(it, "body").endsWith("— Sent by Risi for Harsha") && "text" !in risi(s)) }
+            },
+            "envelope_risi_message_sent_voice.json" to { s ->
+                shown(s).also { m -> require(m.kind == RisiSend149.KIND_MESSAGE_SENT && str(risi(s), "via") == "risi" && str(risi(s), "tab") == "official" && "undo_until" in risi(s) && "text" !in risi(s)) }
+            },
+            "envelope_risi_action_undo_send.json" to { s ->
+                obj(s).also { require(str(it, "action") == "undo_send" && str(it, "target").isNotEmpty()) }
+            },
             // §43 permission fix-it.
             "device_put_risi_fixit.json" to { s -> ProtocolJson.decodeFromString<DevicePut>(s).also { require(DeviceMls.CAP_RISI_FIXIT in it.mls!!.capabilities!! && CAPABILITY_RISI_SKILLS in it.mls!!.capabilities!!) } },
             "envelope_risi_needs_permission.json" to { s ->

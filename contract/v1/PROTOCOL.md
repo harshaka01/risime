@@ -1,4 +1,4 @@
-# RisiMe Wire Protocol — v1.54 (Release 0.3)
+# RisiMe Wire Protocol — v1.55 (Release 0.3)
 Owner: root session. Server and Android implement this exactly.
 
 ## 0. Conventions
@@ -11983,6 +11983,45 @@ Amends §41.5 ("never confirmed by voice in v1"). Server-only, no wire change. B
   - 10 adversarial prompts ("did you add it?", "you said you added it", …);
   - a voice add followed by "did you add it?" on the device test.
 
+### 41.11 Risi sends Official messages on a voice yes (v1.55, Harsha's decision 2026-10-16 15:25 SLT)
+Amends §41.9 ("never … sending anything to other people") and §42.0 ("the server never sends a message on the user's
+behalf") **for Official conversations during a Call Risi only**. Decision 094. Behind `RISI_CALL_SEND`
+(`off` | `canary` | `on`, default `canary`) and the per-user setting below.
+- **Who sends:** Risi itself, as the visible, encrypted member it already is in every Official conversation (§24): a
+  normal Risi post from Risi's leaf, never a message forged as the user. Private conversations are never in reach
+  (Risi isn't a member there): a Private recipient keeps the §42 card and the tap.
+- **Flow on a call:**
+  1. The caller asks to message a person in Official ("tell Shenika on work that …"). Risi resolves the person
+     (§42.2 rules) and that 1:1's Official conversation (`on`; otherwise "Official is off in your chat with …").
+  2. Risi reads it back: "I'll send Shenika: '…'. Send it?" A change updates the text and Risi reads it back again.
+  3. A clear yes ("yes", "send it") sends. A no, silence, or the call ending sends nothing, and the §42 card stays in the
+     Risi chat for a tap.
+  4. Risi says "Sent." only after the server stored the post (its `message_id`; claim guard §41.9).
+- **Never by voice (always the card and a tap):** money or payments, HR, legal matters, accusations or complaints
+  about a person, deletion requests (decision 085), and any text the guard can't classify. Risi says: "That one needs
+  your tap: it's on the card in your Risi chat."
+- **The post in the Official conversation** (`envelope_risi_sent_for.json`):
+  `risi: {"v": 1, "kind": "sent_for", "for": {"user_id": uuid, "name": "Harsha"}, "write_id", "call_ref",
+  "made_by", "notify": [recipient]}`, `body: "<the text>\n— Sent by Risi for Harsha"`. The recipient is notified as for
+  any message (`notify`). Apps show the body with the line "Sent by Risi for Harsha" as a label; an old app shows the
+  body, which carries the same label. The text is the caller's words as read back.
+- **The record in the caller's Risi chat:** the §42.2 `message_sent` reply with `"tab": "official"`, `"state": "sent"`,
+  `"via": "risi"` and **`"undo_until": iso`** (2 minutes after the send; `envelope_risi_message_sent_voice.json`), body
+  "✓ Sent to Shenika (Official) by Risi · Undo". **Undo** (until `undo_until`) = the client action
+  `{"v": 1, "type": "risi_action", "action": "undo_send", "target": write_id}` (`envelope_risi_action_undo_send.json`) from
+  the caller's own leaf, or saying or typing "undo that" to Risi: Risi deletes its post for everyone (§15, its own
+  message), then posts `message_sent` with `"state": "undone"` ("Undone: the message to Shenika was deleted."). After
+  `undo_until` the action is ignored and the record shows no Undo. An app without the button shows the body; voice
+  and typed undo still work.
+- **Setting** (per user, §37.7): `GET`/`PUT /api/v1/me/risi/voice` gain `"voice_send": bool`, present only while
+  `RISI_CALL_SEND` is on for the user (absent = off; ignored then). Default **true** for the switch's canary users,
+  false for everyone else. Settings → Risi: "Send work messages when I confirm by voice".
+- **Learning log:** task `call_send`, the outcome (`sent` / `undone` / `needs_tap` / `declined`), latency; never the
+  text.
+- **Gate:** the golden calls with a send; 10 adversarial prompts (a send claimed without the ack; a money or HR text
+  by voice; a Private recipient; a yes that came before the read-back); undo within and after 2 minutes; the
+  device test sends to the test friend and undoes it.
+
 ### 41.10 The caller's speech recognised on the phone (v1.53, Harsha 2026-10-16 04:52 SLT, P0)
 Harsha's 04:4x call: the server's speech-to-text "heard" lines nobody said (Whisper hallucinating on noise, silence
 and echo). For English, the phone now recognises the caller's speech **on the device**
@@ -12062,6 +12101,12 @@ barge-in and fallback.
   - the capability only with an on-device recogniser.
 
 ## Changelog
+- **v1.55** (2026-10-16, Harsha's decision 15:25 SLT via the architect 15:35 A; decision 094): §41.11 Risi sends
+  Official messages on a voice yes during a Call Risi: Risi's own post `risi.kind: "sent_for"` (body labelled "Sent by
+  Risi for Harsha"), `message_sent` gains `via: "risi"`, `undo_until` and the `state` `undone`, the client action
+  `undo_send`, the setting `voice_send` on `/me/risi/voice`; money/HR/legal/accusations/deletion and Private keep the
+  tap. Switch `RISI_CALL_SEND` (default canary). Additive: without the switch every call and reply is byte-identical
+  to v1.54.
 - **v1.54** (2026-10-16, architect 14:05 item 3; proposal 2026-10-16-translate-languages): §37.13.2 Translate to
   more languages: the read-only `translate_languages` on `/me/risi/voice` (present only with `translate_available`;
   absent = en/si/ta), `target` and `always_translate` take any listed code, the picker's "More languages…".
