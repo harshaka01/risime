@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Per-tool pass rates for the brain v3 live gate (called by scripts/model-swap-test).
+
+  python3 -I scripts/model-swap-tools <mix test output file> <golden dir>
+
+Totals come from the scripted turns (golden calls + paraphrase variants) that carry an `expect`, grouped by the
+expected route (tool). A turn failed when the mix output has a `FAIL <golden_id> t<turn>:` line for it. Simulated
+callers are summarised from their own lines. Prints a Markdown table.
+"""
+import collections
+import glob
+import json
+import os
+import re
+import sys
+
+out_file, gdir = sys.argv[1], sys.argv[2]
+text = open(out_file, encoding="utf8", errors="replace").read()
+
+turns = {}  # (golden_id, turn no.) -> expected route label
+def label(exp):
+    if exp.get("silent") is True:
+        return "silent"
+    if exp.get("route"):
+        return exp["route"]
+    if exp.get("route_in"):
+        return " or ".join(exp["route_in"])
+    return "(no route)"
+
+for f in sorted(glob.glob(os.path.join(gdir, "calls", "*.json"))):
+    d = json.load(open(f))
+    for i, t in enumerate(d["turns"], 1):
+        if t.get("expect"):
+            turns[(d["golden_id"], i)] = label(t["expect"])
+for f in sorted(glob.glob(os.path.join(gdir, "paraphrases", "*.json"))):
+    for v in json.load(open(f))["variants"]:
+        for i, t in enumerate(v["turns"], 1):
+            if t.get("expect"):
+                turns[(v["golden_id"], i)] = label(t["expect"])
+
+failed = set()
+for m in re.finditer(r"^\s+FAIL (\S+) (?:unsafe )?t(\d+)", text, re.M):
+    failed.add((m.group(1), int(m.group(2))))
+
+tot = collections.Counter(turns.values())
+bad = collections.Counter(turns[k] for k in failed if k in turns)
+ran = bool(re.search(r"^GOLDEN CALLS", text, re.M))
+print("| tool (expected route) | turns | failed | pass rate |")
+print("|---|---|---|---|")
+for r in sorted(tot, key=lambda r: (-tot[r], r)):
+    pct = 100.0 * (tot[r] - bad[r]) / tot[r]
+    print(f"| {r} | {tot[r]} | {bad[r]} | {pct:.0f}% |")
+n, nb = sum(tot.values()), sum(bad.values())
+if n:
+    print(f"| **all** | {n} | {nb} | {100.0 * (n - nb) / n:.0f}% |")
+if not ran:
+    print("\n(no GOLDEN CALLS line in the mix output: the table counts every turn as passed; read the raw output)")
+for pat in (r"^GOLDEN CALLS.*$", r"^PARAPHRASES.*$", r"^SIMULATED CALLERS.*$"):
+    for m in re.finditer(pat, text, re.M):
+        print("\n" + m.group(0))
+sim = re.findall(r"^  FAIL (send|cal|redo[a-z_]*|[a-z_]+): (.*)$", text, re.M)
+if sim:
+    print("\nSimulated caller failures by kind: " + ", ".join(f"{k}={c}" for k, c in collections.Counter(s[0] for s in sim).items()))

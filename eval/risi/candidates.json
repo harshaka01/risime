@@ -59,6 +59,27 @@
         "4096"
       ]
     },
+    "nemotron3-nano-30b-a3b-nvfp4": {
+      "_doc": "NVIDIA Nemotron 3 Nano (NemotronHForCausalLM, 31.6B total / 3.2B active), NVFP4 via hf_quant_config.json (vLLM auto-picks quant method modelopt_fp4; do not pass --quantization). NEVER --trust-remote-code: vLLM has a native nemotron_h model, the repo .py files must not run. Thinking off via enable_thinking=false (vLLM nemotron_v3 reasoning parser honours it). Tool parser: vLLM 0.29 has no 'nemotron' parser; qwen3_coder is NVIDIA's documented one for Nano 3. Swap share = weights 19.3 + 3 GB.",
+      "repo": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
+      "disk_gb": 19.3,
+      "mem_gb": 19.5,
+      "args": [
+        "--reasoning-parser",
+        "nemotron_v3",
+        "--default-chat-template-kwargs",
+        "{\"enable_thinking\": false}",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser",
+        "qwen3_coder",
+        "--mamba-ssm-cache-dtype",
+        "float32",
+        "--max-model-len",
+        "4096",
+        "--max-num-batched-tokens",
+        "4096"
+      ]
+    },
     "gemma4-12b-qat": {
       "repo": "google/gemma-4-12B-it-qat-w4a16-ct",
       "disk_gb": 10.3,
