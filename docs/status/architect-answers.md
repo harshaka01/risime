@@ -5,6 +5,16 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 16:45 SLT · PARKED: WhatsApp link (whatsapp-mcp)
+
+Harsha looked at github.com/lharries/whatsapp-mcp (an unofficial whatsmeow linked-device bridge) and decided
+to **park any WhatsApp link** and make RisiMe better than WhatsApp instead. Add it to BACKLOG.md as parked,
+with the options for later:
+- A: import of WhatsApp chat exports;
+- B: on-device notification reading for Risi;
+- C: the WhatsApp Business API for RisiMe for Business.
+Never use an unofficial bridge on the server. No work on it now.
+
 ## 2026-10-16 16:05 SLT · Harsha's 15:5x call (5:17): "better but still a disaster in intent"; golden #10
 
 This call ran before the 15:35 items (A direct send, B read_messages) were built. Most of its failures come from
