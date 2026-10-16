@@ -31,21 +31,12 @@ Chatterbox samples resent to the Risi chat.
 needs his Keycloak sign-in).
 Sent to the Risi chat (topic `voices-try`).
 
-### Q-007 · 2026-10-16 09:50 SLT · [harsha] · blocking: no
-**Question:** the architect wants the Call Risi brain v3 decision made by "the strongest model available (commercial
-first)". There is no commercial key in `.env`, and a paid model needs your OK. Use one for that single decision per
-call turn?
-**Options:** keep risi-l1 (own model, free) / approve a commercial model (which one; key into `.env` by you).
-**Default:** risi-l1. The model is a setting, so a stronger one drops in without new code. v3 ships on risi-l1 if
-its real-call tests pass.
-
-### Q-008 · 2026-10-16 11:30 SLT · [harsha] · blocking: no
-**Question:** "Call Risi brain v3: try now" (srv3; RISI_CALL_BRAIN canary = Harsha + the test account). The 3 things to try are in the message.
-**Options:** Works / Problems.
-**Default:** v3 stays canary; the old brain answers everyone else and any turn where the model fails. Sent to the Risi
-chat (topic `brain-v3-try`).
-
 ## Answered
+- ANSWERED: "try Gemma-4, and if it fails then add commercial" (by Harsha, 2026-10-16 10:19 SLT, via the architect).
+  Q-007 commercial model. No commercial model for now; Gemma-4 swap test right after v3 (architect 10:22).
+- ANSWERED: Problems (by Harsha, 2026-10-16 11:35 SLT). Q-008 brain v3 try now. His 06:04Z call: the recipient
+  wasn't matched to his contact and the message text he gave was dropped and asked for again (fix in progress, golden
+  call 7). Phone speech: 31 partials, no final (the end-of-speech bug fixed in nightly.12).
 - ANSWERED: Problems (by Harsha, 2026-10-16 09:25 SLT). Question Q-003 / `hotfix11-try` (on-phone English speech). His
   09:25 SLT call: the phone sent no finished text, so the server took over after 25 s ("no_final"); the message
   flow also went wrong (invented text, "cancel + new text" sent to the calendar, a split sentence answered alone).
