@@ -5,6 +5,18 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 16:55 SLT · HARSHA: the bigger "Risi brain" waits for 2 new Sparks
+
+Harsha decided not to run DeepSeek V4-Flash (or another large model) on the current Sparks. He is getting 2
+new Spark machines, and they will be built as a dedicated shared **Risi brain** for RisiMe, RisiWork and others.
+- **No large-model download now.** Nothing over 2 GB without his explicit OK (golden rule 10).
+- Until then: carry on with v3 on risi-l1 and the Gemma-4 test (10:22/10:25 entries). Keep the brain
+  model-agnostic, keep the golden and paraphrase gate as the yardstick, and keep logging every decision to
+  the learning log; it becomes training data for the bigger brain.
+- When the new Sparks arrive, candidates are DeepSeek V4-Flash 4-bit (NVFP4, ~150 GB, across 2 nodes),
+  GLM-5.2 4-bit, and whatever leads then, each measured on the same gate. Add this to BACKLOG.md as
+  "Risi brain cluster (waiting for hardware)".
+
 ## 2026-10-16 16:45 SLT · PARKED: WhatsApp link (whatsapp-mcp)
 
 Harsha looked at github.com/lharries/whatsapp-mcp (an unofficial whatsmeow linked-device bridge) and decided
