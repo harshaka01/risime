@@ -5,6 +5,47 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 11:50 SLT · P0 calls (Harsha 11:42): incoming call doesn't ring; "already in a call" after a phone call
+
+Two urgent call bugs from real use. Give them to the android role (and server where noted), ahead of the
+Gemma test. Releases go out as a hotfix APK and a server fast lane as soon as each fix is green.
+
+**1. Shenika's phone doesn't ring for a RisiMe call.** Notifications are allowed and the phone is not on
+silent. Find the cause on her device first: her device row (model, Android version, app version), the
+FCM delivery log for the call push, and the call log, then fix it in the app. Check and handle:
+- FCM: the call push is a **high-priority data message**, not a notification message, and it isn't
+  deprioritised. Log a warning if FCM reports it was downgraded.
+- Android 14+ **USE_FULL_SCREEN_INTENT**: if it isn't granted, ask for it with a clear one-tap screen
+  ("Let RisiMe show incoming calls"). Today the incoming call is probably only a silent heads-up.
+- The **call notification channel**: importance HIGH, ringtone sound with USAGE_NOTIFICATION_RINGTONE,
+  vibration. If the user or the OEM muted the channel, show it in-app with a "Fix" button that opens the
+  channel settings. Note that a channel's sound can't change after it's created, so changing the sound
+  needs a new channel id.
+- Self-managed **ConnectionService** (Telecom) for incoming calls, so the system rings it like a normal
+  call, if that isn't already the case.
+- **Battery optimisation / OEM auto-start** (Xiaomi, Oppo, Vivo, Samsung "sleeping apps"): detect it and
+  guide the user in-app, once, with the exact setting for her brand.
+- Add a "Test incoming call" button under Settings → Calls that rings the phone in 5 s, so Harsha and
+  Shenika can check it themselves.
+
+**2. After a normal phone call interrupts a RisiMe call, the next RisiMe call says "you're already in
+another call"** until the app is killed. Every end path must free the call. Fix:
+- Handle the cellular interruption (TelephonyCallback / Telecom hold or disconnect, audio-focus
+  loss). End or hold the RisiMe call cleanly and tell the other side.
+- One `endCall(reason)` path that always clears the active-call state, the ConnectionService
+  connection (setDisconnected + destroy), audio focus and mode, the LiveKit room, the foreground
+  service and the wakelock. Hang up, remote end, network loss, cellular call, app background or kill,
+  and timeout all go through it.
+- Self-heal: before saying "in another call", check that the stored call is really live (room
+  connected, the server knows it). If it isn't, clear it and place the new call.
+- Server: if the server has a "busy" check, a call with no media or heartbeat for 30 s is ended
+  server-side, so a stale call never blocks a new one.
+- Tests: unit tests for each end path, plus one device test (call, take a GSM call, end it, call again
+  without restarting the app).
+
+Post "Calls: try now" in Harsha's Risi chat with these two checks: Shenika presses "Test incoming call";
+then call, take a phone call, and call again.
+
 ## 2026-10-16 11:45 SLT · P0 v3 regression: the message loop (Harsha's 11:3x call, 1:16)
 
 v3 asked "What should I say to Shani Kao?" three times. Harsha gave the text twice and never got a
