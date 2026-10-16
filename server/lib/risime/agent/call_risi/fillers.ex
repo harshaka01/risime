@@ -10,7 +10,7 @@ defmodule RisiMe.Agent.CallRisi.Fillers do
     "en" => %{
       "calendar_read" => [
         "Hmm, let me check your calendar…",
-        "One moment, I'll look at your calendar."
+        "Let me look at your calendar…"
       ],
       "calendar_write" => ["Okay, let me set that up…", "Sure, one moment while I prepare that."],
       "reminder" => ["Okay, let me set that reminder up…", "Sure, one moment."],
