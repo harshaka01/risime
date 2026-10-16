@@ -1,0 +1,621 @@
+{
+  "para-dictation-instruction-01": {
+    "dictation| >> no, no. i'm not asking you to write anything, read me the messages from nimali.": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 421
+    },
+    "no, no. i'm not asking you to write anything, read me the messages from nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "read me the messages from Nimali",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali Perera",
+        "tool": "read_messages"
+      },
+      "ms": 1749
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1350
+    }
+  },
+  "para-dictation-instruction-02": {
+    "cancel.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "cancel_open"
+      },
+      "ms": 1157
+    },
+    "dictation| >> cancel.": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 536
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1086
+    }
+  },
+  "para-dictation-instruction-03": {
+    "dictation| >> wait, did ruwan reply to me?": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 416
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1088
+    },
+    "wait, did ruwan reply to me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "did Ruwan reply to me?",
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "read_messages"
+      },
+      "ms": 1380
+    }
+  },
+  "para-dictation-instruction-04": {
+    "dictation| >> hold on, check my calendar first. what's on today?": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 419
+    },
+    "hold on, check my calendar first. what's on today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What's on today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1361
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1086
+    }
+  },
+  "para-dictation-instruction-05": {
+    "dictation| >> who is it for again?": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 534
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1081
+    },
+    "who is it for again?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "It's for Nimali Perera.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1526
+    }
+  },
+  "para-dictation-instruction-06": {
+    "dictation| >> hello?": {
+      "decision": {
+        "text": "Hello?",
+        "tool": "more"
+      },
+      "ms": 582
+    },
+    "send a message to ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1378
+    }
+  },
+  "para-dictation-instruction-07": {
+    "dictation| >> what did i promise today?": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 546
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1098
+    },
+    "what did i promise today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What did I promise today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1402
+    }
+  },
+  "para-dictation-instruction-08": {
+    "dictation| >> no, it's not for nimali, it's for ruwan.": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 539
+    },
+    "no, it's not for nimali, it's for ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Send a message to Ruwan",
+        "tab": "",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1348
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1091
+    }
+  },
+  "para-dictation-instruction-09": {
+    "dictation| >> never mind, forget the message. any new messages?": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 542
+    },
+    "never mind, forget the message. any new messages?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "",
+        "tool": "cancel_open"
+      },
+      "ms": 1165
+    },
+    "send a message to kamal.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 971
+    }
+  },
+  "para-dictation-instruction-10": {
+    "dictation| >> stop. has kamal followed up on the computer?": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 420
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1109
+    },
+    "stop. has kamal followed up on the computer?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Has Kamal followed up on the computer?",
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1456
+    }
+  },
+  "para-dictation-instruction-11": {
+    "dictation| >> hi nimali, the review is moved to monday.": {
+      "decision": {
+        "text": "Hi Nimali, the review is moved to Monday.",
+        "tool": "more"
+      },
+      "ms": 798
+    },
+    "dictation| hi nimali, the review is moved to monday. >> wait, stop. did ruwan reply?": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 542
+    },
+    "take this down for nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1401
+    },
+    "wait, stop. did ruwan reply?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "read_messages"
+      },
+      "ms": 1399
+    }
+  },
+  "para-dictation-instruction-12": {
+    "cancel that, i'll do it later.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "cancel_open"
+      },
+      "ms": 1383
+    },
+    "dictation| >> cancel that, i'll do it later.": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 418
+    },
+    "i want to send a long message to ruwan, listen until i say okay.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "dictate"
+      },
+      "ms": 1384
+    }
+  },
+  "para-dictation-instruction-13": {
+    "can you first tell me what time my next meeting is?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "what time my next meeting is",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1376
+    },
+    "dictation| >> can you first tell me what time my next meeting is?": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 421
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1091
+    }
+  },
+  "para-dictation-instruction-14": {
+    "dictation| >> what can you do?": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 419
+    },
+    "send a message to ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1115
+    },
+    "what can you do?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "capabilities"
+      },
+      "ms": 1364
+    }
+  },
+  "para-dictation-instruction-15": {
+    "dictation| >> sorry, who are my contacts again?": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 422
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1093
+    },
+    "sorry, who are my contacts again?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1149
+    }
+  },
+  "para-dictation-instruction-16": {
+    "dictation| >> no no no, read nimali's last message first.": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 423
+    },
+    "no no no, read nimali's last message first.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "read Nimali's last message",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali Perera",
+        "tool": "read_messages"
+      },
+      "ms": 1462
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1107
+    }
+  },
+  "para-dictation-instruction-17": {
+    "actually, remind me tomorrow at 9 to call him instead.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": true,
+        "confidence": 1,
+        "request": "remind me tomorrow at 9 to call Kamal Jayasuriya",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1735
+    },
+    "dictation| >> actually, remind me tomorrow at 9 to call him instead.": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 425
+    },
+    "send a message to kamal.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 990
+    }
+  },
+  "para-dictation-instruction-18": {
+    "dictation| >> is kamal in the office today? did he message me?": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 541
+    },
+    "is kamal in the office today? did he message me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Kamal Jayasuriya",
+        "tool": "read_messages"
+      },
+      "ms": 1502
+    },
+    "let me start the message to kamal, the message is going to be long.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Let me start the message to Kamal, the message is going to be long.",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "dictate"
+      },
+      "ms": 1758
+    }
+  },
+  "para-dictation-instruction-19": {
+    "dictation| >> did she reply to my earlier message?": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 538
+    },
+    "did she reply to my earlier message?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali Perera",
+        "tool": "read_messages"
+      },
+      "ms": 1196
+    },
+    "send a message to nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1128
+    }
+  },
+  "para-dictation-instruction-20": {
+    "dictation| >> why are you asking me that? check my promises.": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 539
+    },
+    "send a message to ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1107
+    },
+    "why are you asking me that? check my promises.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Check my promises.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1509
+    }
+  }
+}

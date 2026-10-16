@@ -2,49 +2,48 @@
   "can you send a message? hello, how are you, this is a text message that's given by harsha.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 0.9,
+      "request": "send a message",
+      "tab": "private",
       "text": "Hello, how are you, this is a text message that's given by Harsha.",
       "to": "",
       "tool": "message_draft"
     },
-    "ms": 1566
+    "ms": 1882
   },
   "just tell me 10 names in my contacts.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "tell me 10 names in my contacts",
-      "say": "",
+      "confidence": 1,
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "list_contacts"
     },
-    "ms": 1661
+    "ms": 1430
   },
   "n-i-m-a-l-i.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "request": "a message to Nimali, \"Hello, how are you, this is a text message that's given by Harsha.\"",
+      "tab": "private",
       "text": "Hello, how are you, this is a text message that's given by Harsha.",
       "to": "Nimali",
       "tool": "message_draft"
     },
-    "ms": 1772
+    "ms": 2411
   },
   "what time is my next meeting?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 1,
       "request": "What time is my next meeting?",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1459
+    "ms": 1253
   }
 }

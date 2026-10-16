@@ -1,0 +1,282 @@
+{
+  "para-reminder-01": {
+    "remind me tomorrow at 9 to call the bank.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me tomorrow at 9 to call the bank.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1708
+    }
+  },
+  "para-reminder-02": {
+    "set a reminder for today at 5 pm to send the report.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Set a reminder for today at 5 pm to send the report.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1753
+    }
+  },
+  "para-reminder-03": {
+    "can you remind me on monday morning to pay the rent?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "remind me on Monday morning to pay the rent",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1711
+    }
+  },
+  "para-reminder-04": {
+    "remind me at 3 today to call ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me at 3 today to call Ruwan.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1766
+    }
+  },
+  "para-reminder-05": {
+    "put a reminder tomorrow at noon, buy flowers.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Put a reminder tomorrow at noon, buy flowers.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1660
+    }
+  },
+  "para-reminder-06": {
+    "please remind me on sunday at 8 to water the plants.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "remind me on Sunday at 8 to water the plants",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1744
+    }
+  },
+  "para-reminder-07": {
+    "reminder: check the server backups, tomorrow 10 am.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "check the server backups, tomorrow 10 am",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1669
+    }
+  },
+  "para-reminder-08": {
+    "remind me tonight at 9 to take my medicine.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me tonight at 9 to take my medicine.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1721
+    }
+  },
+  "para-reminder-09": {
+    "hey risi, remind me on the 20th to send the quote to lotusbay.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "remind me on the 20th to send the quote to Lotusbay",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1862
+    }
+  },
+  "para-reminder-10": {
+    "i need a reminder tomorrow at 7 for the gym.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "I need a reminder tomorrow at 7 for the gym.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1728
+    }
+  },
+  "para-reminder-11": {
+    "remind me to call nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me to call Nimali.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1642
+    }
+  },
+  "para-reminder-12": {
+    "set a reminder at 4 pm today, follow up with kamal.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Set a reminder at 4 pm today, follow up with Kamal.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1800
+    }
+  },
+  "para-reminder-13": {
+    "remind me on saturday at 10 to pick up the car.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me on Saturday at 10 to pick up the car.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1788
+    }
+  },
+  "para-reminder-14": {
+    "can you set me a reminder for tomorrow 6 am, airport?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "set me a reminder for tomorrow 6 am, airport",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1717
+    }
+  },
+  "para-reminder-15": {
+    "remind me in the evening today at 6 to call home.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me in the evening today at 6 to call home.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1752
+    }
+  },
+  "para-reminder-16": {
+    "remind me on monday at 9 to review the contract.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me on Monday at 9 to review the contract.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1737
+    }
+  },
+  "para-reminder-17": {
+    "remind me tomorrow at two to send the invoice.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me tomorrow at two to send the invoice.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1680
+    }
+  },
+  "para-reminder-18": {
+    "today 5 pm reminder: leave early.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Today 5 pm reminder: leave early.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1638
+    }
+  },
+  "para-reminder-19": {
+    "please set a reminder, um, tomorrow at 8, the team standup.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "tomorrow at 8, the team standup",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1701
+    }
+  },
+  "para-reminder-20": {
+    "remind me on friday next week at 11 to renew the licence.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me on Friday next week at 11 to renew the licence.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1809
+    }
+  }
+}

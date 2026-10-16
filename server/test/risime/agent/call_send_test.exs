@@ -77,7 +77,8 @@ defmodule RisiMe.Agent.CallSendTest do
       assert body ==
                "I called you a couple of times. Please call me back.\n— Sent by Risi for Harsha"
 
-      assert %{"for" => %{"user_id" => ^hid, "name" => "Harsha"}, "write_id" => ^wid} = r
+      assert %{"on_behalf_of" => %{"user_id" => ^hid, "name" => "Harsha"}, "write_id" => ^wid} = r
+      refute Map.has_key?(r, "for")
       assert r["notify"] == [nid] and Map.has_key?(r, "call_ref")
       refute Map.has_key?(r, "text")
 

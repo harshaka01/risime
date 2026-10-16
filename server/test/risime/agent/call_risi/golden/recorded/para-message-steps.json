@@ -3,604 +3,525 @@
     "can you send a message for me?": {
       "decision": {
         "action": "ask",
-        "cancel_open": false,
-        "request": "",
+        "confidence": 1,
         "say": "Who would you like to send it to?",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1412
+      "ms": 1840
+    },
+    "dictation| >> tell her that i'm running ten minutes late.": {
+      "decision": {
+        "text": "Tell her that I'm running ten minutes late.",
+        "tool": "more"
+      },
+      "ms": 768
     },
     "nima lee.": {
       "decision": {
-        "action": "ask",
-        "cancel_open": false,
-        "request": "",
-        "say": "Got it, Nima Lee. What should the message say?",
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "Nima Lee",
         "tool": "message_draft"
       },
-      "ms": 1570
-    },
-    "tell her that i'm running ten minutes late.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "I'm running ten minutes late.",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
-      },
-      "ms": 1505
+      "ms": 1205
     }
   },
   "para-message-steps-02": {
+    "dictation| >> say that the car is ready for pickup.": {
+      "decision": {
+        "text": "Say that the car is ready for pickup.",
+        "tool": "more"
+      },
+      "ms": 736
+    },
     "i want to message someone.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1211
+      "ms": 1295
     },
     "ruvan.": {
       "decision": {
-        "action": "ask",
-        "cancel_open": false,
-        "request": "",
-        "say": "Who should I send it to?",
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1413
-    },
-    "say that the car is ready for pickup.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "the car is ready for pickup.",
-        "to": "Ruwan Silva",
-        "tool": "message_draft"
-      },
-      "ms": 1425
+      "ms": 1075
     }
   },
   "para-message-steps-03": {
-    "let her know that the documents are on her desk.": {
+    "dictation| >> let her know that the documents are on her desk.": {
       "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
         "text": "Let her know that the documents are on her desk.",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
+        "tool": "more"
       },
-      "ms": 1544
+      "ms": 751
     },
     "send a text to nimaali.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "Nimaali",
         "tool": "message_draft"
       },
-      "ms": 1287
+      "ms": 1383
     }
   },
   "para-message-steps-04": {
     "could you message nee mali for me?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "Nee Mali",
         "tool": "message_draft"
       },
-      "ms": 1279
+      "ms": 1388
+    },
+    "dictation| >> hello?": {
+      "decision": {
+        "text": "Hello?",
+        "tool": "more"
+      },
+      "ms": 575
     },
     "just say happy birthday and see you tonight.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "Happy birthday and see you tonight.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1608
+      "ms": 1332
     }
   },
   "para-message-steps-05": {
+    "dictation| >> tell him the meeting starts at three.": {
+      "decision": {
+        "text": "Tell him the meeting starts at three.",
+        "tool": "more"
+      },
+      "ms": 703
+    },
     "message kamal please.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1372
-    },
-    "tell him the meeting starts at three.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "The meeting starts at three.",
-        "to": "Kamal Jayasuriya",
-        "tool": "message_draft"
-      },
-      "ms": 1477
+      "ms": 1319
     }
   },
   "para-message-steps-06": {
+    "dictation| >> tell her i'll call her after lunch.": {
+      "decision": {
+        "text": "Tell her I'll call her after lunch.",
+        "tool": "end"
+      },
+      "ms": 719
+    },
     "send a private message.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1232
-    },
-    "tell her i'll call her after lunch.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "I'll call her after lunch.",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
-      },
-      "ms": 1496
+      "ms": 1309
     },
     "to n-i-m-a-l-i.": {
       "decision": {
-        "action": "ask",
-        "cancel_open": false,
-        "request": "",
-        "say": "Got it, Nimali. What should the message say?",
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
         "text": "",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1550
+      "ms": 1140
     }
   },
   "para-message-steps-07": {
     "can you send something to nimalee?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "Nimalee",
         "tool": "message_draft"
       },
-      "ms": 1319
+      "ms": 1407
+    },
+    "dictation| >> sorry?": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 538
     },
     "tell her that i missed her call and i will call back soon.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "I missed her call and I will call back soon.",
+        "confidence": 1,
+        "tab": "private",
+        "text": "I missed your call and I will call back soon.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1548
+      "ms": 1413
     }
   },
   "para-message-steps-08": {
+    "dictation| >> tell him that i paid the electricity bill.": {
+      "decision": {
+        "text": "Tell him that I paid the electricity bill.",
+        "tool": "more"
+      },
+      "ms": 719
+    },
     "i need to send a message to roo wan.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "Roo Wan",
         "tool": "message_draft"
       },
-      "ms": 1277
-    },
-    "tell him that i paid the electricity bill.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "I paid the electricity bill.",
-        "to": "Ruwan Silva",
-        "tool": "message_draft"
-      },
-      "ms": 1414
+      "ms": 1353
     }
   },
   "para-message-steps-09": {
+    "dictation| >> the message is: can we meet tomorrow morning?": {
+      "decision": {
+        "text": "can we meet tomorrow morning?",
+        "tool": "more"
+      },
+      "ms": 660
+    },
     "send a message to nimali.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1302
-    },
-    "the message is: can we meet tomorrow morning?": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "can we meet tomorrow morning?",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
-      },
-      "ms": 1460
+      "ms": 1088
     }
   },
   "para-message-steps-10": {
+    "dictation| >> tell her that she should bring the laptop charger.": {
+      "decision": {
+        "text": "Tell her that she should bring the laptop charger.",
+        "tool": "more"
+      },
+      "ms": 730
+    },
     "please message nimally.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "Nimally",
         "tool": "message_draft"
       },
-      "ms": 1282
-    },
-    "tell her that she should bring the laptop charger.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "Tell her that she should bring the laptop charger.",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
-      },
-      "ms": 1539
+      "ms": 1343
     }
   },
   "para-message-steps-11": {
     "can you text kamal?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "request": "Can you text Kamal?",
+        "tab": "private",
         "text": "",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1261
+      "ms": 1596
+    },
+    "dictation| >> hello, can you hear me?": {
+      "decision": {
+        "text": "Hello, can you hear me?",
+        "tool": "more"
+      },
+      "ms": 676
     },
     "say thanks for the help yesterday.": {
       "decision": {
         "action": "tool",
         "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "Say thanks for the help yesterday.",
+        "confidence": 1,
+        "request": "a message to Kamal Jayasuriya, no text yet (no card yet)",
+        "tab": "private",
+        "text": "Thanks for the help yesterday.",
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1532
+      "ms": 1962
     }
   },
   "para-message-steps-12": {
+    "dictation| >> tell her i called a couple of times but she didn't pick up.": {
+      "decision": {
+        "text": "Tell her I called a couple of times but she didn't pick up.",
+        "tool": "more"
+      },
+      "ms": 825
+    },
     "nimaali.": {
       "decision": {
-        "action": "ask",
-        "cancel_open": false,
-        "request": "",
-        "say": "Got it, Nimaali. What should the message say?",
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "Nimaali",
         "tool": "message_draft"
       },
-      "ms": 1567
+      "ms": 1170
     },
     "send a message on a private chat.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1241
-    },
-    "tell her i called a couple of times but she didn't pick up.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "I called a couple of times but she didn't pick up.",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
-      },
-      "ms": 1597
+      "ms": 1308
     }
   },
   "para-message-steps-13": {
+    "dictation| >> tell her the train is delayed by half an hour.": {
+      "decision": {
+        "text": "Tell her the train is delayed by half an hour.",
+        "tool": "more"
+      },
+      "ms": 753
+    },
     "message nima lee.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
-        "to": "",
-        "tool": "list_contacts"
-      },
-      "ms": 1353
-    },
-    "tell her the train is delayed by half an hour.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "The train is delayed by half an hour.",
-        "to": "Nimali Perera",
+        "to": "Nima Lee",
         "tool": "message_draft"
       },
-      "ms": 1537
+      "ms": 1351
     }
   },
   "para-message-steps-14": {
+    "dictation| >> tell him to bring the keys.": {
+      "decision": {
+        "text": "Tell him to bring the keys.",
+        "tool": "more"
+      },
+      "ms": 673
+    },
     "i want to send a text.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1209
+      "ms": 1263
     },
     "it's for ruwan.": {
       "decision": {
-        "action": "ask",
-        "cancel_open": false,
-        "request": "",
-        "say": "Who is Ruwan?",
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
         "text": "",
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1366
-    },
-    "tell him to bring the keys.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "Tell him to bring the keys.",
-        "to": "Ruwan Silva",
-        "tool": "message_draft"
-      },
-      "ms": 1572
+      "ms": 1134
     }
   },
   "para-message-steps-15": {
+    "dictation| >> um, tell her that dinner is at eight tonight.": {
+      "decision": {
+        "text": "tell her that dinner is at eight tonight",
+        "tool": "more"
+      },
+      "ms": 713
+    },
     "send nimali a message.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1460
-    },
-    "um, tell her that dinner is at eight tonight.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "dinner is at eight tonight",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
-      },
-      "ms": 1639
+      "ms": 1340
     }
   },
   "para-message-steps-16": {
     "can you send a message to her?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1228
+      "ms": 1273
     },
-    "let her know i'm on my way.": {
+    "dictation| >> let her know i'm on my way.": {
       "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
         "text": "Let her know I'm on my way.",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
+        "tool": "more"
       },
-      "ms": 1530
+      "ms": 710
     },
     "nimali perera.": {
       "decision": {
-        "action": "ask",
-        "cancel_open": false,
-        "request": "",
-        "say": "Got it, Nimali Perera. What should the message say?",
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
         "text": "",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1651
+      "ms": 1186
     }
   },
   "para-message-steps-17": {
+    "dictation| >> what?": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 539
+    },
     "tell him the report is finished.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "The report is finished.",
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1475
+      "ms": 1330
     },
     "text kamal for me.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1293
+      "ms": 1365
     }
   },
   "para-message-steps-18": {
+    "dictation| >> tell her that i can't make it today, sorry.": {
+      "decision": {
+        "text": "Tell her that I can't make it today, sorry.",
+        "tool": "more"
+      },
+      "ms": 767
+    },
     "send a message to nee mali.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "Nee Mali",
         "tool": "message_draft"
       },
-      "ms": 1309
-    },
-    "tell her that i can't make it today, sorry.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "I can't make it today, sorry.",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
-      },
-      "ms": 1515
+      "ms": 1386
     }
   },
   "para-message-steps-19": {
     "can you send a message to my friend?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1218
+      "ms": 1014
+    },
+    "dictation| >> say good luck with the exam.": {
+      "decision": {
+        "text": "Say good luck with the exam.",
+        "tool": "end"
+      },
+      "ms": 676
     },
     "nimalee.": {
       "decision": {
-        "action": "ask",
-        "cancel_open": false,
-        "request": "",
-        "say": "Who is Nimalee?",
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "Nimalee",
         "tool": "message_draft"
       },
-      "ms": 1449
-    },
-    "say good luck with the exam.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "Say good luck with the exam.",
-        "to": "Nimali Perera",
-        "tool": "message_draft"
-      },
-      "ms": 1466
+      "ms": 1117
     }
   },
   "para-message-steps-20": {
+    "dictation| >> tell him i'll be home by seven.": {
+      "decision": {
+        "text": "Tell him I'll be home by seven.",
+        "tool": "more"
+      },
+      "ms": 711
+    },
     "message ruvan.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 0.9,
+        "tab": "",
         "text": "",
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1259
-    },
-    "tell him i'll be home by seven.": {
-      "decision": {
-        "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "I'll be home by seven.",
-        "to": "Ruwan Silva",
-        "tool": "message_draft"
-      },
-      "ms": 1429
+      "ms": 1176
     }
   }
 }

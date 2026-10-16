@@ -120,6 +120,9 @@ defmodule RisiMe.Agent.CallRisi.Session do
            # (its echo window: an unclear utterance right after it is dropped silently).
            v3?: Map.get_lazy(args, :v3?, fn -> CallRisi.BrainV3.on_for?(args.user_id) end),
            dialogue: CallRisi.Dialogue.new(),
+           # Harsha's call 22e016e0: Risi takes a message down (`CallRisi.Dictation`): the
+           # caller's pauses start no turn; one check per pause; the end composes the text.
+           dict: nil,
            risi_quiet_at: nil,
            # P0 calls (2026-10-16): when the caller was first seen missing from the room (monotonic ms).
            caller_gone_at: nil,
@@ -150,6 +153,27 @@ defmodule RisiMe.Agent.CallRisi.Session do
   def handle_info({:brain, _old, _ev}, st), do: {:noreply, st}
 
   def handle_info(:listen_timeout, st), do: {:noreply, release(st, true)}
+
+  # Dictation (22e016e0): the caller's words, the pause/"Mm-hm"/silence timers, the checks.
+  def handle_info({:dict_words, utt, text}, %{dict: %{}} = st), do: dict_words(st, utt, text)
+
+  def handle_info({:dict_words, utt, text}, st) when is_binary(text) and text != "" do
+    case resume_dict(st) do
+      %{dict: %{}} = st -> dict_words(st, utt, text)
+      st -> {:noreply, start_text_turn(cancel_turn(st, :replaced), utt, text, true)}
+    end
+  end
+
+  def handle_info({:dict_words, _utt, _text}, st), do: {:noreply, st}
+
+  def handle_info({:dict_timer, k, gen}, %{dict: %{gen: gen}} = st), do: dict_tick(k, st)
+  def handle_info({:dict_timer, _k, _gen}, st), do: {:noreply, st}
+
+  def handle_info({:dict_check, r, n, ended?}, %{dict: %{checking: n0}} = st)
+      when is_integer(n0),
+      do: dict_checked(st, r, n, ended?)
+
+  def handle_info({:dict_check, _r, _n, _ended?}, st), do: {:noreply, st}
   def handle_info(:join_timeout, %{joined?: false} = st), do: finish(st, :timeout)
   def handle_info(:caller_timeout, %{caller?: false} = st), do: finish(st, :timeout)
   def handle_info(:max_length, st), do: finish(st, :max_length)
@@ -250,7 +274,8 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   # Each utterance starts with `speech_start`: whether Risi was speaking then (its echo window).
   defp heard_start(%{"ev" => "speech_start", "speaking" => s}, st) when is_boolean(s) do
-    st = %{st | barged?: s, speech_open?: true}
+    # Dictation: the caller speaks again, so no pause check, "Mm-hm" or end yet.
+    st = %{st | barged?: s, speech_open?: true} |> dict_hold()
     # §41.10: speech that began over Risi's voice and beat its echo is clear barge-in energy.
     if s, do: %{st | barge_at: mono()}, else: st
   end
@@ -399,6 +424,49 @@ defmodule RisiMe.Agent.CallRisi.Session do
   # The hook for the app's Talk/Interrupt button (root adds the wire/worker event): stops
   # whatever Risi is doing, also while holding.
   defp media(%{"ev" => "interrupt"}, st), do: {:noreply, cancel_turn(st, :barge_in)}
+
+  # Dictation (22e016e0): an utterance is transcribed on the side and taken down; no turn, no
+  # cancel, nothing said. A final read-back not spoken yet goes back to listening.
+  defp media(%{"ev" => "utterance", "utt" => utt, "pcm16k" => b64} = ev, st)
+       when is_map(st.dict) or (is_map(st.turn) and is_map_key(st.turn, :dict_snapshot)) do
+    case resume_dict(st) do
+      %{dict: %{}} = st ->
+        st = release(st, false)
+        me = self()
+        pcm = Base.decode64!(b64)
+        wav = wav16k(pcm)
+        audio = %{pcm: pcm, speech_ms: ev["speech_ms"], during_tts?: st.barged?}
+        st = %{st | barged?: false} |> dict_hold()
+
+        Task.start(fn ->
+          text =
+            try do
+              case RisiMe.Agent.Speech.transcribe(wav,
+                     language: "en",
+                     temperature_fallback: false
+                   ) do
+                {:ok, %{text: t} = r} when is_binary(t) ->
+                  case CallRisi.Hearing.judge(r, audio) do
+                    {:ok, heard} -> heard
+                    _ -> ""
+                  end
+
+                _ ->
+                  ""
+              end
+            catch
+              _, _ -> ""
+            end
+
+          send(me, {:dict_words, utt, text})
+        end)
+
+        {:noreply, st}
+
+      st ->
+        media(ev, Map.update!(st, :turn, &Map.delete(&1, :dict_snapshot)))
+    end
+  end
 
   # While holding, an utterance is transcribed on the side and merged into the question
   # (`{:side_stt, …}`): no new turn, no cancel (unless it changes the request or says "stop").
@@ -562,8 +630,30 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   defp brain({:write_ask, text}, st), do: {:noreply, %{st | write_ask: text}}
 
-  # Brain v3: the call's open state, and the card a turn made (its kind from its route).
-  defp brain({:dialogue, %{} = d}, st), do: {:noreply, %{st | dialogue: d}}
+  # Brain v3: the call's open state, and the card a turn made (its kind from its route). A state
+  # with no dictation ends one (a new request, a cancel).
+  defp brain({:dialogue, %{} = d}, st) do
+    st = %{st | dialogue: d}
+    {:noreply, if(Map.get(d, :dictation) == nil, do: %{st | dict: nil}, else: st)}
+  end
+
+  # Risi starts taking a message down (the words already given, if any).
+  defp brain({:dictation, %{} = m}, st) do
+    dict = CallRisi.Dictation.new(m)
+    d = CallRisi.Dialogue.get(st.dialogue)
+
+    d = %{
+      d
+      | dictation: %{to: dict.to, tab: dict.tab, asked?: dict.asked?}
+    }
+
+    st = %{st | dict: dict, dialogue: d}
+    {:noreply, if(dict.parts != [], do: dict_timers(st), else: st)}
+  end
+
+  # The read-back asked a yes or no (v1.55 "Send it?"): what the call waits for.
+  defp brain({:awaiting, %{} = a}, st),
+    do: {:noreply, %{st | dialogue: %{CallRisi.Dialogue.get(st.dialogue) | awaiting: a}}}
 
   defp brain({:card, %{} = c}, st) do
     card = Map.merge(c, CallRisi.Dialogue.message_parts(c[:summary]) || %{})
@@ -628,6 +718,166 @@ defmodule RisiMe.Agent.CallRisi.Session do
     end
   end
 
+  ## Dictation (Harsha's call 22e016e0; RisiMe.Agent.CallRisi.Dictation is the state)
+
+  defp dict_ms(:pause), do: Application.get_env(:risime, :risi_call_dict_pause_ms, 700)
+  defp dict_ms(:mmhm), do: Application.get_env(:risime, :risi_call_dict_mmhm_ms, 3_000)
+  defp dict_ms(:silence), do: Application.get_env(:risime, :risi_call_dict_silence_ms, 6_000)
+
+  # The answer to "What should I say to …?" ends after a shorter pause than a dictation.
+  defp dict_ms(:silence, %{asked?: true}),
+    do: Application.get_env(:risime, :risi_call_dict_answer_silence_ms, 2_500)
+
+  defp dict_ms(k, _d), do: dict_ms(k)
+
+  # The caller speaks (or an utterance is being transcribed): the timers wait.
+  defp dict_hold(%{dict: %{} = d} = st), do: %{st | dict: %{d | gen: d.gen + 1}}
+  defp dict_hold(st), do: st
+
+  defp dict_timers(%{dict: %{} = d} = st) do
+    gen = d.gen + 1
+
+    for k <- [:pause, :mmhm, :silence],
+        do: Process.send_after(self(), {:dict_timer, k, gen}, dict_ms(k, d))
+
+    %{st | dict: %{d | gen: gen}}
+  end
+
+  defp dict_words(st, utt, text) do
+    d = st.dict
+
+    if text == "" do
+      {:noreply, dict_timers(st)}
+    else
+      st = add_line(st, :user, text, nil, utt)
+      st = %{st | dict: CallRisi.Dictation.add(d, text, utt)}
+
+      # The first answer to "What should I say to …?" that reads as a whole thought is checked
+      # at once (no pause wait): a short message is drafted as fast as before.
+      if d.asked? and d.parts == [] and d.new == [] and d.checking == nil and
+           not CallRisi.Dialogue.unfinished?(text, st.stt_mode != :phone) do
+        {:noreply, st |> dict_timers() |> dict_check(false)}
+      else
+        {:noreply, dict_timers(st)}
+      end
+    end
+  end
+
+  defp dict_tick(:pause, %{dict: %{new: [_ | _], checking: nil}} = st),
+    do: {:noreply, dict_check(st, false)}
+
+  defp dict_tick(:pause, st), do: {:noreply, st}
+
+  # One short "Mm-hm." after a 3 s pause, never two in a row (no words between).
+  defp dict_tick(:mmhm, %{dict: %{mmhm?: false} = d, turn: nil} = st)
+       when d.parts != [] or d.new != [] do
+    turn = %{new_turn(d.utt || 1, nil, st) | brain_done?: true, route: "dictation"}
+    st = %{st | turn: turn, dict: %{d | mmhm?: true}}
+    {:noreply, speak(st, "Mm-hm.", :answer, :skip)}
+  end
+
+  defp dict_tick(:mmhm, st), do: {:noreply, st}
+
+  defp dict_tick(:silence, %{dict: %{checking: n} = d} = st) when is_integer(n),
+    do: {:noreply, %{st | dict: Map.put(d, :end_after?, true)}}
+
+  defp dict_tick(:silence, %{dict: %{parts: [], new: []}} = st), do: {:noreply, st}
+
+  # Every piece was checked already: no model call, the pieces are the message.
+  defp dict_tick(:silence, %{dict: %{new: []} = d} = st) do
+    {:finish, d, res} = CallRisi.Dictation.close(d)
+    {:noreply, dict_finish(st, d, res)}
+  end
+
+  defp dict_tick(:silence, st), do: {:noreply, dict_check(st, true)}
+
+  # One model check of the words since the last one (never one per fragment).
+  defp dict_check(%{dict: d} = st, ended?) do
+    {text, n} = CallRisi.Dictation.pending(d)
+    me = self()
+
+    input = %{
+      mode: :dictation,
+      dialogue: CallRisi.Dialogue.get(st.dialogue),
+      parts: CallRisi.Dictation.texts(d),
+      text: text,
+      ended?: ended?
+    }
+
+    ctx = brain_ctx(st, d.utt || 1)
+
+    Task.start(fn ->
+      r =
+        try do
+          CallRisi.Decider.run(input, ctx)
+        catch
+          _, _ -> {:error, :failed}
+        end
+
+      send(me, {:dict_check, r, n, ended?})
+    end)
+
+    %{st | dict: %{d | checking: n}}
+  end
+
+  defp dict_checked(%{dict: d} = st, r, n, ended?) do
+    ended? = ended? or Map.get(d, :end_after?) == true
+    d = Map.delete(d, :end_after?)
+
+    case CallRisi.Dictation.apply(d, n, r, ended?) do
+      {:more, d} ->
+        st = %{st | dict: d}
+        # Words that came during the check are checked now (their pause has passed).
+        if d.new != [] and not st.speech_open?,
+          do: {:noreply, dict_check(st, false)},
+          else: {:noreply, st}
+
+      {:finish, d, res} ->
+        {:noreply, dict_finish(st, d, res)}
+
+      {:instruction, d, words} ->
+        # Not message text: Risi leaves dictation (the words given so far stay the task's text)
+        # and the words are a turn of their own.
+        dl = CallRisi.Dialogue.get(st.dialogue)
+
+        pending =
+          case {dl.pending, d.parts} do
+            {%{} = p, [_ | _]} -> %{p | text: Enum.join(CallRisi.Dictation.texts(d), " ")}
+            {p, _} -> p
+          end
+
+        st = %{st | dict: nil, dialogue: %{dl | dictation: nil, pending: pending}}
+        utt = d.utt || 1
+        {:noreply, start_text_turn(cancel_turn(st, :merged), utt, words, true)}
+    end
+  end
+
+  # The end of the dictation: the brain composes and reads back (the snapshot lets words that
+  # come before the read-back is spoken go back to dictation).
+  defp dict_finish(st, d, res) do
+    st = cancel_turn(st, :merged)
+    dl = CallRisi.Dialogue.get(st.dialogue)
+    st = %{st | dict: nil, dialogue: %{dl | dictation: nil}}
+    utt = d.utt || 1
+
+    ctx =
+      brain_ctx(st, utt)
+      |> Map.merge(%{dictated: res, filler?: true, held?: true})
+
+    {:ok, pid} = Task.start_link(fn -> Brain.run_dictated(ctx, res.raw) end)
+    turn = %{new_turn(utt, pid, st) | text: res.raw} |> Map.put(:dict_snapshot, d)
+    %{st | turn: turn}
+  end
+
+  # New words before the read-back was said: the read-back is dropped, the dictation goes on.
+  defp resume_dict(%{dict: nil, turn: %{dict_snapshot: d, spoken: []} = t} = st) do
+    st = cancel_turn(%{st | turn: Map.delete(t, :dict_snapshot)}, :merged)
+    dl = CallRisi.Dialogue.get(st.dialogue)
+    %{st | dict: d, dialogue: %{dl | dictation: %{to: d.to, tab: d.tab, asked?: d.asked?}}}
+  end
+
+  defp resume_dict(st), do: st
+
   ## Phone speech-to-text (v1.53 §41.10)
 
   defp mono, do: System.monotonic_time(:millisecond)
@@ -678,6 +928,13 @@ defmodule RisiMe.Agent.CallRisi.Session do
   end
 
   defp phone_turn(st, utt, info, text, at) do
+    case resume_dict(st) do
+      %{dict: %{}} = st -> dict_words(release(st, false), utt, text)
+      st -> phone_turn_(st, utt, info, text, at)
+    end
+  end
+
+  defp phone_turn_(st, utt, info, text, at) do
     t = st.turn
 
     if is_map(t) and t.brain_done? == false and

@@ -1,0 +1,31 @@
+{
+  "dictation| >> hi kamal, the delivery is moved to friday morning, please be at the office by nine. okay, that's it.": {
+    "decision": {
+      "text": "Hi Kamal, the delivery is moved to Friday morning, please be at the office by nine.",
+      "tool": "end"
+    },
+    "ms": 933
+  },
+  "listen to my message properly and then send it to kamal.": {
+    "decision": {
+      "action": "tool",
+      "confidence": 1,
+      "tab": "private",
+      "text": "",
+      "to": "Kamal",
+      "tool": "dictate"
+    },
+    "ms": 1332
+  },
+  "send it to work.": {
+    "decision": {
+      "action": "tool",
+      "confidence": 1,
+      "tab": "official",
+      "text": "Hi Kamal, the delivery is moved to Friday morning, please be at the office by nine.",
+      "to": "Kamal Jayasuriya",
+      "tool": "message_draft"
+    },
+    "ms": 1761
+  }
+}

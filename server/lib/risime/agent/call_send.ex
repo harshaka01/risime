@@ -242,7 +242,7 @@ defmodule RisiMe.Agent.CallSend do
 
     risi = %{
       "kind" => "sent_for",
-      "for" => %{"user_id" => user, "name" => caller},
+      "on_behalf_of" => %{"user_id" => user, "name" => caller},
       "write_id" => write_id,
       "call_ref" => nil,
       "made_by" => MadeBy.rule(),

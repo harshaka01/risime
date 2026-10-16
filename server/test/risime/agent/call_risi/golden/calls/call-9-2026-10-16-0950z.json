@@ -1,0 +1,51 @@
+{
+  "id": "harsha-2026-10-16-call-9",
+  "golden_id": "call-9-2026-10-16-0950z",
+  "lang": "en",
+  "script": "latin",
+  "brain": "v3",
+  "tags": ["multi_turn", "pilot_replay", "message", "read_messages", "promises_by", "my_promises", "calendar", "capabilities", "voice_send"],
+  "now": "2026-10-16T09:50:00Z",
+  "src": "synthetic",
+  "note": "Harsha's 15:2x SLT call (4:57, v0.3.0-nightly.11-srv6; architect 15:35 SLT, golden #9), his words from the Risi chat transcript; his friend Shenika is Nimali here, the person he asked about is Kamal. Was: 'can you just send it by yourself?' re-drafted the same card; 'have you followed up with … about the computer delivery?' said 'I couldn't read your calendar … connect it in Settings' twice (a promises question; the Risi Calendar is always readable); 'did she reply to me?' drafted the message 'Did she reply to me?'; 'tell me if somebody has sent me a message' recited the capabilities list; 'what did I promise today?' came under the calendar line.",
+  "voice_send": true,
+  "messages": [
+    {"from": "me", "chat": "nimali", "mins_ago": 30, "text": "What time are you going home?"},
+    {"from": "Nimali", "chat": "nimali", "mins_ago": 8, "text": "Around six. Do you need something?"},
+    {"from": "Ruwan", "chat": "ruwan", "mins_ago": 120, "text": "The car is ready for pickup."}
+  ],
+  "promises": [
+    {"owner": "Kamal", "to": ["me"], "text": "Deliver the new computer", "due": "2026-10-17T11:30:00Z"}
+  ],
+  "turns": [
+    {"say": "Okay, can you send me send a message to Nimali?",
+     "expect": {"route": "message_write", "must": ["What should I say to Nimali"], "no_send": true, "no_filler": true}},
+    {"say": "What time are you going home?",
+     "expect": {"route": "message_write", "send_to": "Nimali", "send_has": ["going home"], "must": ["Tap Send"],
+                "must_not": ["What should I say"]}},
+    {"say": "Can you just send it by yourself rather than me tapping?",
+     "expect": {"no_send": true, "must": ["Tap Send"], "must_not": ["Here's your message", "I can't send it from the call"]}},
+    {"say": "No, when I asked you to send a message... You should be sending the message directly, not asking me to tap anything.",
+     "expect": {"no_send": true, "must_not": ["Here's your message"]}},
+    {"say": "So, Risi, can you tell me whether... whether you have followed up with. That's it, Kamal. for the computer delivery.",
+     "expect": {"route": "ledger_items", "must": ["Kamal", "computer"], "no_send": true,
+                "must_not": ["Connect it", "couldn't read your calendar", "Settings"]}},
+    {"say": "So it is being connected and skills calendars are already being connected.",
+     "expect": {"no_send": true, "must_not": ["Connect it", "couldn't read your calendar", "Settings"]}},
+    {"say": "Yeah, the calendars are being, you know, set up and it should be working. And you should be able to read the RISI calendar. not anybody else's calendar so how come you can't you can't read your own calendar",
+     "expect": {"no_send": true, "must_not": ["Connect it", "couldn't read your calendar", "Settings"]}},
+    {"say": "Okay, read back. Read my calendar today.",
+     "expect": {"route": "calendar_read", "range": ["2026-10-16", "2026-10-17"], "no_send": true,
+                "must_not": ["Connect it", "couldn't read your calendar"]}},
+    {"say": "All right. So did Nimali reply to me or is she not?",
+     "expect": {"route": "messages_read", "no_send": true, "must": ["Nimali", "Around six"], "must_not": ["Here's your message"]}},
+    {"say": "No, no. You send a message to Nimali. Did she reply to me?",
+     "expect": {"route": "messages_read", "no_send": true, "must": ["replied"], "must_not": ["Here's your message"]}},
+    {"say": "You should be able to reply. And you should be able to tell me that if somebody has sent a message to me, you should be able to tell me that they have sent a message.",
+     "expect": {"route_in": ["messages_read", "capabilities", "chat"], "no_send": true, "must_any": ["message", "replied", "wrote"],
+                "must_not": ["Here's your message", "what did I promise today"]}},
+    {"say": "So what did I promise today?",
+     "expect": {"route_in": ["calendar_read", "ledger_items"], "no_send": true, "must_any": ["promise", "reminder"],
+                "must_not": ["Connect it"]}}
+  ]
+}

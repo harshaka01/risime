@@ -2,109 +2,107 @@
   "do you have anything on the 18th of october?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 1,
       "request": "Do you have anything on the 18th of October?",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1512
+    "ms": 1780
   },
   "i don't know. from 9 to 10. discuss about racing": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 0.9,
       "request": "Add to your Risi Calendar: Appointment · Fri 16 Oct, 9–10 AM, discuss about racing",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1878
+    "ms": 2155
   },
   "rishi, i can't see that you have added something.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "say": "The appointment is still waiting for your confirmation. Please tap Add on the card in your Risi chat to finalize it.",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "card_status"
     },
-    "ms": 1467
+    "ms": 1913
   },
   "so what's on my calendar on the 18th of october?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "What's on my calendar on the 18th of October?",
-      "say": "",
+      "confidence": 1,
+      "request": "Do you have anything on the 18th of October?",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1555
+    "ms": 1357
   },
   "that's correct": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1483
+    "ms": 1478
   },
   "the 16th?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 1,
       "request": "What is on my calendar on the 16th of October?",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1681
+    "ms": 1644
   },
   "yeah, but do i have anything from, say, 2 a.m. until... until maybe like, you know, 10 p.m.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 1,
       "request": "Do I have anything from 2 a.m. until 10 p.m. on the 18th of October?",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1850
+    "ms": 2097
   },
   "yeah, can you add an appointment tomorrow? just add an entry on my calendar and block it out from 10 to 12. discuss about risd.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "add an appointment tomorrow from 10 to 12 to discuss about RISD",
-      "say": "",
+      "confidence": 1,
+      "request": "add an entry on my calendar and block it out from 10 to 12. discuss about RISD.",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1691
+    "ms": 1816
   },
   "yeah, yeah, that's for you, just to add that particular entry.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1389
+    "ms": 1210
   }
 }

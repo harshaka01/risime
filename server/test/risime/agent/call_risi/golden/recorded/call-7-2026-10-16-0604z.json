@@ -1,62 +1,54 @@
 {
+  "dictation| >> tell her that i called her a couple of times and then she did not answer. and i'll call her back or call me back.": {
+    "decision": {
+      "text": "Tell her that I called her a couple of times and then she did not answer. And I'll call her back or call me back.",
+      "tool": "more"
+    },
+    "ms": 1082
+  },
   "hello": {
     "decision": {
       "action": "reply",
-      "cancel_open": false,
-      "request": "",
-      "say": "Hello. The message to Nimali is ready for you to send.",
+      "confidence": 1,
+      "say": "Hello. How can I help you?",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "none"
     },
-    "ms": 1576
+    "ms": 1616
   },
   "i just said it to you. just tell her that i called her. couple of times, but she did not answer and called me back.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
-      "text": "I just said it to you. Just tell her that I called her. couple of times, but she did not answer and called me back.",
+      "confidence": 1,
+      "tab": "private",
+      "text": "I called her a couple of times, but she did not answer. Please call me back.",
       "to": "Nimali Perera",
-      "tool": "message_draft"
+      "tool": "confirm_open"
     },
-    "ms": 1914
+    "ms": 1756
   },
   "nima lee.": {
     "decision": {
-      "action": "ask",
-      "cancel_open": false,
-      "request": "",
-      "say": "Got it, Nima Lee. What should the message say?",
+      "action": "tool",
+      "confidence": 0.9,
+      "tab": "private",
       "text": "",
       "to": "Nima Lee",
       "tool": "message_draft"
     },
-    "ms": 1529
+    "ms": 1433
   },
   "so can you send the message to her on a private chat?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 0.5,
+      "tab": "private",
       "text": "",
       "to": "",
       "tool": "message_draft"
     },
-    "ms": 1197
-  },
-  "tell her that i called her a couple of times and then she did not answer. and i'll call her back or call me back.": {
-    "decision": {
-      "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
-      "text": "Tell her that I called her a couple of times and then she did not answer. And I'll call her back or call me back.",
-      "to": "Nimali Perera",
-      "tool": "message_draft"
-    },
-    "ms": 1874
+    "ms": 1330
   }
 }

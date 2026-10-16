@@ -164,6 +164,12 @@ defmodule RisiMe.Agent.CallRisi.Brain do
     answer(ctx, text, "en")
   end
 
+  @doc """
+  The end of a dictation (the session took the message down, `ctx.dictated`): no STT, no
+  transcript line (each piece was one already); v3 composes and reads it back.
+  """
+  def run_dictated(ctx, raw), do: RisiMe.Agent.CallRisi.BrainV3.answer(ctx, raw, "en")
+
   # Brain v3 (architect P0 2026-10-16, flag RISI_CALL_BRAIN): one model decision per turn.
   defp answer(ctx, text, lang) do
     if Map.get(ctx, :v3?) == true,
@@ -567,7 +573,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   @doc false
   def tool_turn(ctx, text, lang, route, range) do
     if Map.get(ctx, :filler?, true),
-      do: say(ctx, Fillers.pick(route, lang, ctx.filler_n), :filler)
+      do:
+        say(ctx, Fillers.pick(Map.get(ctx, :filler_route) || route, lang, ctx.filler_n), :filler)
 
     request_id = Ecto.UUID.generate()
 
@@ -592,8 +599,17 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       # that (no model writes the text).
       |> then(fn e ->
         case range do
-          {:send, to, body} -> Map.put(e, :call_send, %{"to" => to, "text" => body})
-          _ -> e
+          {:send, to, body, tab} when tab in ["official", "private"] ->
+            Map.put(e, :call_send, %{"to" => to, "text" => body, "tab" => tab})
+
+          {:send, to, body, _} ->
+            Map.put(e, :call_send, %{"to" => to, "text" => body})
+
+          {:send, to, body} ->
+            Map.put(e, :call_send, %{"to" => to, "text" => body})
+
+          _ ->
+            e
         end
       end)
 
@@ -747,7 +763,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       {:risi_voice_turn_end, ^rid, _} ->
         # The turn ended without an answer text (a card or a question went to the chat).
         case facts do
-          {:card, summary} -> say_text(ctx, card_line(ctx, summary))
+          {:card, summary} -> speak_answer(ctx, nil, {:card, summary}, nil)
           _ -> say(ctx, "I've put that in your Risi chat.", :answer)
         end
 
@@ -780,6 +796,19 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   end
 
   ## The spoken answer
+
+  # A message card is read back as one flowing line (architect 16:05 item 5: never one voice
+  # line per sentence of the draft), then its buttons; a voice-sendable Official one asks
+  # "Send it?" (v1.55 §41.11).
+  defp speak_answer(ctx, _answer, {:card, "Send to " <> _ = summary}, _question) do
+    line =
+      case Map.get(ctx, :voice_send) do
+        %{} = vs -> RisiMe.Agent.CallRisi.BrainV3.voice_card_line(ctx, vs, summary)
+        _ -> card_line(ctx, summary)
+      end
+
+    say_line(ctx, line)
+  end
 
   defp speak_answer(ctx, _answer, {:card, summary}, _question) do
     say_text(ctx, card_line(ctx, summary))
@@ -909,6 +938,25 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       {p, 0} -> report(ctx, {:piece, p, :answer, stored})
       {p, _} -> report(ctx, {:piece, p, :answer, :skip})
     end)
+  end
+
+  @doc false
+  # A line with a quoted message: everything up to the end of the quote is ONE spoken piece (a
+  # draft read back flows as one line), the rest piece by piece.
+  def say_line(_ctx, nil), do: :ok
+
+  def say_line(ctx, text) do
+    case Regex.run(
+           ~r/^(.*?"[^"]*"\.?(?: And \d+ more words\.)?)\s+(.+)$/su,
+           Sentences.clean(text)
+         ) do
+      [_, head, rest] ->
+        say(ctx, head, :answer)
+        say_text(ctx, rest)
+
+      _ ->
+        say_text(ctx, text)
+    end
   end
 
   # Runs `f` and reports `key` unless the call said it already. True when it ran.

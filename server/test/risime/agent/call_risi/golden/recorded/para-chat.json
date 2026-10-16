@@ -1,0 +1,281 @@
+{
+  "para-chat-01": {
+    "hi risi, how are you?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "I'm doing well, thank you. How are you?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1799
+    }
+  },
+  "para-chat-02": {
+    "what's the capital of australia?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "The capital of Australia is Canberra.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1699
+    }
+  },
+  "para-chat-03": {
+    "thanks, that's all.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "You're welcome. Have a good night.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1716
+    }
+  },
+  "para-chat-04": {
+    "good morning!": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Good morning! How can I help you today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1726
+    }
+  },
+  "para-chat-05": {
+    "how do you say thank you in sinhala?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "You say thank you in Sinhala as 'Oba wada'. Would you like me to send that to someone?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 2033
+    }
+  },
+  "para-chat-06": {
+    "tell me a short joke.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Why did the scarecrow win an award? Because he was outstanding in his field.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1892
+    }
+  },
+  "para-chat-07": {
+    "what is two plus two?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Two plus two is four.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1674
+    }
+  },
+  "para-chat-08": {
+    "who wrote romeo and juliet?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "William Shakespeare wrote Romeo and Juliet.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1695
+    }
+  },
+  "para-chat-09": {
+    "how many days are there in a leap year?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "There are 366 days in a leap year.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1819
+    }
+  },
+  "para-chat-10": {
+    "can you hear me okay?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Yes, I can hear you perfectly.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1711
+    }
+  },
+  "para-chat-11": {
+    "that's great, thank you so much.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "You're welcome. Let me know if you need anything else.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1798
+    }
+  },
+  "para-chat-12": {
+    "what's a good way to stay focused at work?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Try the Pomodoro technique: work for 25 minutes, then take a 5-minute break. It helps keep your mind fresh.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 2120
+    }
+  },
+  "para-chat-13": {
+    "okay, bye for now.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Bye for now.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1657
+    }
+  },
+  "para-chat-14": {
+    "what does rsvp stand for?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "RSVP stands for 'Répondez s'il vous plaît', which is French for 'please respond'.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1986
+    }
+  },
+  "para-chat-15": {
+    "explain in one line what a budget is.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "A budget is a plan for how you will spend and save your money over a specific period.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1950
+    }
+  },
+  "para-chat-16": {
+    "how far is the moon, roughly?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1355
+    }
+  },
+  "para-chat-17": {
+    "what's the boiling point of water?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "The boiling point of water is 100 degrees Celsius or 212 degrees Fahrenheit at standard atmospheric pressure.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 2049
+    }
+  },
+  "para-chat-18": {
+    "nice, you are getting better.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Thank you! I'm glad to hear that. What can I do for you today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1897
+    }
+  },
+  "para-chat-19": {
+    "give me one tip for a good presentation.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Keep your slides simple and focus on telling a clear story.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1816
+    }
+  },
+  "para-chat-20": {
+    "what is the largest ocean?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "The Pacific Ocean is the largest.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1710
+    }
+  }
+}

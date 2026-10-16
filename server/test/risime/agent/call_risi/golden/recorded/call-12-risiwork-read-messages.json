@@ -1,0 +1,14 @@
+{
+  "read messages from ruwan.": {
+    "decision": {
+      "action": "tool",
+      "confidence": 1,
+      "request": "Read messages from Ruwan.",
+      "tab": "private",
+      "text": "",
+      "to": "Ruwan",
+      "tool": "read_messages"
+    },
+    "ms": 1566
+  }
+}

@@ -71,7 +71,10 @@ defmodule RisiMe.Agents.Flags do
     "RISI_CALL_BRAIN" => :risi_call_brain_v3,
     # Contract v1.55 §41.11 (decision 094): on a call, Risi sends Official messages on a voice
     # yes (RisiMe.Agent.CallSend); canary = RISI_DEV_USERS.
-    "RISI_CALL_SEND" => :risi_call_send
+    "RISI_CALL_SEND" => :risi_call_send,
+    # Architect 19:15/19:20 SLT (D-001): a call decision the local brain is unsure of may ask a
+    # stronger model (RisiMe.Agent.CallRisi.Escalate); OFF, no paid provider configured.
+    "RISI_BRAIN_ESCALATE" => :risi_brain_escalate
   }
   # Features that also take `shadow` (detect and log for everyone, act for nobody), read straight
   # from the OS environment, with their own default (Harsha 2026-10-14: canary).
@@ -90,7 +93,8 @@ defmodule RisiMe.Agents.Flags do
     "RISI_LIVE_FAST" => "off",
     "RISI_CALL_VOICE_CONFIRM" => "canary",
     "RISI_CALL_BRAIN" => "canary",
-    "RISI_CALL_SEND" => "canary"
+    "RISI_CALL_SEND" => "canary",
+    "RISI_BRAIN_ESCALATE" => "off"
   }
   @masters ~w(on legacy)
   @ttl_ms 5_000

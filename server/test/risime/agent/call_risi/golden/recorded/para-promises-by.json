@@ -1,0 +1,292 @@
+{
+  "para-promises-by-01": {
+    "has kamal followed up on the computer delivery?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Has Kamal followed up on the computer delivery?",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1628
+    }
+  },
+  "para-promises-by-02": {
+    "did kamal promise me anything?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did Kamal promise me anything?",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1563
+    }
+  },
+  "para-promises-by-03": {
+    "any promises by ruwan?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Any promises by Ruwan?",
+        "tab": "",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "promises_by"
+      },
+      "ms": 1529
+    }
+  },
+  "para-promises-by-04": {
+    "what has ruvan promised to do for me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What has Ruvan promised to do for me?",
+        "tab": "",
+        "text": "",
+        "to": "Ruvan",
+        "tool": "promises_by"
+      },
+      "ms": 1645
+    }
+  },
+  "para-promises-by-05": {
+    "is kamel going to deliver the new computer?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Is Kamel going to deliver the new computer?",
+        "tab": "",
+        "text": "",
+        "to": "Kamel",
+        "tool": "promises_by"
+      },
+      "ms": 1675
+    }
+  },
+  "para-promises-by-06": {
+    "what does nimali owe me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What does Nimali owe me?",
+        "tab": "",
+        "text": "",
+        "to": "Nimali",
+        "tool": "promises_by"
+      },
+      "ms": 1598
+    }
+  },
+  "para-promises-by-07": {
+    "any promises from kasun?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Any promises from Kasun?",
+        "tab": "",
+        "text": "",
+        "to": "Kasun",
+        "tool": "promises_by"
+      },
+      "ms": 1619
+    }
+  },
+  "para-promises-by-08": {
+    "did ruwan commit to anything?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did Ruwan commit to anything?",
+        "tab": "",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "promises_by"
+      },
+      "ms": 1569
+    }
+  },
+  "para-promises-by-09": {
+    "so, risi, can you tell me whether kamal has followed up. the computer delivery.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "has Kamal followed up on the computer delivery",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1686
+    }
+  },
+  "para-promises-by-10": {
+    "what's pending from kamal?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What's pending from Kamal?",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1559
+    }
+  },
+  "para-promises-by-11": {
+    "has ruwan sent the vehicle report he promised?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Has Ruwan sent the vehicle report he promised?",
+        "tab": "",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "promises_by"
+      },
+      "ms": 1628
+    }
+  },
+  "para-promises-by-12": {
+    "any open promises from kamal to me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Any open promises from Kamal to me?",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1618
+    }
+  },
+  "para-promises-by-13": {
+    "what did kamal say he would do?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What did Kamal say he would do?",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1602
+    }
+  },
+  "para-promises-by-14": {
+    "are there any promises by nima lee?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Are there any promises by Nima Lee?",
+        "tab": "",
+        "text": "",
+        "to": "Nima Lee",
+        "tool": "promises_by"
+      },
+      "ms": 1626
+    }
+  },
+  "para-promises-by-15": {
+    "kamal, has he promised me something?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "has Kamal promised me something?",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1562
+    }
+  },
+  "para-promises-by-16": {
+    "did kamal promise anything?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did Kamal promise anything?",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1528
+    }
+  },
+  "para-promises-by-17": {
+    "what do i owe kamal and what does he owe me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1365
+    }
+  },
+  "para-promises-by-18": {
+    "tell me ruwan's promises.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Tell me Ruwan's promises.",
+        "tab": "",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "promises_by"
+      },
+      "ms": 1557
+    }
+  },
+  "para-promises-by-19": {
+    "and has he followed up on the computer?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "has Kamal followed up on the computer?",
+        "tab": "private",
+        "text": "",
+        "to": "Kamal Jayasuriya",
+        "tool": "promises_by"
+      },
+      "ms": 1790
+    },
+    "tell kamal the meeting is at two.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The meeting is at two.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1447
+    }
+  },
+  "para-promises-by-20": {
+    "promises from ruwan, any?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Promises from Ruwan, any?",
+        "tab": "",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "promises_by"
+      },
+      "ms": 1578
+    }
+  }
+}

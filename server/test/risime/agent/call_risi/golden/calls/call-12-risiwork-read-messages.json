@@ -1,0 +1,18 @@
+{
+ "id": "risiwork-shared-read-messages",
+ "golden_id": "call-12-risiwork-read-messages",
+ "lang": "en",
+ "brain": "v3",
+ "tags": ["risiwork", "read_messages"],
+ "now": "2026-10-16T09:30:00Z",
+ "src": "synthetic",
+ "note": "RisiWork's golden case (architect 19:15 SLT item 2, via RisiBridge): \"read messages from <name>\" = read_messages. Invented name: Ruwan (a test friend).",
+ "messages": [
+  {"from": "Ruwan", "chat": "ruwan", "mins_ago": 70, "text": "The car is ready for pickup."},
+  {"from": "Ruwan", "chat": "ruwan", "mins_ago": 25, "text": "I can bring it to the office at four."}
+ ],
+ "turns": [
+  {"say": "Read messages from Ruwan.",
+   "expect": {"route": "messages_read", "no_send": true, "must": ["Ruwan", "office at four"], "must_not": ["Here's your message", "What should I say"]}}
+ ]
+}

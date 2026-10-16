@@ -104,6 +104,8 @@ defmodule RisiMe.Agent.LLM do
 
     body = %{
       "model" => model_alias,
+      # A fixed sampling seed (the call brain's simulated callers: the same caller for every model).
+      "seed" => Map.get(req, :seed),
       "messages" => messages,
       "temperature" => Map.get(req, :temperature, 0.2),
       "top_p" => 0.8,
@@ -119,6 +121,7 @@ defmodule RisiMe.Agent.LLM do
       }
     }
 
+    body = if body["seed"] == nil, do: Map.delete(body, "seed"), else: body
     started = System.monotonic_time(:millisecond)
     local = provider()
     opts = call_opts(req)

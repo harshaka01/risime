@@ -2,61 +2,61 @@
   "check my calendar for today and tomorrow?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "Check my calendar for today and tomorrow?",
-      "say": "",
+      "confidence": 1,
+      "request": "Check my calendar for today and tomorrow",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1487
+    "ms": 1489
   },
   "do you have anything on the 18th?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 1,
       "request": "Do you have anything on the 18th?",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1554
+    "ms": 1592
   },
   "give me the entire week… tell me the important": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 0.9,
       "request": "Give me the entire week… tell me the important",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1626
+    "ms": 1630
   },
   "what can you do?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "request": "What can you do?",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1288
+    "ms": 1370
   },
   "why can't you get the calendar information?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "Do you have anything on the 18th?",
-      "say": "",
+      "confidence": 0.9,
+      "request": "Check my calendar for the 18th",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1552
+    "ms": 1555
   }
 }

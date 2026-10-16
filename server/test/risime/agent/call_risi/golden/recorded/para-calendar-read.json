@@ -1,0 +1,306 @@
+{
+  "para-calendar-read-01": {
+    "what's on my calendar today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What's on my calendar today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1607
+    }
+  },
+  "para-calendar-read-02": {
+    "do i have meetings tomorrow?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Do I have meetings tomorrow?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1637
+    }
+  },
+  "para-calendar-read-03": {
+    "am i free this afternoon?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Am I free this afternoon?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1636
+    }
+  },
+  "para-calendar-read-04": {
+    "what's my schedule on sunday?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What's my schedule on Sunday?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1594
+    }
+  },
+  "para-calendar-read-05": {
+    "anything on monday?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Anything on Monday?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1643
+    }
+  },
+  "para-calendar-read-06": {
+    "read my calendar for today.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Read my calendar for today.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1572
+    }
+  },
+  "para-calendar-read-07": {
+    "hey, what's next on my schedule?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "what's next on my schedule?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1609
+    }
+  },
+  "para-calendar-read-08": {
+    "do i have anything on the 18th?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Do I have anything on the 18th?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1740
+    }
+  },
+  "para-calendar-read-09": {
+    "read my risi calendar today.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Read my Risi calendar today.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1605
+    }
+  },
+  "para-calendar-read-10": {
+    "so what's happening tomorrow, calendar wise?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What is happening tomorrow, calendar wise?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1701
+    }
+  },
+  "para-calendar-read-11": {
+    "am i busy at ten?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Am I busy at ten?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1640
+    }
+  },
+  "para-calendar-read-12": {
+    "when is my next meeting?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "When is my next meeting?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1325
+    }
+  },
+  "para-calendar-read-13": {
+    "what does my week look like?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What does my week look like?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1596
+    }
+  },
+  "para-calendar-read-14": {
+    "is my morning free?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Is my morning free?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1554
+    }
+  },
+  "para-calendar-read-15": {
+    "any meetings on saturday?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Any meetings on Saturday?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1557
+    }
+  },
+  "para-calendar-read-16": {
+    "could you check my calendar for tomorrow morning?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "check my calendar for tomorrow morning",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1448
+    }
+  },
+  "para-calendar-read-17": {
+    "and tomorrow?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What is on my calendar for tomorrow?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1754
+    },
+    "what's on my calendar today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What's on my calendar today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1335
+    }
+  },
+  "para-calendar-read-18": {
+    "do i have anything today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Do I have anything today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1575
+    },
+    "you should be able to read your own calendar, why can't you?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Do I have anything today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1771
+    }
+  },
+  "para-calendar-read-19": {
+    "check my calendar, do i have any appointments today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "do I have any appointments today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1607
+    }
+  },
+  "para-calendar-read-20": {
+    "what time do i have to be somewhere today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What time do I have to be somewhere today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1666
+    }
+  }
+}

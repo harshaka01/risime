@@ -2,49 +2,48 @@
   "all right. can i have a meeting set up today for two?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 0.9,
       "request": "set up a meeting today for two",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1454
+    "ms": 1683
   },
   "do i have anything to do today?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 1,
       "request": "Do I have anything to do today?",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
-      "tool": "promises_read"
+      "tool": "my_promises"
     },
-    "ms": 1557
+    "ms": 1779
   },
   "good morning.": {
     "decision": {
       "action": "reply",
-      "cancel_open": false,
-      "request": "",
+      "confidence": 1,
       "say": "Good morning. How can I help you today?",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "none"
     },
-    "ms": 1407
+    "ms": 1717
   },
   "yeah.": {
     "decision": {
-      "action": "ask",
-      "cancel_open": false,
-      "request": "",
-      "say": "What would you like to call this meeting?",
+      "action": "tool",
+      "confidence": 1,
+      "tab": "",
       "text": "",
       "to": "",
-      "tool": "none"
+      "tool": "confirm_open"
     },
-    "ms": 1404
+    "ms": 1411
   }
 }

@@ -1,0 +1,544 @@
+{
+  "shared-D-01": {
+    "dictation| >> tell her that i called her a couple of times and she did not answer, call me back.": {
+      "decision": {
+        "text": "Tell her that I called her a couple of times and she did not answer, call me back.",
+        "tool": "more"
+      },
+      "ms": 923
+    },
+    "send a message to madhavi.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Madhavi",
+        "tool": "message_draft"
+      },
+      "ms": 958
+    }
+  },
+  "shared-D-02": {
+    "dictation| >> good morning, and i'm just testing whether you can send a message on behalf of me.": {
+      "decision": {
+        "text": "Good morning, and I'm just testing whether you can send a message on behalf of me.",
+        "tool": "more"
+      },
+      "ms": 907
+    },
+    "send a message to oshan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "Oshan",
+        "tool": "message_draft"
+      },
+      "ms": 1024
+    }
+  },
+  "shared-D-03": {
+    "cancel that.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "cancel_open"
+      },
+      "ms": 1006
+    },
+    "dictation| >> cancel that.": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 421
+    },
+    "send a message to dilhan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "Dilhan",
+        "tool": "message_draft"
+      },
+      "ms": 917
+    }
+  },
+  "shared-D-04": {
+    "dictation| >> no, no, i want to send a message to anura. so you should ask me what the message should be and then i'll tell you.": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 422
+    },
+    "no, no, i want to send a message to anura. so you should ask me what the message should be and then i'll tell you.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Send a message to Anura Jayakody",
+        "tab": "",
+        "text": "",
+        "to": "Anura Jayakody",
+        "tool": "message_draft"
+      },
+      "ms": 1502
+    },
+    "send a message to anura saying no no i want to send a message.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Send a message to Anura saying no no I want to send a message.",
+        "tab": "private",
+        "text": "",
+        "to": "Anura",
+        "tool": "message_draft"
+      },
+      "ms": 1395
+    }
+  },
+  "shared-D-05": {
+    "dictation| >> check whether kavindu replied.": {
+      "decision": {
+        "text": "Check whether Kavindu replied.",
+        "tool": "more"
+      },
+      "ms": 652
+    },
+    "send a message to kavindu.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Kavindu",
+        "tool": "message_draft"
+      },
+      "ms": 1082
+    }
+  },
+  "shared-D-06": {
+    "dictation| >> the meeting is moved to friday at three, please confirm. okay, that's it.": {
+      "decision": {
+        "text": "The meeting is moved to Friday at three, please confirm.",
+        "tool": "end"
+      },
+      "ms": 771
+    },
+    "listen to my message properly and then send it to tharindi.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Tharindi",
+        "tool": "dictate"
+      },
+      "ms": 1103
+    }
+  },
+  "shared-D-07": {
+    "tell oshan on the work chat that the files are ready.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The files are ready.",
+        "to": "Oshan",
+        "tool": "message_draft"
+      },
+      "ms": 1313
+    }
+  },
+  "shared-D-08": {
+    "can you just send it by yourself?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The report is done.",
+        "to": "Ishara Wickrama",
+        "tool": "confirm_open"
+      },
+      "ms": 1481
+    },
+    "tell ishara on work that the report is done.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The report is done.",
+        "to": "Ishara",
+        "tool": "message_draft"
+      },
+      "ms": 1193
+    }
+  },
+  "shared-D-09": {
+    "dictation| >> hello? are you there?": {
+      "decision": {
+        "text": "",
+        "tool": "noise"
+      },
+      "ms": 1241
+    },
+    "send a message to lakmal.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "Lakmal",
+        "tool": "message_draft"
+      },
+      "ms": 1048
+    }
+  },
+  "shared-D-10": {
+    "dictation| >> please tell her the shipment arrived, and a receipt can send me the invoice.": {
+      "decision": {
+        "text": "Please tell her the shipment arrived, and a receipt can send me the invoice.",
+        "tool": "more"
+      },
+      "ms": 853
+    },
+    "send a message to sanduni.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "Sanduni",
+        "tool": "message_draft"
+      },
+      "ms": 1023
+    }
+  },
+  "shared-I-01": {
+    "did oshan reply to me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did Oshan reply to me?",
+        "tab": "",
+        "text": "",
+        "to": "Oshan",
+        "tool": "read_messages"
+      },
+      "ms": 1274
+    }
+  },
+  "shared-I-02": {
+    "dictation| >> no, no, i'm not asking you to write any message, i'm asking you to read the messages sent by dilhan.": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 542
+    },
+    "no, no, i'm not asking you to write any message, i'm asking you to read the messages sent by dilhan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "read the messages sent by Dilhan",
+        "tab": "private",
+        "text": "",
+        "to": "Dilhan Kottage",
+        "tool": "read_messages"
+      },
+      "ms": 1457
+    },
+    "send a message to dilhan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "Dilhan",
+        "tool": "message_draft"
+      },
+      "ms": 917
+    }
+  },
+  "shared-I-03": {
+    "any promises by madhavi or anura?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Any promises by Madhavi or Anura?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "promises_by"
+      },
+      "ms": 1565
+    }
+  },
+  "shared-I-04": {
+    "what did i promise today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What did I promise today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1467
+    }
+  },
+  "shared-I-05": {
+    "check my calendar for today and tomorrow.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Check my calendar for today and tomorrow.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_read"
+      },
+      "ms": 1381
+    }
+  },
+  "shared-I-06": {
+    "can you add an appointment tomorrow, block it from ten to twelve, discuss the supplier contract.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "add an appointment tomorrow, block it from ten to twelve, discuss the supplier contract",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1656
+    },
+    "i don't know, from nine to ten, discuss the supplier visit.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "confidence": 0.9,
+        "request": "Add to your Risi Calendar: Appointment · Fri 16 Oct, 9–10 AM, discuss the supplier visit.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 2006
+    }
+  },
+  "shared-I-07": {
+    "just tell me ten names in my contacts.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1074
+    }
+  },
+  "shared-I-08": {
+    "remind me to call lakmal at five.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me to call Lakmal at five.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1407
+    }
+  },
+  "shared-I-09": {
+    "can you book me a taxi to the airport?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 936
+    }
+  },
+  "shared-I-10": {
+    "let me see. i need to listen to it.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "none"
+      },
+      "ms": 1484
+    }
+  },
+  "shared-N-01": {
+    "send a message to tharindy saying i will be ten minutes late.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "I will be ten minutes late.",
+        "to": "Tharindy",
+        "tool": "message_draft"
+      },
+      "ms": 1142
+    }
+  },
+  "shared-N-02": {
+    "tell sandune the invoice is ready.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The invoice is ready.",
+        "to": "Sandune",
+        "tool": "message_draft"
+      },
+      "ms": 1179
+    }
+  },
+  "shared-N-03": {
+    "message ishara.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Ishara",
+        "tool": "message_draft"
+      },
+      "ms": 1101
+    }
+  },
+  "shared-N-04": {},
+  "shared-N-05": {
+    "no, tharindi, not tharindu.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Send a message to Tharindi saying the room is booked.",
+        "tab": "",
+        "text": "The room is booked.",
+        "to": "Tharindi",
+        "tool": "message_draft"
+      },
+      "ms": 1589
+    },
+    "send a message to tharindu saying the room is booked.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The room is booked.",
+        "to": "Tharindu",
+        "tool": "message_draft"
+      },
+      "ms": 1196
+    }
+  },
+  "shared-N-06": {
+    "send it to work.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The files are ready.",
+        "to": "Oshan Peiris",
+        "tool": "confirm_open"
+      },
+      "ms": 1376
+    },
+    "tell oshan the files are ready.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The files are ready.",
+        "to": "Oshan",
+        "tool": "message_draft"
+      },
+      "ms": 1172
+    }
+  },
+  "shared-N-07": {
+    "read the messages from dill-han.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Read the messages from Dill-han.",
+        "tab": "private",
+        "text": "",
+        "to": "Dill-han",
+        "tool": "read_messages"
+      },
+      "ms": 1421
+    }
+  },
+  "shared-N-08": {
+    "n-i-s-h-a-n.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "Nishan",
+        "tool": "message_draft"
+      },
+      "ms": 1096
+    },
+    "send a message please.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "message_draft"
+      },
+      "ms": 1022
+    }
+  },
+  "shared-N-09": {
+    "send a message to madhavi rancoat saying the parcel arrived.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "the parcel arrived.",
+        "to": "Madhavi Rancoat",
+        "tool": "message_draft"
+      },
+      "ms": 1107
+    }
+  },
+  "shared-N-10": {
+    "did janet reply?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did Janet reply?",
+        "tab": "",
+        "text": "",
+        "to": "Janet",
+        "tool": "read_messages"
+      },
+      "ms": 1211
+    }
+  }
+}

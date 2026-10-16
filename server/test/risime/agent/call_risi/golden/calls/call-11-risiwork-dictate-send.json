@@ -1,0 +1,22 @@
+{
+ "id": "risiwork-shared-dictate-send",
+ "golden_id": "call-11-risiwork-dictate-send",
+ "lang": "en",
+ "brain": "v3",
+ "tags": ["risiwork", "dictation", "read_back", "voice_send"],
+ "now": "2026-10-16T09:30:00Z",
+ "src": "synthetic",
+ "note": "RisiWork's golden case (architect 19:15 SLT item 2, via RisiBridge): \"listen to my message properly and then send it to <name>\" = dictation, then the read-back, then the send on yes. Invented name: Kamal (a test friend). The send by voice is Official only (v1.55 §41.11), so the caller says \"send it to work\" after the read-back.",
+ "voice_send": true,
+ "turns": [
+  {"say": "Listen to my message properly and then send it to Kamal.",
+   "expect": {"no_send": true, "must_any": ["Go ahead", "listening", "What should I say"]}},
+  {"say": "Hi Kamal, the delivery is moved to Friday morning, please be at the office by nine.", "expect": null},
+  {"say": "Okay, that's it.",
+   "expect": {"must_any": ["Tap Send", "Send it?"], "send_has_not": ["that's it"], "must_not": ["I'm listening", "can't send it from the call"]}},
+  {"say": "Send it to work.",
+   "expect": {"route": "message_write", "send_to": "Kamal", "send_tab": "official", "send_has": ["Friday"], "must": ["Send it?"]}},
+  {"say": "Yes.",
+   "expect": {"voice_sent": "Kamal", "must": ["Sent."]}}
+ ]
+}

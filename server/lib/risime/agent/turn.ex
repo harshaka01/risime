@@ -1784,12 +1784,20 @@ defmodule RisiMe.Agent.Turn do
   # Call Risi brain v3 (Harsha's call 75ec8683: Risi made up "Hi Shenika, how are you"): the
   # call's message, both slots from the caller's own words, is the `send_message` step itself
   # (the same authorisation, recipient check and card as a model's step; no model call).
-  defp forced_send(st, ctx, %{"to" => to, "text" => text}) do
+  defp forced_send(st, ctx, %{"to" => to, "text" => text} = send) do
     allowed = Tools.allowed(ctx)
     ctx = Map.put(ctx, :allowed_names, Enum.map(allowed, & &1.name))
 
     if Enum.any?(allowed, &(&1.name == "send_message")) do
-      out = %{"tool" => "send_message", "args" => %{"to" => to, "text" => text}}
+      # 22e016e0 bug A: "send it to work" = the Official chat with that person (§42.2 `tab`).
+      args = %{"to" => to, "text" => text}
+
+      args =
+        if send["tab"] in ["official", "private"],
+          do: Map.put(args, "tab", send["tab"]),
+          else: args
+
+      out = %{"tool" => "send_message", "args" => args}
       action(out, st, ctx, allowed)
     else
       answer_final(

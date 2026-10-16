@@ -1,0 +1,717 @@
+{
+  "para-dictation-long-01": {
+    "dictation| >> hi nimali, hope you are well.": {
+      "decision": {
+        "text": "Hi Nimali, hope you are well.",
+        "tool": "more"
+      },
+      "ms": 727
+    },
+    "dictation| hi nimali, hope you are well. / the sales review is moved to monday at ten, and please bring the figures. >> okay, that's it.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 535
+    },
+    "dictation| hi nimali, hope you are well. >> the sales review is moved to monday at ten, and please bring the figures.": {
+      "decision": {
+        "text": "The sales review is moved to Monday at ten, and please bring the figures.",
+        "tool": "more"
+      },
+      "ms": 852
+    },
+    "i want to send a long message to nimali. take this down.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "dictate"
+      },
+      "ms": 1367
+    }
+  },
+  "para-dictation-long-02": {
+    "dictation| >> ruwan, the car needs a service before friday.": {
+      "decision": {
+        "text": "Ruwan, the car needs a service before Friday.",
+        "tool": "more"
+      },
+      "ms": 750
+    },
+    "dictation| ruwan, the car needs a service before friday. / also check the tyres and the brakes. >> okay.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 537
+    },
+    "dictation| ruwan, the car needs a service before friday. >> also check the tyres and the brakes.": {
+      "decision": {
+        "text": "Also check the tyres and the brakes.",
+        "tool": "more"
+      },
+      "ms": 689
+    },
+    "let me dictate a message to ruwan, listen until i say okay.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "dictate"
+      },
+      "ms": 1360
+    }
+  },
+  "para-dictation-long-03": {
+    "dictation| >> kamal, the printer on the second floor is broken again.": {
+      "decision": {
+        "text": "Kamal, the printer on the second floor is broken again.",
+        "tool": "more"
+      },
+      "ms": 792
+    },
+    "dictation| kamal, the printer on the second floor is broken again. / please call the vendor today. >> that's the message.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 545
+    },
+    "dictation| kamal, the printer on the second floor is broken again. >> please call the vendor today.": {
+      "decision": {
+        "text": "Please call the vendor today.",
+        "tool": "more"
+      },
+      "ms": 654
+    },
+    "take a message for kamal.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1363
+    }
+  },
+  "para-dictation-long-04": {
+    "dictation| >> hi nimali, thank you for the help yesterday.": {
+      "decision": {
+        "text": "Hi Nimali, thank you for the help yesterday.",
+        "tool": "more"
+      },
+      "ms": 766
+    },
+    "dictation| hi nimali, thank you for the help yesterday. / the client was very happy with the presentation. >> done.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 542
+    },
+    "dictation| hi nimali, thank you for the help yesterday. >> the client was very happy with the presentation.": {
+      "decision": {
+        "text": "The client was very happy with the presentation.",
+        "tool": "more"
+      },
+      "ms": 720
+    },
+    "the message to nimali is going to be long, so listen.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "dictate"
+      },
+      "ms": 1367
+    }
+  },
+  "para-dictation-long-05": {
+    "dictation| / hi ruwan, i'll be in the office late tomorrow, around eleven. >> okay, that's it.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 542
+    },
+    "dictation| >> hi ruwan, i won't be in the office tomorrow.": {
+      "decision": {
+        "text": "Hi Ruwan, I won't be in the office tomorrow.",
+        "tool": "more"
+      },
+      "ms": 793
+    },
+    "dictation| >> hi ruwan, i'll be in the office late tomorrow, around eleven.": {
+      "decision": {
+        "text": "Hi Ruwan, I'll be in the office late tomorrow, around eleven.",
+        "tool": "more"
+      },
+      "ms": 865
+    },
+    "dictation| hi ruwan, i won't be in the office tomorrow. >> no wait, let me start again.": {
+      "decision": {
+        "text": "",
+        "tool": "restart"
+      },
+      "ms": 538
+    },
+    "take this down for ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Take this down for Ruwan.",
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1616
+    }
+  },
+  "para-dictation-long-06": {
+    "dictation| >> kamal, the budget meeting went well.": {
+      "decision": {
+        "text": "Kamal, the budget meeting went well.",
+        "tool": "more"
+      },
+      "ms": 709
+    },
+    "dictation| kamal, the budget meeting went well. / we got approval for the new laptops. / please place the order this week. >> all done.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 546
+    },
+    "dictation| kamal, the budget meeting went well. / we got approval for the new laptops. >> please place the order this week.": {
+      "decision": {
+        "text": "Please place the order this week.",
+        "tool": "more"
+      },
+      "ms": 679
+    },
+    "dictation| kamal, the budget meeting went well. >> we got approval for the new laptops.": {
+      "decision": {
+        "text": "We got approval for the new laptops.",
+        "tool": "more"
+      },
+      "ms": 691
+    },
+    "i want to write a bigger message to kamal.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "I want to write a bigger message to Kamal.",
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "dictate"
+      },
+      "ms": 1664
+    }
+  },
+  "para-dictation-long-07": {
+    "dictation| >> nimali, the team dinner is on saturday at seven.": {
+      "decision": {
+        "text": "Nimali, the team dinner is on Saturday at seven.",
+        "tool": "more"
+      },
+      "ms": 794
+    },
+    "dictation| nimali, the team dinner is on saturday at seven. / please tell everyone in your team. >> that's it, send it.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 539
+    },
+    "dictation| nimali, the team dinner is on saturday at seven. >> please tell everyone in your team.": {
+      "decision": {
+        "text": "Please tell everyone in your team.",
+        "tool": "more"
+      },
+      "ms": 676
+    },
+    "message for nimali, let me finish the whole thing first.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "dictate"
+      },
+      "ms": 1357
+    }
+  },
+  "para-dictation-long-08": {
+    "dictation| >> ruwan, the electricity bill for the office came today.": {
+      "decision": {
+        "text": "Ruwan, the electricity bill for the office came today.",
+        "tool": "more"
+      },
+      "ms": 772
+    },
+    "dictation| ruwan, the electricity bill for the office came today. / please check it with the landlord. >> okay, done.": {
+      "decision": {
+        "tool": "end"
+      },
+      "ms": 424
+    },
+    "dictation| ruwan, the electricity bill for the office came today. >> please check it with the landlord.": {
+      "decision": {
+        "text": "Please check it with the landlord.",
+        "tool": "more"
+      },
+      "ms": 676
+    },
+    "listen until i say okay, a message for ruvan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "a message for Ruvan",
+        "tab": "",
+        "text": "",
+        "to": "Ruvan",
+        "tool": "dictate"
+      },
+      "ms": 1571
+    }
+  },
+  "para-dictation-long-09": {
+    "dictation| >> kamal, i'm stuck in traffic near borella.": {
+      "decision": {
+        "text": "Kamal, I'm stuck in traffic near Borella.",
+        "tool": "more"
+      },
+      "ms": 820
+    },
+    "dictation| kamal, i'm stuck in traffic near borella. / start the meeting without me. >> that's the message.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 543
+    },
+    "dictation| kamal, i'm stuck in traffic near borella. >> start the meeting without me.": {
+      "decision": {
+        "text": "Start the meeting without me.",
+        "tool": "more"
+      },
+      "ms": 661
+    },
+    "take this down, it's for kamel.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Take this down, it's for Kamel.",
+        "tab": "",
+        "text": "",
+        "to": "Kamel",
+        "tool": "dictate"
+      },
+      "ms": 1612
+    }
+  },
+  "para-dictation-long-10": {
+    "a long one for nimali, okay listen.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "A long one for Nimali, okay listen.",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "dictate"
+      },
+      "ms": 1689
+    },
+    "dictation| >> hi nimali, how are you? what time are you going home?": {
+      "decision": {
+        "text": "Hi Nimali, how are you? What time are you going home?",
+        "tool": "more"
+      },
+      "ms": 849
+    },
+    "dictation| hi nimali, how are you? what time are you going home? / i'm just testing how long messages work. >> i told you exactly what needs to be said.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 546
+    },
+    "dictation| hi nimali, how are you? what time are you going home? >> i'm just testing how long messages work.": {
+      "decision": {
+        "text": "I'm just testing how long messages work.",
+        "tool": "more"
+      },
+      "ms": 709
+    }
+  },
+  "para-dictation-long-11": {
+    "dictation| >> ruwan, the shipment from colombo port is delayed.": {
+      "decision": {
+        "text": "Ruwan, the shipment from Colombo port is delayed.",
+        "tool": "more"
+      },
+      "ms": 746
+    },
+    "dictation| ruwan, the shipment from colombo port is delayed. / it will arrive on tuesday instead of monday. >> okay that's all.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 543
+    },
+    "dictation| ruwan, the shipment from colombo port is delayed. >> it will arrive on tuesday instead of monday.": {
+      "decision": {
+        "text": "It will arrive on Tuesday instead of Monday.",
+        "tool": "more"
+      },
+      "ms": 713
+    },
+    "let me start the message to ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Let me start the message to Ruwan.",
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "dictate"
+      },
+      "ms": 1366
+    }
+  },
+  "para-dictation-long-12": {
+    "dictation| >> kamal, congratulations on the new baby.": {
+      "decision": {
+        "text": "Kamal, congratulations on the new baby.",
+        "tool": "more"
+      },
+      "ms": 711
+    },
+    "dictation| kamal, congratulations on the new baby. / take the rest of the week off. >> that's it.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 541
+    },
+    "dictation| kamal, congratulations on the new baby. >> take the rest of the week off.": {
+      "decision": {
+        "text": "Take the rest of the week off.",
+        "tool": "more"
+      },
+      "ms": 695
+    },
+    "i'll dictate a message to kamal now.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1298
+    }
+  },
+  "para-dictation-long-13": {
+    "dictation| / hi nimali, please ignore the last file, the right one is coming now. >> okay, that's the message.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 540
+    },
+    "dictation| >> hi nimali, i sent you the wrong file.": {
+      "decision": {
+        "text": "Hi Nimali, I sent you the wrong file.",
+        "tool": "more"
+      },
+      "ms": 771
+    },
+    "dictation| >> hi nimali, please ignore the last file, the right one is coming now.": {
+      "decision": {
+        "text": "Hi Nimali, please ignore the last file, the right one is coming now.",
+        "tool": "more"
+      },
+      "ms": 887
+    },
+    "dictation| hi nimali, i sent you the wrong file. >> hmm, actually let me start again.": {
+      "decision": {
+        "text": "",
+        "tool": "restart"
+      },
+      "ms": 537
+    },
+    "write this down for nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1387
+    }
+  },
+  "para-dictation-long-14": {
+    "a message for ruwan, take it down.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1343
+    },
+    "dictation| >> ruwan, please collect the parcel from reception.": {
+      "decision": {
+        "text": "Ruwan, please collect the parcel from reception.",
+        "tool": "more"
+      },
+      "ms": 732
+    },
+    "dictation| ruwan, please collect the parcel from reception. >> okay.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 537
+    }
+  },
+  "para-dictation-long-15": {
+    "dictation| >> kamal, the office will be closed on monday for the holiday.": {
+      "decision": {
+        "text": "Kamal, the office will be closed on Monday for the holiday.",
+        "tool": "more"
+      },
+      "ms": 810
+    },
+    "dictation| kamal, the office will be closed on monday for the holiday. / please inform the staff and the security. / and lock the server room. >> all done now.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 545
+    },
+    "dictation| kamal, the office will be closed on monday for the holiday. / please inform the staff and the security. >> and lock the server room.": {
+      "decision": {
+        "text": "And lock the server room.",
+        "tool": "more"
+      },
+      "ms": 655
+    },
+    "dictation| kamal, the office will be closed on monday for the holiday. >> please inform the staff and the security.": {
+      "decision": {
+        "text": "Please inform the staff and the security.",
+        "tool": "more"
+      },
+      "ms": 692
+    },
+    "let me draft a bigger message to kamal.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Let me draft a bigger message to Kamal.",
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "dictate"
+      },
+      "ms": 1725
+    }
+  },
+  "para-dictation-long-16": {
+    "dictation| >> nimali, the interview is at two tomorrow.": {
+      "decision": {
+        "text": "Nimali, the interview is at two tomorrow.",
+        "tool": "more"
+      },
+      "ms": 754
+    },
+    "dictation| nimali, the interview is at two tomorrow. / bring your laptop and the portfolio. >> that's it.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 538
+    },
+    "dictation| nimali, the interview is at two tomorrow. >> bring your laptop and the portfolio.": {
+      "decision": {
+        "text": "Bring your laptop and the portfolio.",
+        "tool": "more"
+      },
+      "ms": 674
+    },
+    "take this down for nima lee.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Nima Lee",
+        "tool": "message_draft"
+      },
+      "ms": 1386
+    }
+  },
+  "para-dictation-long-17": {
+    "dictation| / ruwan, the meeting with the bank is postponed to next week. >> done.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 542
+    },
+    "dictation| >> ruwan, the meeting with the bank is postponed to next week.": {
+      "decision": {
+        "text": "Ruwan, the meeting with the bank is postponed to next week.",
+        "tool": "more"
+      },
+      "ms": 811
+    },
+    "dictation| >> ruwan, the meeting with the bank went badly.": {
+      "decision": {
+        "text": "Ruwan, the meeting with the bank went badly.",
+        "tool": "more"
+      },
+      "ms": 749
+    },
+    "dictation| ruwan, the meeting with the bank went badly. >> sorry, let me start again.": {
+      "decision": {
+        "text": "",
+        "tool": "restart"
+      },
+      "ms": 543
+    },
+    "listen till i finish, it's a message for ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Listen till I finish, it's a message for Ruwan.",
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "dictate"
+      },
+      "ms": 1747
+    }
+  },
+  "para-dictation-long-18": {
+    "dictation| >> kamal, thanks for covering for me today.": {
+      "decision": {
+        "text": "Kamal, thanks for covering for me today.",
+        "tool": "more"
+      },
+      "ms": 734
+    },
+    "dictation| kamal, thanks for covering for me today. / i owe you lunch next week. >> okay, that's the whole message.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 542
+    },
+    "dictation| kamal, thanks for covering for me today. >> i owe you lunch next week.": {
+      "decision": {
+        "text": "I owe you lunch next week.",
+        "tool": "more"
+      },
+      "ms": 675
+    },
+    "i want to send kamal a long message.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "dictate"
+      },
+      "ms": 1332
+    }
+  },
+  "para-dictation-long-19": {
+    "dictation| >> nimali, the new office keys are with the guard.": {
+      "decision": {
+        "text": "Nimali, the new office keys are with the guard.",
+        "tool": "more"
+      },
+      "ms": 793
+    },
+    "dictation| nimali, the new office keys are with the guard. / please pick them up before six. >> okay.": {
+      "decision": {
+        "tool": "end"
+      },
+      "ms": 422
+    },
+    "dictation| nimali, the new office keys are with the guard. >> please pick them up before six.": {
+      "decision": {
+        "text": "Please pick them up before six.",
+        "tool": "more"
+      },
+      "ms": 675
+    },
+    "the message is for nimali, take it down.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1369
+    }
+  },
+  "para-dictation-long-20": {
+    "dictation| >> ruwan, happy birthday!": {
+      "decision": {
+        "text": "Ruwan, happy birthday!",
+        "tool": "more"
+      },
+      "ms": 661
+    },
+    "dictation| ruwan, happy birthday! / have a great day with your family. >> okay that's it, that's the message.": {
+      "decision": {
+        "text": "",
+        "tool": "end"
+      },
+      "ms": 538
+    },
+    "dictation| ruwan, happy birthday! >> have a great day with your family.": {
+      "decision": {
+        "text": "Have a great day with your family.",
+        "tool": "more"
+      },
+      "ms": 688
+    },
+    "let's do a long message to ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Let's do a long message to Ruwan.",
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "dictate"
+      },
+      "ms": 1705
+    }
+  }
+}

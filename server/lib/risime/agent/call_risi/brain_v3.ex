@@ -24,7 +24,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   Regex keeps only: "Risi, stop" (the session), the filler choice and the safety checks.
   """
 
-  alias RisiMe.Agent.CallRisi.{Brain, Decider, Dialogue, Sentences, Spoken, WriteTruth}
+  alias RisiMe.Agent.CallRisi.{Brain, Decider, Dialogue, Reads, Sentences, Spoken, WriteTruth}
   alias RisiMe.Agent.{Clock, FindContact, ScheduleIntent}
 
   @flag "RISI_CALL_BRAIN"
@@ -49,13 +49,56 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
   @doc "One turn (see the moduledoc)."
   def answer(ctx, text, lang) do
-    hold(ctx, text)
     d = ctx |> Map.get(:dialogue) |> Dialogue.get() |> fresh_card()
-    ctx = Map.put(ctx, :heard, text)
 
-    case answer_pending(ctx, d, text, lang) do
-      :model -> answer_model(ctx, d, text, lang)
-      :done -> :ok
+    case Map.get(ctx, :dictated) do
+      %{} = dict ->
+        dictated(Map.put(ctx, :heard, text), d, dict, lang)
+
+      nil ->
+        hold(ctx, text)
+        ctx = Map.put(ctx, :heard, text)
+
+        case answer_pending(ctx, d, text, lang) do
+          :model -> answer_model(ctx, d, text, lang)
+          :done -> :ok
+        end
+    end
+  end
+
+  ## Dictation (Harsha's call 22e016e0): the session took the message down; this is its end
+
+  # The session's dictation ended (an end signal, or silence): the composed text is the task's
+  # text (the caller's words; checked against what they said, never invented), then the task's
+  # next step. Misheard words: Risi offers the fix first ("Shall I fix them?").
+  defp dictated(ctx, d, dict, lang) do
+    report(ctx, {:decided, {:v3, "dictate", "end"}})
+    report(ctx, {:route, "message_write"})
+    raw = dict.raw |> String.trim()
+
+    text =
+      cond do
+        dict.text != "" and Dialogue.grounded?(dict.text, raw) -> dict.text
+        true -> Dialogue.strip_lead(raw)
+      end
+      |> Dialogue.strip_end()
+
+    fixed =
+      if dict.fixed != "" and norm_q(dict.fixed) != norm_q(text), do: dict.fixed
+
+    p = d.pending || Dialogue.message_task(%{to: dict[:to], tab: dict[:tab]})
+    p = %{p | text: text, fixed: fixed}
+    d = %{d | pending: p, dictation: nil}
+
+    cond do
+      text == "" ->
+        ask(ctx, d, Dialogue.ask_text(p.to), %{slot: "message_text", to: p.to})
+
+      is_binary(fixed) ->
+        ask(ctx, d, Dialogue.fix_question(fixed), %{slot: "fix_confirm"})
+
+      true ->
+        run_message(ctx, d, p, false, lang)
     end
   end
 
@@ -88,6 +131,42 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
         :done
 
+      # v1.55 §41.11: "Send it?" after the read-back of an Official message: a clear yes sends.
+      a[:slot] == "send_confirm" and Dialogue.yes?(text) ->
+        report(ctx, {:decided, {:v3, "confirm_open", "tool"}})
+        report(ctx, {:route, "write_status"})
+        voice_send(ctx, d)
+        :done
+
+      a[:slot] == "send_confirm" and Dialogue.no?(text) ->
+        report(ctx, {:decided, {:v3, "none", "reply"}})
+        report(ctx, {:route, "chat"})
+        report(ctx, {:dialogue, %{d | awaiting: nil}})
+        send_record(ctx, "declined")
+
+        Brain.say_text(
+          ctx,
+          "Okay, I won't send it. It stays on the card in your Risi chat, or tell me what to change."
+        )
+
+        done(ctx)
+        :done
+
+      # "Shall I fix the misheard words?"
+      a[:slot] == "fix_confirm" and is_map(d.pending) and Dialogue.fix_yes?(text) ->
+        report(ctx, {:decided, {:v3, "message_draft", "tool"}})
+        report(ctx, {:route, "message_write"})
+        p = %{d.pending | text: d.pending.fixed || d.pending.text, fixed: nil}
+        run_message(ctx, %{d | pending: p, awaiting: nil}, p, false, lang)
+        :done
+
+      a[:slot] == "fix_confirm" and is_map(d.pending) and Dialogue.no?(text) ->
+        report(ctx, {:decided, {:v3, "message_draft", "tool"}})
+        report(ctx, {:route, "message_write"})
+        p = %{d.pending | fixed: nil}
+        run_message(ctx, %{d | pending: p, awaiting: nil}, p, false, lang)
+        :done
+
       a[:slot] == "message_pick" and is_map(d.pending) and
           pick(d.pending, d.pending.to_candidates, text).to != nil ->
         report(ctx, {:decided, {:v3, "message_draft", "tool"}})
@@ -109,18 +188,64 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   # (no reply) and a tool or a cancel are the model's call.
   @doc false
   # A message decision written as a question is still the message tool (Risi asks for the slot).
-  def in_task(%{tool: "message_draft", action: a} = dec, d, text) when a != "tool",
-    do: in_task(%{dec | action: "tool", say: ""}, d, text)
+  def in_task(%{tool: t, action: a} = dec, d, text)
+      when a != "tool" and
+             t in ~w(message_draft dictate read_messages promises_by my_promises unsupported undo_send),
+      do: in_task(%{dec | action: "tool", say: ""}, d, text)
+
+  # The model named the tool of the open state but filled a new message ("cancel that and start
+  # a new message … just say …" came back as cancel_open with the text; the name answering "who"
+  # as confirm_open): the fields it filled are the request.
+  def in_task(%{tool: "cancel_open", text: t} = dec, d, text) when t != "",
+    do: in_task(%{dec | tool: "message_draft", action: "tool", cancel_open: true}, d, text)
+
+  # "Cancel that" written as a reply: the cancel runs (the model's words never claim it).
+  # … but while Risi waits for who it is for or what it says, a "reply" is the answer (22e016e0:
+  # "Yeah, I have sent a draft to Senamali" came back as a cancel written as a reply).
+  def in_task(%{tool: "cancel_open", action: a} = dec, %{awaiting: %{slot: s}} = d, text)
+      when a != "tool" and s in ~w(message_to message_pick message_text),
+      do: in_task2(%{dec | tool: "none", cancel_open: false}, d, text)
+
+  def in_task(%{tool: "cancel_open", action: a} = dec, d, text) when a != "tool",
+    do: in_task(%{dec | action: "tool", cancel_open: true, say: ""}, d, text)
+
+  # "Send it to work" about a Private message card, written as a status or yes: the same message
+  # again for the Official chat.
+  def in_task(%{tool: t, tab: "official"} = dec, %{card: %{kind: "message"} = c} = d, text)
+      when t in ~w(card_status confirm_open) do
+    if c[:tab] == "official",
+      do: in_task2(dec, d, text),
+      else: official_again(dec, c, d, text)
+  end
+
+  # "Forget it. Tell Nimali … instead": a new request after a cancel word cancels the open card
+  # (the cancel the session already knows as "Risi, stop"/"cancel that"; architect 09:40 B).
+  def in_task(%{tool: t, cancel_open: false} = dec, %{card: %{}} = d, text)
+      when t in ~w(message_draft calendar_add reminder_add) do
+    if Regex.match?(
+         ~r/^\W*(?:no,?\s+)?(?:cancel(?:\s+(?:that|it|this))?|forget\s+(?:it|that)|never\s*mind|scratch\s+that)\b/iu,
+         text
+       ),
+       do: in_task(%{dec | cancel_open: true}, d, text),
+       else: in_task2(dec, d, text)
+  end
+
+  def in_task(dec, d, text), do: in_task2(dec, d, text)
+
+  @doc false
+  def in_task2(%{tool: "confirm_open", to: to} = dec, %{awaiting: %{slot: s}} = d, text)
+      when to != "" and s in ~w(message_to message_pick),
+      do: in_task2(%{dec | tool: "message_draft", action: "tool"}, d, text)
 
   # Safety: a bare "yeah" with nothing open (no card, no task, no question) repeats no write.
-  def in_task(%{tool: t} = dec, %{card: nil, pending: nil, awaiting: nil}, text)
+  def in_task2(%{tool: t} = dec, %{card: nil, pending: nil, awaiting: nil}, text)
       when t in ~w(calendar_add reminder_add message_draft) do
     if Dialogue.yes?(text) and length(String.split(text)) <= 2,
       do: %{dec | action: "reply", tool: "none", say: "Okay.", cancel_open: false},
       else: dec
   end
 
-  def in_task(
+  def in_task2(
         %{action: a, tool: "none", cancel_open: false} = dec,
         %{awaiting: %{slot: slot}},
         text
@@ -134,7 +259,13 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
       else: %{base | to: name_words(text), text: ""}
   end
 
-  def in_task(dec, _d, _text), do: dec
+  def in_task2(dec, _d, _text), do: dec
+
+  defp official_again(dec, c, d, text) do
+    to = if dec.to != "", do: dec.to, else: c[:to] || ""
+    body = if dec.text != "", do: dec.text, else: c[:text] || ""
+    in_task(%{dec | tool: "message_draft", action: "tool", to: to, text: body}, d, text)
+  end
 
   defp name_words(text) do
     t =
@@ -157,6 +288,20 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
   defp names_to?(_, _), do: false
 
+  # The model fills "tab" on every decision; it counts only when the caller named the chat
+  # ("send it to work", "on the office chat", "privately"); else the open task's tab stays.
+  @official_words ~r/\b(?:work|office|official|officially)\b/iu
+  @private_words ~r/\b(?:private|privately|personal|personally)\b/iu
+
+  @doc false
+  def said_tab(%{tab: "official"} = dec, text),
+    do: if(Regex.match?(@official_words, text), do: dec, else: %{dec | tab: ""})
+
+  def said_tab(%{tab: "private"} = dec, text),
+    do: if(Regex.match?(@private_words, text), do: dec, else: %{dec | tab: ""})
+
+  def said_tab(dec, _text), do: dec
+
   defp answer_model(ctx, d, text, lang) do
     input = %{
       now: now_text(ctx),
@@ -168,7 +313,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
     case decide(ctx, input) do
       {{:ok, dec}, neutral?} ->
-        dec = in_task(dec, d, text)
+        dec = dec |> said_tab(text) |> in_task(d, text)
         report(ctx, {:decided, {:v3, dec.tool, dec.action}})
         act(Map.put(ctx, :neutral?, neutral?), dec, d, text, lang)
 
@@ -222,15 +367,21 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   def route(%{tool: "capabilities"}), do: "capabilities"
   def route(%{tool: "list_contacts"}), do: "contacts"
   def route(%{action: a}) when a in ~w(reply ask), do: "chat"
+  def route(%{tool: "unsupported"}), do: "chat"
   def route(%{tool: "calendar_read"}), do: "calendar_read"
   def route(%{tool: "calendar_add"}), do: "calendar_write"
   def route(%{tool: "reminder_add"}), do: "reminder"
-  def route(%{tool: "promises_read"}), do: "ledger_items"
+  def route(%{tool: t}) when t in ~w(my_promises promises_by), do: "ledger_items"
+  def route(%{tool: "read_messages"}), do: "messages_read"
   def route(%{tool: "message_draft"}), do: "message_write"
-  def route(%{tool: t}) when t in ~w(cancel_open confirm_open card_status), do: "write_status"
+  def route(%{tool: "dictate"}), do: "dictation"
+
+  def route(%{tool: t}) when t in ~w(cancel_open confirm_open card_status undo_send),
+    do: "write_status"
+
   def route(_), do: "chat"
 
-  defp act(ctx, %{tool: "capabilities"}, _d, _text, _lang) do
+  defp act(ctx, %{tool: "capabilities", action: "tool"}, _d, _text, _lang) do
     report(ctx, {:route, "capabilities"})
     Brain.say_text(ctx, Spoken.capabilities(Brain.caps(ctx)))
     done(ctx)
@@ -252,6 +403,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   defp act(ctx, %{action: "tool", tool: t} = dec, d, text, lang) when t != "none" do
     report(ctx, {:route, route(dec)})
     {d, cancelled} = if dec.cancel_open or t == "cancel_open", do: cancel(ctx, d), else: {d, nil}
+    d = close_task(ctx, d, t)
     tool(ctx, dec, d, text, lang, cancelled)
   end
 
@@ -268,10 +420,18 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
     end
   end
 
-  defp act(ctx, %{say: say}, d, _text, _lang) do
+  defp act(ctx, %{say: say}, d, text, _lang) do
     report(ctx, {:route, "chat"})
 
-    if say == "" do
+    # Thinking aloud ("Let me see. I need to listen to it.", Harsha's 2nd call) gets no answer
+    # even when the model wrote one ("Take your time."): the existing thinking-aloud rule.
+    # (A statement that only starts with "So …" is still said to Risi: 15:2x "So it is being
+    # connected …".)
+    ack? =
+      length(String.split(say)) <= 6 and not String.contains?(say, "?") and
+        not Regex.match?(~r/^\W*so\b/iu, text)
+
+    if say == "" or (ack? and Brain.addressed(text) == :ignore) do
       # Words not meant for Risi: silence (never "Was that for me?" from a guess).
       report(ctx, {:done, %{status: :ignored, request_id: nil}})
     else
@@ -285,8 +445,31 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
     end
   end
 
+  # Architect 16:05 item 2: a new request finishes the open task (a finished task never captures
+  # the next words). The open card stays (it is in the Risi chat; "cancel that" still reaches it),
+  # but nothing waits for an answer any more.
+  @task_tools ~w(message_draft dictate confirm_open card_status cancel_open)
+
+  # The day for a write Risi asked about ("Which day should I put it on?") is that write's answer.
+  defp close_task(_ctx, %{awaiting: %{slot: "day"}} = d, t)
+       when t in ~w(calendar_add reminder_add),
+       do: d
+
+  defp close_task(ctx, d, t) when t not in @task_tools do
+    if d.pending != nil or d.awaiting != nil or d.dictation != nil do
+      d = %{d | pending: nil, awaiting: nil, dictation: nil}
+      report(ctx, {:dialogue, d})
+      d
+    else
+      d
+    end
+  end
+
+  defp close_task(_ctx, d, _t), do: d
+
   # "Cancel that": the open card is cancelled for real (its row), and what Risi waited for goes.
   defp cancel(ctx, %{card: %{request_id: rid, kind: kind}} = d) do
+    correction(ctx, "cancel")
     result = cancel_impl().(ctx.user_id, rid)
     d = %{d | card: nil, awaiting: nil, pending: nil}
     report(ctx, {:dialogue, d})
@@ -334,20 +517,91 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   defp tool(ctx, %{tool: "calendar_read"} = dec, d, text, lang, _c),
     do: calendar_read(ctx, dec, d, text, lang, false)
 
-  defp tool(ctx, %{tool: "promises_read"} = dec, d, text, lang, _c) do
+  defp tool(ctx, %{tool: "my_promises"} = dec, d, text, lang, _c) do
     today = Brain.today(ctx)
 
     # "Did I promise anything today or tomorrow?" (or a follow-up of that read): Risi's items of
-    # that range (the read).
+    # that range (the read), under the promises line (never the calendar's: 15:35 bug 3).
     if ScheduleIntent.day_named?(text, today) or
          (dec.request != "" and ScheduleIntent.day_named?(dec.request, today)) or
          match?(%{route: "calendar_read", range: %{}}, Map.get(ctx, :topic)) do
       report(ctx, {:route, "calendar_read"})
-      calendar_read(ctx, dec, d, text, lang, true)
+      calendar_read(Map.put(ctx, :filler_route, "ledger_items"), dec, d, text, lang, true)
     else
       clear_awaiting(ctx, d)
-      Brain.tool_turn(filler(ctx, "ledger_items"), text, lang, "ledger_items", nil)
+      Brain.say_text(ctx, Reads.my_promises(ctx.user_id, tz: tz(ctx)))
+      done(ctx)
     end
+  end
+
+  # Architect 15:35 B: promises other people made to the caller, from the ledger by owner.
+  defp tool(ctx, %{tool: "promises_by"} = dec, d, text, _lang, _c) do
+    with_person(ctx, d, dec.to, text, "promises_by", fn person ->
+      Reads.promises_by(ctx.user_id, person, tz: tz(ctx))
+    end)
+  end
+
+  # Architect 15:35 B: "Did Nimali reply?", "any new messages?": Official only, never Private.
+  defp tool(ctx, %{tool: "read_messages"} = dec, d, text, _lang, _c) do
+    private? = dec.tab == "private"
+    opts = [tz: tz(ctx), now: Clock.now(), private?: private?]
+
+    if dec.to == "" or (no_name?(dec.to) and Dialogue.focus(d) == nil) do
+      Brain.say_text(ctx, Reads.read_messages(ctx.user_id, nil, opts))
+      done(ctx)
+    else
+      with_person(ctx, d, dec.to, text, "read_messages", fn person ->
+        Reads.read_messages(ctx.user_id, person, opts)
+      end)
+    end
+  end
+
+  # A long message: Risi listens until the caller is done (the session takes it down).
+  defp tool(ctx, %{tool: "dictate"} = dec, d, text, _lang, _c) do
+    p = d.pending || Dialogue.message_task()
+    p = recipient(ctx, p, dec.to, d.card || %{}, text, d)
+    p = %{p | tab: tab(dec.tab, p.tab || Dialogue.tab_for(d, p.to) || (d.card || %{})[:tab])}
+    first = if dec.text != "" and Dialogue.grounded?(dec.text, text), do: [dec.text], else: []
+    dict = %{to: p.to, tab: p.tab, asked?: false}
+    d = %{d | pending: p, awaiting: nil, dictation: dict}
+    report(ctx, {:dialogue, d})
+    report(ctx, {:dictation, Map.put(dict, :parts, first)})
+
+    line =
+      if MapSet.member?(Map.get(ctx, :once, MapSet.new()), :dictation_hint),
+        do: "Go ahead.",
+        else: "Go ahead, I'm listening. Say \"that's it\" when you're done."
+
+    report(ctx, {:once, :dictation_hint})
+    Brain.say_text(ctx, line)
+    done(ctx)
+  end
+
+  defp tool(ctx, %{tool: "unsupported"}, d, _text, _lang, _c) do
+    line =
+      if repeat?(d, Dialogue.unsupported_line()) or last_said?(ctx, "I can't do that yet"),
+        do: "That one I can't do yet. Ask me about your calendar, messages or promises.",
+        else: Dialogue.unsupported_line()
+
+    Brain.say_text(ctx, line)
+    done(ctx)
+  end
+
+  # v1.55 §41.11: "undo that" takes back the message Risi just sent (within 2 minutes).
+  defp tool(ctx, %{tool: "undo_send"}, _d, _text, _lang, _c) do
+    line =
+      case send_impl().undo(ctx.user_id, :last) do
+        {:ok, %{name: n}} -> "Undone: the message to #{first_name(n)} was deleted."
+        {:error, :expired} -> "It's too late to undo that one: the 2 minutes have passed."
+        _ -> "There's no message of mine to undo."
+      end
+
+    Brain.say_text(ctx, line)
+    done(ctx)
+  catch
+    _, _ ->
+      Brain.say_text(ctx, "Sorry, I couldn't undo that just now.")
+      done(ctx)
   end
 
   defp tool(ctx, %{tool: t} = dec, d, text, lang, cancelled)
@@ -379,9 +633,26 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   end
 
   defp tool(ctx, %{tool: "confirm_open"} = dec, d, _text, _lang, _c) do
+    send? = match?(%{slot: "send_confirm"}, d.awaiting)
+
     case d.card do
-      %{kind: "message"} ->
-        Brain.say_text(ctx, Dialogue.message_tap_line())
+      # v1.55 §41.11: the yes to Risi's "Send it?" sends the Official message.
+      %{kind: "message"} when send? ->
+        voice_send(ctx, d)
+
+      # 22e016e0 bug C: only when the caller asks Risi to send it now, and said honestly once.
+      %{kind: "message"} = c ->
+        line = Dialogue.private_tap_line(first_name(c[:to]))
+
+        line =
+          if send_on?(ctx),
+            do: line <> " Or say \"send it to work\", and I'll send it in Official myself.",
+            else: line
+
+        if last_said?(ctx, "I can only draft it"),
+          do: Brain.say_text(ctx, "It's on the card in your Risi chat: tap Send there."),
+          else: Brain.say_text(ctx, line)
+
         done(ctx)
 
       %{} ->
@@ -410,14 +681,80 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
     done(ctx)
   end
 
+  # A read about one person: the name looked up among the caller's people with the call's
+  # context (find_contact); "her" = the person in focus; 2–3 near ones are asked once.
+  defp with_person(ctx, d, said, _text, _tool, f) do
+    said = String.trim(said || "", " .,!?")
+    people = FindContact.people(ctx.user_id)
+
+    said =
+      if said == "" or no_name?(said), do: Dialogue.focus(d) || "", else: said
+
+    case said == "" || contact(said, people, d) do
+      true ->
+        q = "Who do you mean?"
+        report(ctx, {:dialogue, %{d | awaiting: %{slot: "answer", question: q}}})
+        Brain.say_text(ctx, q)
+
+      {:one, %{user_id: id, name: n}} ->
+        report(ctx, {:dialogue, Dialogue.add_person(d, n)})
+        Brain.say_text(ctx, f.(%{user_id: id, name: n}))
+
+      {:pick, xs} ->
+        q = Dialogue.ask_pick(Enum.map(xs, & &1.name))
+
+        if repeat?(d, q) do
+          Brain.say_text(ctx, Dialogue.heard_line(ctx[:heard] || "", d))
+        else
+          report(ctx, {:dialogue, %{d | awaiting: %{slot: "answer", question: q}}})
+          Brain.say_text(ctx, q)
+        end
+
+      :none ->
+        Brain.say_text(ctx, "I couldn't find #{said} in your RisiMe contacts.")
+    end
+
+    done(ctx)
+  end
+
+  @doc false
+  # find_contact with the call's context (architect 16:05 item 4): the pinned recipient (the
+  # caller corrected to them), then the people of this call, win a near tie — and a near match
+  # of them wins over another person's, unless the name heard is exactly that other person's.
+  def contact(said, people, d) do
+    found = FindContact.find(said, people)
+    call = Enum.uniq(Enum.reject([d[:pinned] | d[:people] || []], &is_nil/1))
+
+    in_call =
+      Enum.find_value(call, fn name ->
+        Enum.find(found, &(&1.name == name and &1.score >= 0.5))
+      end)
+
+    exact_other? =
+      Enum.any?(found, &(&1.score == 1.0 and (in_call == nil or &1.name != in_call.name)))
+
+    if in_call != nil and not exact_other?,
+      do: {:one, in_call},
+      else: FindContact.decide(found)
+  end
+
   ## Messages: a pending task {to, to_candidates, text}, never a made-up text (B, architect 11:45)
 
   defp message(ctx, dec, d, text, lang) do
-    p = d.pending || Dialogue.message_task()
+    p0 = d.pending || Dialogue.message_task()
     card = d.card || %{}
     slot = (d.awaiting || %{})[:slot]
 
-    p = recipient(ctx, p, dec.to, card, text)
+    p = recipient(ctx, p0, dec.to, card, text, d)
+    # "Send it to work" (22e016e0 bug A): the Official chat with the person in focus.
+    p = %{p | tab: tab(dec.tab, p.tab || Dialogue.tab_for(d, p.to) || card[:tab])}
+
+    # A correction of the recipient ("Nimali, not Kamal") pins the new one for the call.
+    old = p0.to || card[:to]
+    corrected? = is_binary(old) and is_binary(p.to) and p.to != old
+    if corrected?, do: correction(ctx, "to")
+    d = if corrected?, do: Dialogue.add_person(d, p.to, true), else: d
+
     {body, from_model?} = message_body(ctx, dec, p, card, slot, text)
 
     # Soft grounding against the whole call so far (the caller's words, the recipient, the open
@@ -459,6 +796,11 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         ask(ctx, d, Dialogue.ask_to(), %{slot: "message_to"})
 
       p.text == nil ->
+        # The answer is taken down as dictation (the session): one check per pause, never a
+        # turn per pause, and an instruction ("no, read …") is never the text (16:05 item 1).
+        dict = %{to: p.to, tab: p.tab, asked?: true}
+        d = %{d | dictation: dict}
+        report(ctx, {:dictation, Map.put(dict, :parts, [])})
         ask(ctx, d, Dialogue.ask_text(p.to), %{slot: "message_text", to: p.to})
 
       confirm? ->
@@ -473,15 +815,219 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
     # The caller's words as a sentence ("the car is ready" → "The car is ready").
     {f, rest} = String.split_at(String.trim(p.text), 1)
     p = %{p | text: String.upcase(f) <> rest}
-    report(ctx, {:dialogue, %{d | awaiting: nil, pending: p}})
+
+    if same_card?(d.card, p),
+      do: already(ctx, d, p),
+      else: redraft(ctx, d, p, lang)
+  end
+
+  # The open card already says exactly this to this person ("send it to Nimali, not Kasun" when
+  # it is Nimali's): no second card and never the same read-back twice.
+  defp same_card?(%{kind: "message", to: to, text: t} = c, p) when is_binary(to) and is_binary(t),
+    do:
+      to == p.to and norm_q(t) == norm_q(p.text) and
+        (p.tab == nil or (c[:tab] || "private") == p.tab)
+
+  defp same_card?(_, _), do: false
+
+  defp already(ctx, d, p) do
+    report(ctx, {:route, "message_write"})
+
+    line =
+      case d.awaiting do
+        %{slot: "send_confirm"} ->
+          "It's already going to #{first_name(p.to)}: #{Dialogue.read_back(p.text)} Send it?"
+
+        _ ->
+          "It's already on the card for #{p.to}: #{Dialogue.read_back(p.text)} " <>
+            "Tap Send in your Risi chat to send it."
+      end
+
+    d = Dialogue.add_person(%{d | pending: nil, dictation: nil}, p.to)
+    report(ctx, {:dialogue, d})
+    Brain.say_line(ctx, line)
+    done(ctx)
+  end
+
+  defp redraft(ctx, d, p, lang) do
+    d =
+      %{d | awaiting: nil, pending: p, dictation: nil}
+      |> Dialogue.add_person(p.to)
+      |> Dialogue.remember_tab(p.to, p.tab)
+
+    report(ctx, {:dialogue, d})
+
+    {p, vs} = voice_send_setup(ctx, p)
 
     Brain.tool_turn(
-      filler(ctx, "message_write"),
+      filler(ctx, "message_write") |> Map.put(:voice_send, vs),
       "Send a message to #{p.to}: #{p.text}",
       lang,
       "message_write",
-      {:send, p.to, p.text}
+      {:send, p.to, p.text, p.tab}
     )
+  end
+
+  ## v1.55 §41.11: Risi sends an Official message itself after the read-back and a yes
+
+  defp send_impl,
+    do: Application.get_env(:risime, :risi_call_send_impl, RisiMe.Agent.CallSend)
+
+  defp send_on?(ctx) do
+    send_impl().enabled_for?(ctx.user_id)
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
+
+  defp send_record(ctx, outcome) do
+    send_impl().record_outcome(ctx.user_id, outcome, nil)
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  # An Official message for a caller with voice send on: the person's Official chat, and the
+  # guard (money, HR, legal, accusations, deletion keep the tap) started at once, in parallel
+  # with the draft. Official off in that chat: said, and the message goes to a Private card.
+  defp voice_send_setup(ctx, %{tab: "official", to: to} = p) when is_binary(to) do
+    id = p.to_id || id_of(ctx, to)
+
+    if is_binary(id) and send_on?(ctx) do
+      case send_impl().target(ctx.user_id, id) do
+        {:ok, %{conv: conv}} ->
+          text = p.text
+          guard = Task.async(fn -> safe_needs_tap?(text) end)
+          {p, %{conv: conv, to: to, to_id: id, guard: guard}}
+
+        {:error, :official_off} ->
+          Brain.say_text(
+            ctx,
+            "Official is off in your chat with #{first_name(to)}, so I'll draft it for your Private chat."
+          )
+
+          {%{p | tab: "private"}, nil}
+
+        _ ->
+          {p, nil}
+      end
+    else
+      {p, nil}
+    end
+  catch
+    _, _ -> {p, nil}
+  end
+
+  defp voice_send_setup(_ctx, p), do: {p, nil}
+
+  defp safe_needs_tap?(text) do
+    send_impl().needs_tap?(text) != false
+  rescue
+    _ -> true
+  catch
+    _, _ -> true
+  end
+
+  @doc false
+  # The read-back of a voice-sendable message card (Brain's card line): "I'll send … Send it?",
+  # and the call now waits for that yes; a text the guard keeps for a tap says so.
+  def voice_card_line(ctx, %{conv: conv, to: to, to_id: id, guard: guard}, summary) do
+    parts = Dialogue.message_parts(summary) || %{to: to, text: ""}
+
+    needs_tap? =
+      case Task.yield(guard, 3_000) || Task.shutdown(guard, :brutal_kill) do
+        {:ok, v} -> v
+        _ -> true
+      end
+
+    if needs_tap? do
+      send_record(ctx, "needs_tap")
+
+      "Here's your message to #{parts.to}: #{Dialogue.read_back(parts.text)} " <>
+        "That one needs your tap: it's on the card in your Risi chat."
+    else
+      q = Dialogue.send_question(first_name(parts.to), parts.text)
+
+      report(
+        ctx,
+        {:awaiting, %{slot: "send_confirm", to: parts.to, to_id: id, conv: conv, question: q}}
+      )
+
+      q
+    end
+  end
+
+  # The yes: Risi's own post in the Official chat; "Sent." only with the stored post's id.
+  defp voice_send(ctx, %{awaiting: %{slot: "send_confirm"} = a, card: %{kind: "message"} = c} = d) do
+    text = c[:text] || ""
+
+    result =
+      try do
+        send_impl().send(%{
+          user_id: ctx.user_id,
+          recipient_user_id: a.to_id,
+          conv: a.conv,
+          name: a.to,
+          text: text,
+          call_id: ctx.call_id,
+          request_id: c.request_id
+        })
+      catch
+        _, _ -> {:error, :failed}
+      end
+
+    case result do
+      {:ok, %{message_id: mid}} when is_binary(mid) ->
+        # The card is done with: a tap on it can't send the message a second time.
+        _ = cancel_impl().(ctx.user_id, c.request_id)
+        report(ctx, {:dialogue, %{d | card: nil, awaiting: nil}})
+        Brain.say_text(ctx, "Sent. Say \"undo that\" in the next 2 minutes to take it back.")
+
+      _ ->
+        report(ctx, {:dialogue, %{d | awaiting: nil}})
+
+        Brain.say_text(
+          ctx,
+          "That didn't go through, so nothing was sent. It's still on the card in your Risi chat."
+        )
+    end
+
+    done(ctx)
+  end
+
+  defp voice_send(ctx, d) do
+    report(ctx, {:dialogue, %{d | awaiting: nil}})
+    Brain.say_text(ctx, "There's nothing waiting to be sent.")
+    done(ctx)
+  end
+
+  # D-001: every correction the caller makes is a training example (labels only).
+  defp correction(ctx, field),
+    do: RisiMe.Agent.CallRisi.Escalate.example(ctx, "correction", %{field: field})
+
+  defp id_of(ctx, name) do
+    Enum.find_value(FindContact.people(ctx.user_id), fn {id, n} -> if n == name, do: id end)
+  end
+
+  defp tab(new, old) do
+    cond do
+      new in ~w(official private) -> new
+      old in ~w(official private) -> old
+      true -> nil
+    end
+  end
+
+  defp first_name(nil), do: "them"
+  defp first_name(n), do: n |> String.split() |> List.first() || n
+
+  # Risi's last spoken line in this call starts with / contains `s`.
+  defp last_said?(ctx, s) do
+    case for(%{"role" => "assistant", "content" => c} <- ctx[:history] || [], do: c) do
+      [] -> false
+      l -> String.contains?(List.last(l), s)
+    end
   end
 
   # Asks `q` (the open state waits for its answer), but never the same question twice in a row:
@@ -512,17 +1058,30 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
   # The recipient: the name heard is looked up in the caller's people (find_contact) right when
   # it is given; one clear match is used without asking, 2–3 are asked once (the text kept).
-  defp recipient(ctx, p, said, card, text) do
+  # With the call's context (architect 16:05 item 4, 22e016e0 bug B): "her" is the person in
+  # focus; a near tie goes to the pinned recipient or one of this call's people, never silently
+  # to someone else.
+  defp recipient(ctx, p, said, card, text, d) do
     said = if is_binary(said), do: String.trim(said, " .,!?"), else: ""
-    said = if said == "" or no_name?(said) or author?(ctx, said, text), do: "", else: said
+    pronoun? = said != "" and no_name?(said)
+    said = if said == "" or pronoun? or author?(ctx, said, text), do: "", else: said
     cands = p.to_candidates || []
 
     cond do
       said == "" and cands != [] ->
         pick(p, cands, text)
 
+      said == "" and p.to != nil ->
+        p
+
+      said == "" and is_binary(card[:to]) ->
+        %{p | to: card[:to]}
+
+      said == "" and pronoun? and Dialogue.focus(d) != nil ->
+        %{p | to: Dialogue.focus(d)}
+
       said == "" ->
-        if p.to == nil and is_binary(card[:to]), do: %{p | to: card[:to]}, else: p
+        p
 
       cands != [] and pick(p, cands, said).to != nil ->
         pick(p, cands, said)
@@ -534,11 +1093,16 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         %{p | to: card[:to], to_candidates: []}
 
       true ->
-        case FindContact.decide(FindContact.find(said, FindContact.people(ctx.user_id))) do
-          {:one, %{name: n}} -> %{p | to: n, to_candidates: [], said: said}
-          {:pick, xs} -> %{p | to: nil, to_candidates: Enum.map(xs, & &1.name), said: said}
+        case contact(said, FindContact.people(ctx.user_id), d) do
+          {:one, %{name: n, user_id: id}} ->
+            %{p | to: n, to_id: id, to_candidates: [], said: said}
+
+          {:pick, xs} ->
+            %{p | to: nil, to_candidates: Enum.map(xs, & &1.name), said: said}
+
           # Not one of their people (≥ 0.6): the name as said (the turn checks it again).
-          :none -> %{p | to: said, to_candidates: [], said: said}
+          :none ->
+            %{p | to: said, to_candidates: [], said: said}
         end
     end
   end
@@ -593,6 +1157,10 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   # caller's earlier words, else the task's text.
   defp message_body(ctx, dec, p, card, slot, text) do
     cond do
+      # "Message Kamal please." came back as the text: the request is no message (Risi asks).
+      dec.text != "" and request_words?(dec.text, p.to || dec.to) ->
+        message_body(ctx, %{dec | text: ""}, p, card, slot, text)
+
       dec.text != "" ->
         {dec.text, slot != "message_text"}
 
@@ -608,6 +1176,17 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
       true ->
         {p.text, false}
     end
+  end
+
+  defp request_words?(t, to) do
+    first =
+      to |> to_string() |> String.split() |> List.first() |> to_string() |> String.downcase()
+
+    Regex.match?(
+      ~r/^\W*(?:(?:can|could) you\s+|please\s+)?(?:send|message|text|write)\b/iu,
+      t
+    ) and (first != "" and String.contains?(String.downcase(t), first)) and
+      length(String.split(t)) <= 6
   end
 
   # The caller's last words that read as a message (≥ 4 words, not a request to Risi).
@@ -630,13 +1209,23 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   end
 
   @no_names ~w(you me myself him her them someone somebody anyone risi rishi it this that
-               yourself everyone nobody)
+               yourself everyone nobody she he they)
 
-  # "my friend", "a colleague": no name (Risi asks who).
+  # Architect 16:05 item 3: where a message goes is never a person (22e016e0: "I couldn't find
+  # work in your contacts").
+  @places ~w(work office official private personal home chat group)
+
+  # "my friend", "a colleague", "work", "the work chat": no name (Risi asks who, or uses the
+  # person in focus).
   defp no_name?(to) do
     t = String.downcase(String.trim(to, " .,!?"))
+    bare = Regex.replace(~r/^(?:the|my|our|her|his|a)\s+/u, t, "")
 
-    t in @no_names or
+    t in @no_names or bare in @places or
+      Regex.match?(
+        ~r/^(?:work|office|official|private|personal|group) (?:chat|tab|group)$/u,
+        bare
+      ) or
       Regex.match?(
         ~r/^(?:my|a|an|the|our|her|his) (?:friend|colleague|contact|person|someone)s?$/u,
         t
@@ -711,6 +1300,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
     cond do
       change? ->
+        correction(ctx, "card")
         clear_awaiting(ctx, d)
         noun = if route == "reminder", do: "reminder", else: "event"
         req = "Change the #{noun} I just asked you to add: " <> words

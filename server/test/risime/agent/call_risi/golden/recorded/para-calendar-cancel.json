@@ -3,218 +3,213 @@
     "what's my next meeting?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "What's my next meeting?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1473
+      "ms": 1592
     }
   },
   "para-calendar-cancel-02": {
     "when is my next meeting?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "When is my next meeting?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1539
+      "ms": 1573
     }
   },
   "para-calendar-cancel-03": {
     "do i have anything on today?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "Do I have anything on today?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1387
+      "ms": 1655
     }
   },
   "para-calendar-cancel-04": {
     "what time is my next appointment?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "What time is my next appointment?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1607
+      "ms": 1597
     }
   },
   "para-calendar-cancel-05": {
     "am i free this morning?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "Am I free this morning?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1440
+      "ms": 1638
     }
   },
   "para-calendar-cancel-06": {
     "what's on my calendar today?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "What's on my calendar today?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1411
+      "ms": 1593
     }
   },
   "para-calendar-cancel-07": {
     "hey risi, what's next on my schedule?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "what's next on my schedule?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1462
+      "ms": 1605
     }
   },
   "para-calendar-cancel-08": {
     "is there anything on my calendar this morning?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "Is there anything on my calendar this morning?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1442
+      "ms": 1696
     }
   },
   "para-calendar-cancel-09": {
     "tell me about my next meeting.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "Tell me about my next meeting.",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1522
+      "ms": 1597
     }
   },
   "para-calendar-cancel-10": {
     "when do i have to be somewhere next today?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
+        "confidence": 1,
         "request": "When do I have to be somewhere next today?",
-        "say": "",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1541
+      "ms": 1715
     }
   },
   "para-calendar-cancel-11": {
     "cancel that.": {
       "decision": {
         "action": "tool",
-        "cancel_open": true,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1334
+      "ms": 1388
     },
     "tell nimali good morning.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "Good morning",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1374
+      "ms": 1400
     }
   },
   "para-calendar-cancel-12": {
     "cancel that and say i'll be there in five minutes instead.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "cancel_open": true,
+        "confidence": 1,
+        "tab": "private",
         "text": "I'll be there in five minutes",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1616
+      "ms": 1784
     },
     "send nimali a message saying i'm on my way.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "I'm on my way.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1473
+      "ms": 1484
     }
   },
   "para-calendar-cancel-13": {
     "never mind, cancel it.": {
       "decision": {
         "action": "tool",
-        "cancel_open": true,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1287
+      "ms": 1399
     },
     "tell ruwan the meeting is at two.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "The meeting is at two.",
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1402
+      "ms": 1444
     }
   },
   "para-calendar-cancel-14": {
@@ -222,193 +217,194 @@
       "decision": {
         "action": "tool",
         "cancel_open": true,
-        "request": "",
-        "say": "",
-        "text": "Lunch at one.",
+        "confidence": 1,
+        "tab": "private",
+        "text": "Lunch at one",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1403
+      "ms": 1515
     },
     "message kamal: lunch at one.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "lunch at one.",
+        "confidence": 1,
+        "tab": "private",
+        "text": "lunch at one",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1372
+      "ms": 1423
     }
   },
   "para-calendar-cancel-15": {
     "can you send a message to nimali?": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1375
+      "ms": 1346
     },
     "cancel.": {
       "decision": {
         "action": "tool",
-        "cancel_open": true,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1392
+      "ms": 1387
+    },
+    "dictation| >> cancel.": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 535
     }
   },
   "para-calendar-cancel-16": {
     "no, cancel that. start a new message to ruwan saying i'll call tonight.": {
       "decision": {
         "action": "tool",
-        "cancel_open": true,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "",
         "text": "I'll call tonight.",
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1389
+      "ms": 1330
     },
     "tell nimali i'll call tonight.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "I'll call tonight.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1406
+      "ms": 1444
     }
   },
   "para-calendar-cancel-17": {
     "cancel that.": {
       "decision": {
         "action": "tool",
-        "cancel_open": true,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1268
+      "ms": 1404
     },
     "send her good morning instead.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "Good morning",
-        "to": "Nimali",
+        "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1377
+      "ms": 1379
     },
     "send nimali good night.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "Good night.",
+        "confidence": 0.95,
+        "tab": "private",
+        "text": "Good night",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1376
+      "ms": 1469
     }
   },
   "para-calendar-cancel-18": {
     "message ruwan that the shop is closed.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
-        "text": "the shop is closed.",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The shop is closed.",
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1386
+      "ms": 1430
     },
     "scratch that, say the shop opens at ten.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "request": "Message Ruwan that the shop opens at ten.",
+        "tab": "private",
         "text": "The shop opens at ten.",
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1442
+      "ms": 1851
     }
   },
   "para-calendar-cancel-19": {
     "cancel that please.": {
       "decision": {
         "action": "tool",
-        "cancel_open": true,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1367
+      "ms": 1412
     },
     "tell kamal i'm sick today.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "I'm sick today.",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1388
+      "ms": 1425
     }
   },
   "para-calendar-cancel-20": {
     "actually never mind, cancel it.": {
       "decision": {
         "action": "tool",
-        "cancel_open": true,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1389
+      "ms": 1125
+    },
+    "dictation| >> actually never mind, cancel it.": {
+      "decision": {
+        "text": "",
+        "tool": "instruction"
+      },
+      "ms": 538
     },
     "send a message to nimali.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
-        "request": "",
-        "say": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1293
+      "ms": 1346
     }
   }
 }

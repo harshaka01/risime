@@ -10,9 +10,19 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
                       | %{slot: "message_to", text}
                       | %{slot: "day", pending}
                       | %{slot: "answer", question}
-                      | %{slot: "message_pick", options} | %{slot: "message_confirm"},
-        pending: nil | %{task: "message", to, to_candidates, text, said}
+                      | %{slot: "message_pick", options} | %{slot: "message_confirm"}
+                      | %{slot: "send_confirm"},
+        pending: nil | %{task: "message", to, to_id, to_candidates, text, said, tab, fixed},
+        people: [name],      # the people of this call, the one in focus first
+        pinned: nil | name,  # a recipient the caller corrected to: wins every near tie
+        dictation: nil | %{to, tab, asked?}   # Risi is taking down a message
       }
+
+  **The call's people** (architect 16:05 item 4): every recipient a message of this call went to
+  (or Risi picked after asking) is kept, the one in focus first; a recipient the caller
+  corrected to ("Nimali, not Kamal") is `pinned`. find_contact's near ties go to them, and "her"
+  means the one in focus. A finished task (its card made, or a new request) never captures the
+  next words (16:05 item 2).
 
   **A pending task, not one slot** (architect 11:45): `pending` holds the message being made
   (`to`, the `to_candidates` heard as a near name, the `text`). A question Risi asks about it
@@ -25,7 +35,15 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   only when the caller's own words (or the open card's) carry it (`grounded?/2`).
   """
 
-  @empty %{card: nil, awaiting: nil, pending: nil}
+  @empty %{
+    card: nil,
+    awaiting: nil,
+    pending: nil,
+    people: [],
+    pinned: nil,
+    dictation: nil,
+    tabs: %{}
+  }
 
   @doc "A call's state before anything is open."
   def new, do: @empty
@@ -49,7 +67,7 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   def message_line(summary) when is_binary(summary) do
     case Regex.run(~r/^Send to (.+?) \((?:Private|Official)\):\s*(.+)$/su, summary) do
       [_, to, text] ->
-        "Here's your message to #{to}: #{quoted(text)} " <>
+        "Here's your message to #{to}: #{read_back(text)} " <>
           "Tap Send on the card in your Risi chat to send it, or tell me what to change."
 
       _ ->
@@ -61,8 +79,8 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
 
   @doc "The recipient and text of a message card's summary, or nil."
   def message_parts(summary) when is_binary(summary) do
-    case Regex.run(~r/^Send to (.+?) \((?:Private|Official)\):\s*(.+)$/su, summary) do
-      [_, to, text] -> %{to: to, text: String.trim(text)}
+    case Regex.run(~r/^Send to (.+?) \((Private|Official)\):\s*(.+)$/su, summary) do
+      [_, to, tab, text] -> %{to: to, tab: String.downcase(tab), text: String.trim(text)}
       _ -> nil
     end
   end
@@ -181,7 +199,20 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
 
   @doc "A new message task."
   def message_task(fields \\ %{}),
-    do: Map.merge(%{task: "message", to: nil, to_candidates: [], text: nil, said: nil}, fields)
+    do:
+      Map.merge(
+        %{
+          task: "message",
+          to: nil,
+          to_id: nil,
+          to_candidates: [],
+          text: nil,
+          said: nil,
+          tab: nil,
+          fixed: nil
+        },
+        fields
+      )
 
   @doc """
   True for words that don't answer anything ("Hello?", "Sorry?", "What?", "Can you hear me?"):
@@ -301,11 +332,25 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
     Regex.match?(
       ~r/^(?:yes|yeah|yep|yup|ya|sure|ok|okay|correct|right|exactly|that'?s (?:right|correct|it|fine)|that is (?:right|correct)|go ahead|please do|do it|put it|draft it|perfect|absolutely)\b/u,
       t
-    ) and not Regex.match?(~r/\b(?:but|wait|change|not|no|instead|wrong)\b/u, t) and
+    ) and not Regex.match?(~r/\b(?:but|wait|change|not|no|instead|wrong|fix|edit|modify)\b/u, t) and
       length(String.split(t)) <= 8
   end
 
   def yes?(_), do: false
+
+  @doc "A yes to \"Shall I fix the misheard words?\" (\"Yes, fix them\", \"Please fix it\")."
+  def fix_yes?(text) when is_binary(text) do
+    t = text |> String.downcase() |> String.trim()
+
+    yes?(t) or
+      (Regex.match?(
+         ~r/^(?:(?:yes|yeah|yep|ok|okay|sure|please)[,.!]?\s+)*(?:please\s+)?(?:fix|correct)\b/u,
+         t
+       ) and not Regex.match?(~r/\b(?:don'?t|do not|no|not)\b/u, t) and
+         length(String.split(t)) <= 6)
+  end
+
+  def fix_yes?(_), do: false
 
   @doc "A bare no to Risi's yes-or-no question (\"No.\", \"No, that's wrong\")."
   def no?(text) when is_binary(text) do
@@ -357,6 +402,14 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   def awaiting_line(%{awaiting: %{slot: "message_confirm"}, pending: %{to: to, text: t}}),
     do: "a yes or no: Risi read back the message to #{to}: \"#{t}\" and asked to put it on a card"
 
+  def awaiting_line(%{awaiting: %{slot: "send_confirm", to: to}}),
+    do:
+      "a yes or no: Risi read back the message to #{to} and asked \"Send it?\" " <>
+        "(yes = confirm_open; a change = message_draft)"
+
+  def awaiting_line(%{awaiting: %{slot: "fix_confirm"}}),
+    do: "a yes or no: Risi asked whether to fix the misheard words of the message"
+
   def awaiting_line(%{awaiting: %{slot: "day", pending: p}}),
     do: "the day for this request: \"#{p}\" (Risi asked which day)"
 
@@ -379,6 +432,111 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   end
 
   def pending_line(_), do: "none"
+
+  ## The people of this call (architect 16:05 item 4)
+
+  @doc "The person in focus (the pinned one, else the last recipient of this call), or nil."
+  def focus(%{pinned: p}) when is_binary(p), do: p
+  def focus(%{people: [p | _]}), do: p
+  def focus(_), do: nil
+
+  @doc "`name` is now in focus (first); `pin?` pins it (a correction)."
+  def add_person(d, name, pin? \\ false)
+
+  def add_person(d, name, pin?) when is_binary(name) and name != "" do
+    d = get(d)
+    d = %{d | people: [name | Enum.reject(d.people, &(&1 == name))] |> Enum.take(5)}
+    if pin?, do: %{d | pinned: name}, else: d
+  end
+
+  def add_person(d, _name, _pin?), do: get(d)
+
+  @doc """
+  The chat the caller chose for `name` in this call ("send it to work" once: the next messages to
+  that person on the call go to Official too), or nil.
+  """
+  def tab_for(d, name) when is_binary(name), do: Map.get(get(d).tabs || %{}, name)
+  def tab_for(_d, _name), do: nil
+
+  @doc "Remembers the chat chosen for `name` (Official or Private)."
+  def remember_tab(d, name, tab) when is_binary(name) and tab in ["official", "private"],
+    do: %{get(d) | tabs: Map.put(get(d).tabs || %{}, name, tab)}
+
+  def remember_tab(d, _name, _tab), do: get(d)
+
+  @doc "The call's people, in one line for the model."
+  def people_line(%{people: [_ | _] = ps} = d) do
+    pinned = if is_binary(d[:pinned]), do: " (#{d.pinned} confirmed by the user)", else: ""
+    "#{Enum.join(ps, ", ")}; in focus: #{focus(d)}#{pinned}"
+  end
+
+  def people_line(_), do: "none yet"
+
+  @doc """
+  The composed dictation without its end signal at the very end ("… and that is the message I
+  want sent.", "Okay, that's it."): the caller's words for Risi, never message text.
+  """
+  def strip_end(text) when is_binary(text) do
+    Regex.replace(
+      ~r/(?:^|(?<=[.!?,;])|\s+(?:and|so)\b)\s*(?:(?:and|so|okay|ok|yeah|right)[,.]?\s+)*(?:that'?s it|that is it|that'?s all|that is all|all done|i'?m done|done|okay|ok|that'?s the message|that is the message(?: that)?(?: i want)?(?: to (?:get it |be |have it )?sent| sent)?|send it|i told you (?:exactly )?what (?:needs|i want) to be said)[\s.!]*$/iu,
+      String.trim(text),
+      ""
+    )
+    |> String.trim()
+    |> case do
+      "" -> String.trim(text)
+      t -> if Regex.match?(~r/[.?!]$/u, t), do: t, else: t <> "."
+    end
+  end
+
+  def strip_end(_), do: ""
+
+  @doc "True when the words carry an end signal (\"that's it\", \"all done\", \"that's the message\" …)."
+  def end_signal?(text) when is_binary(text) do
+    strip_end(text) !=
+      String.trim(text) |> then(&if(Regex.match?(~r/[.?!]$/u, &1), do: &1, else: &1 <> ".")) or
+      Regex.match?(
+        ~r/\b(?:that'?s it|that is it|that'?s all|that is all|all done|i'?m done|that'?s the message|that is the message|i told you (?:exactly )?what)\b/iu,
+        text
+      )
+  end
+
+  def end_signal?(_), do: false
+
+  ## Lines
+
+  @doc "What Risi says for a request no tool covers (architect 16:05 item 6)."
+  def unsupported_line,
+    do:
+      "I can't do that yet. On a call I can read your calendar, your promises and your Official " <>
+        "messages, add events and reminders, and draft or send messages for you."
+
+  @doc """
+  The read-back of a message Risi may send itself (contract v1.55 §41.11): "I'll send Nimali on
+  Official: '…'. Send it?". A long text is read as one line (its start, then how much more).
+  """
+  def send_question(to, text), do: "I'll send #{to} on Official: #{read_back(text)} Send it?"
+
+  @doc "A message text read back: whole when short, else its first words and how many more."
+  def read_back(text) do
+    w = String.split(String.trim(text))
+
+    if length(w) > 30,
+      do:
+        quoted(Enum.join(Enum.take(w, 22), " ") <> " …") <> " And #{length(w) - 22} more words.",
+      else: quoted(text)
+  end
+
+  @doc "When the caller asks Risi to send a Private message now (only their tap sends it)."
+  def private_tap_line(to) do
+    who = if is_binary(to) and to != "", do: "your Private chat with #{to}", else: "your chat"
+
+    "I can only draft it for #{who}. Tap Send on the card in your Risi chat to send it."
+  end
+
+  @doc "Risi asks whether to use the corrected text (a dictation with misheard words)."
+  def fix_question(fixed),
+    do: "Some words may be misheard. Shall I fix them? It would say: #{read_back(fixed)}"
 
   ## Fragments (architect P0 C)
 

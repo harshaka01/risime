@@ -1,0 +1,262 @@
+{
+  "para-list-contacts-01": {
+    "tell me 10 names in my contacts.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1328
+    }
+  },
+  "para-list-contacts-02": {
+    "who is in my contacts?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1326
+    }
+  },
+  "para-list-contacts-03": {
+    "read me some of my contacts.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1323
+    }
+  },
+  "para-list-contacts-04": {
+    "can you list my contacts?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1336
+    }
+  },
+  "para-list-contacts-05": {
+    "what names do you have in my contact list?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1354
+    }
+  },
+  "para-list-contacts-06": {
+    "give me a few names from my contacts.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1331
+    }
+  },
+  "para-list-contacts-07": {
+    "who can i send messages to?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1331
+    }
+  },
+  "para-list-contacts-08": {
+    "list the people in my risime contacts.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1349
+    }
+  },
+  "para-list-contacts-09": {
+    "just tell me ten names in my contacts.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1337
+    }
+  },
+  "para-list-contacts-10": {
+    "which contacts do i have?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1325
+    }
+  },
+  "para-list-contacts-11": {
+    "name some of my contacts please.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1326
+    }
+  },
+  "para-list-contacts-12": {
+    "tell me who's in my address book.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1329
+    }
+  },
+  "para-list-contacts-13": {
+    "who are my risime friends?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1364
+    }
+  },
+  "para-list-contacts-14": {
+    "read out my contacts.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1316
+    }
+  },
+  "para-list-contacts-15": {
+    "hmm, who do i have in contacts?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1344
+    }
+  },
+  "para-list-contacts-16": {
+    "show me my contacts, names only.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1232
+    }
+  },
+  "para-list-contacts-17": {
+    "can you tell me the names of my contacts?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1345
+    }
+  },
+  "para-list-contacts-18": {
+    "what contacts are there?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1339
+    }
+  },
+  "para-list-contacts-19": {
+    "tell me my contact names.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1325
+    }
+  },
+  "para-list-contacts-20": {
+    "okay, list ten contacts for me.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "list_contacts"
+      },
+      "ms": 1333
+    }
+  }
+}

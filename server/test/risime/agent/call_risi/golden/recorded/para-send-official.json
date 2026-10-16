@@ -1,0 +1,343 @@
+{
+  "para-send-official-01": {
+    "tell nimali on work that the meeting moved to three.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The meeting moved to three.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1473
+    }
+  },
+  "para-send-official-02": {
+    "send ruwan a message on the official chat: the car is ready.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "the car is ready.",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1456
+    }
+  },
+  "para-send-official-03": {
+    "message kamal at work, the printer is fixed.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The printer is fixed.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1439
+    }
+  },
+  "para-send-official-04": {
+    "tell nimali in the office chat that i'll be late.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "I'll be late.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1465
+    }
+  },
+  "para-send-official-05": {
+    "send it to work: tell ruwan the report is done.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "official",
+        "text": "The report is done.",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1482
+    },
+    "undo that.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "undo_send"
+      },
+      "ms": 1408
+    }
+  },
+  "para-send-official-06": {
+    "tell kamal on official, and just send it, yes, that lunch is at one.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "official",
+        "text": "That lunch is at one.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1503
+    }
+  },
+  "para-send-official-07": {
+    "tell ruwan at work that his salary will be paid on monday.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "Your salary will be paid on Monday.",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1515
+    },
+    "yes, send it.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "Your salary will be paid on Monday.",
+        "to": "Ruwan Silva",
+        "tool": "confirm_open"
+      },
+      "ms": 1739
+    }
+  },
+  "para-send-official-08": {
+    "message kamal on work: you lied to the client and i'm calling a lawyer.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "you lied to the client and I'm calling a lawyer.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1452
+    }
+  },
+  "para-send-official-09": {
+    "tell nimali on official to delete the old files.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "Please delete the old files.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1475
+    }
+  },
+  "para-send-official-10": {
+    "tell kamal on work that the meeting is at four.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The meeting is at four.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1456
+    }
+  },
+  "para-send-official-11": {
+    "tell nimali on work that the meeting moved to three.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The meeting moved to three.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1214
+    },
+    "yes, send it.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The meeting moved to three.",
+        "to": "Nimali Perera",
+        "tool": "confirm_open"
+      },
+      "ms": 1748
+    }
+  },
+  "para-send-official-12": {
+    "send it to work.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "confidence": 0.9,
+        "request": "Send the message 'The keys are on the desk.' to Ruwan Silva via the work chat.",
+        "tab": "official",
+        "text": "The keys are on the desk.",
+        "to": "Ruwan Silva",
+        "tool": "message_draft"
+      },
+      "ms": 2262
+    },
+    "tell ruwan the keys are on the desk.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The keys are on the desk.",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1466
+    }
+  },
+  "para-send-official-13": {
+    "can you send a message to nimali, work chat, saying the review starts at ten?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "the review starts at ten",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1257
+    },
+    "wait, make it eleven.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The review starts at eleven",
+        "to": "Nimali Perera",
+        "tool": "message_draft"
+      },
+      "ms": 1591
+    }
+  },
+  "para-send-official-14": {
+    "oh no, undo that please.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "undo_send"
+      },
+      "ms": 1397
+    },
+    "tell kamal at the office that i'm on my way.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "I'm on my way.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1457
+    }
+  },
+  "para-send-official-15": {
+    "send it to work.": {
+      "decision": {
+        "action": "tool",
+        "cancel_open": false,
+        "confidence": 0.9,
+        "tab": "official",
+        "text": "",
+        "to": "",
+        "tool": "message_draft"
+      },
+      "ms": 1451
+    }
+  },
+  "para-send-official-16": {
+    "tell ruvan on official that the shop opens at ten.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.95,
+        "tab": "official",
+        "text": "The shop opens at ten.",
+        "to": "Ruvan",
+        "tool": "message_draft"
+      },
+      "ms": 1512
+    }
+  },
+  "para-send-official-17": {
+    "message nima lee at work, thanks for the update.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "Thanks for the update.",
+        "to": "Nima Lee",
+        "tool": "message_draft"
+      },
+      "ms": 1451
+    }
+  },
+  "para-send-official-18": {
+    "tell ruwan at work he's fired and must return the laptop.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "You're fired and must return the laptop.",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1524
+    }
+  },
+  "para-send-official-19": {
+    "hmm, no, don't send it yet.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "Okay, I've cancelled that. What would you like to do instead?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "cancel_open"
+      },
+      "ms": 1948
+    },
+    "tell kamal on official, the courier will come at five.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "official",
+        "text": "The courier will come at five.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1233
+    }
+  },
+  "para-send-official-20": {
+    "undo that.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "undo_send"
+      },
+      "ms": 1319
+    }
+  }
+}

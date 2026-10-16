@@ -207,6 +207,20 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
   defmodule Script do
     @behaviour RisiMe.Agent.CallRisi.Decider
     @impl true
+    # The dictation check (an answer to "What should I say to …?"): "Hello?" is no text; anything
+    # else is the whole message, as risi-l1 decides it (or the script's "dictation: <words>").
+    def decide(%{mode: :dictation} = input, _ctx) do
+      case Map.get(:persistent_term.get({__MODULE__, :script}), "dictation: " <> input.text) do
+        %{} = d ->
+          {:ok, d}
+
+        nil ->
+          if RisiMe.Agent.CallRisi.Dialogue.non_answer?(input.text),
+            do: {:ok, %{"tool" => "instruction"}},
+            else: {:ok, %{"tool" => "end", "text" => Enum.join(input.parts ++ [input.text], " ")}}
+      end
+    end
+
     def decide(input, _ctx) do
       send(:persistent_term.get({__MODULE__, :test}), {:decided, input.text, input.dialogue})
 
@@ -387,10 +401,9 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     assert said(pid, 1) == "What should I say to Nimali?"
     refute_received {:turn_run, _}
 
+    # The answer is taken down as dictation (one check, no turn decision).
     utter(pid, 2, "Good morning, and I'm testing this.")
-    assert_receive {:decided, "Good morning, and I'm testing this.", d}, 2_000
-    assert %{slot: "message_text", to: "Nimali"} = d.awaiting
-    assert_receive {:turn_run, env}, 2_000
+    assert_receive {:turn_run, env}, 3_000
     assert env[:call_send] == %{"to" => "Nimali", "text" => "Good morning, and I'm testing this."}
     line = said(pid, 2)
     assert line =~ "Tap Send"
@@ -698,16 +711,14 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     assert env[:call_send] == %{"to" => "Shenika Fernando", "text" => "I'll be late."}
   end
 
-  test "a reworded text that doesn't match is read back and confirmed; yes drafts it" do
+  test "dictation: a text the model made up is never drafted; the caller's words are" do
     Application.put_env(:risime, :risi_contacts, fn _ -> [{"u1", "Nimali Perera"}] end)
     pid = call!()
 
     script(%{
       "Message Nimali." => %{"tool" => "message_draft", "action" => "tool", "to" => "Nimali"},
-      "Tell her the meeting moved." => %{
-        "tool" => "message_draft",
-        "action" => "tool",
-        "to" => "Nimali",
+      "dictation: Tell her the meeting moved." => %{
+        "tool" => "end",
         "text" => "Hi Nimali, our sync has been rescheduled to Friday."
       }
     })
@@ -716,13 +727,37 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     assert said(pid, 1) == "What should I say to Nimali Perera?"
 
     utter(pid, 2, "Tell her the meeting moved.")
+
+    assert_receive {:turn_run,
+                    %{call_send: %{"to" => "Nimali Perera", "text" => "The meeting moved."}}},
+                   3_000
+  end
+
+  test "dictation: misheard words are offered as a fix first; yes drafts the fixed text" do
+    Application.put_env(:risime, :risi_contacts, fn _ -> [{"u1", "Nimali Perera"}] end)
+    pid = call!()
+
+    script(%{
+      "Message Nimali." => %{"tool" => "message_draft", "action" => "tool", "to" => "Nimali"},
+      "dictation: See whether a receipt can send it." => %{
+        "tool" => "end",
+        "text" => "See whether a receipt can send it.",
+        "text_fixed" => "See whether Risi can send it."
+      }
+    })
+
+    utter(pid, 1, "Message Nimali.")
+    assert said(pid, 1) == "What should I say to Nimali Perera?"
+    utter(pid, 2, "See whether a receipt can send it.")
     line = said(pid, 2)
-    assert line =~ "I'll send Nimali Perera:"
-    assert line =~ "Shall I put it on a card?"
+    assert line =~ "Shall I fix them?"
+    assert line =~ "See whether Risi can send it."
     refute_received {:turn_run, _}
 
-    utter(pid, 3, "Yes.")
-    assert_receive {:turn_run, %{call_send: %{"to" => "Nimali Perera"}}}, 3_000
+    utter(pid, 3, "Yes, fix them.")
+
+    assert_receive {:turn_run, %{call_send: %{"text" => "See whether Risi can send it."}}},
+                   3_000
   end
 
   test "the model asking the same question twice: the second time Risi says what it heard" do

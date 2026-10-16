@@ -1,0 +1,330 @@
+{
+  "para-calendar-add-01": {
+    "add a meeting with the bank tomorrow from 4 to 5 pm.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add a meeting with the bank tomorrow from 4 to 5 pm.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1778
+    }
+  },
+  "para-calendar-add-02": {
+    "put racing discussion on my calendar on sunday at 9.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Put racing discussion on my calendar on Sunday at 9.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1700
+    }
+  },
+  "para-calendar-add-03": {
+    "can you block 10 to 12 tomorrow for the budget review?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "block 10 to 12 tomorrow for the budget review",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1813
+    }
+  },
+  "para-calendar-add-04": {
+    "schedule a call with kamal on monday at three.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Schedule a call with Kamal on Monday at three.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1681
+    }
+  },
+  "para-calendar-add-05": {
+    "add dentist appointment on the 20th at 6 pm.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add dentist appointment on the 20th at 6 pm.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1758
+    }
+  },
+  "para-calendar-add-06": {
+    "add a meeting with the auditors from 2 to 3.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add a meeting with the auditors from 2 to 3.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1815
+    },
+    "tomorrow.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add a meeting with the auditors from 2 to 3 on Saturday 17 October 2026.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 2009
+    }
+  },
+  "para-calendar-add-07": {
+    "on saturday.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Put a team lunch on my calendar on Saturday at one.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1664
+    },
+    "put a team lunch on my calendar at one.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Put a team lunch on my calendar at one on Friday 16 October 2026.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1873
+    }
+  },
+  "para-calendar-add-08": {
+    "book tomorrow 9 am for the site visit, one hour.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Book tomorrow 9 am for the site visit, one hour.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1812
+    }
+  },
+  "para-calendar-add-09": {
+    "add an event, discuss racing, today from 9 to 10.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add an event, discuss racing, today from 9 to 10.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1796
+    }
+  },
+  "para-calendar-add-10": {
+    "i need a slot on friday next week at 11 for interviews.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "I need a slot on Friday next week at 11 for interviews.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1786
+    }
+  },
+  "para-calendar-add-11": {
+    "make an appointment with the doctor tomorrow at 5.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Make an appointment with the doctor tomorrow at 5.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1689
+    }
+  },
+  "para-calendar-add-12": {
+    "add to my calendar: vendor meeting on monday, 10 to 11.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add to my calendar: vendor meeting on Monday, 10 to 11.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1837
+    }
+  },
+  "para-calendar-add-13": {
+    "can you put the board call tomorrow evening at 7?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "put the board call tomorrow evening at 7",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1761
+    }
+  },
+  "para-calendar-add-14": {
+    "add a meeting tomorrow from 4 to 5.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add a meeting tomorrow from 4 to 5.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1693
+    },
+    "make it 5 to 6 instead.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add a meeting tomorrow from 5 to 6.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1496
+    }
+  },
+  "para-calendar-add-15": {
+    "please add 'call the bank' on sunday at noon.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "call the bank on Sunday at noon",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "reminder_add"
+      },
+      "ms": 1625
+    }
+  },
+  "para-calendar-add-16": {
+    "block my whole day on the 18th.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Block my whole day on the 18th.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1820
+    }
+  },
+  "para-calendar-add-17": {
+    "add a meeting with ruwan at 3.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Add a meeting with Ruwan at 3.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1772
+    },
+    "monday.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add a meeting with Ruwan at 3 on Monday.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1751
+    }
+  },
+  "para-calendar-add-18": {
+    "set up a meeting, um, for tomorrow at ten, for the risd review.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Set up a meeting, um, for tomorrow at ten, for the RISD review.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1900
+    }
+  },
+  "para-calendar-add-19": {
+    "add tomorrow 2 pm, interview with a candidate.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add tomorrow 2 pm, interview with a candidate.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1682
+    }
+  },
+  "para-calendar-add-20": {
+    "add a meeting on sunday from 9 to 10, discuss racing.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Add a meeting on Sunday from 9 to 10, discuss racing.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "calendar_add"
+      },
+      "ms": 1796
+    }
+  }
+}

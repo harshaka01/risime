@@ -1,0 +1,188 @@
+{
+ "id": "harsha-2026-10-16-call-10",
+ "golden_id": "call-10-2026-10-16-1020z",
+ "lang": "en",
+ "script": "latin",
+ "brain": "v3",
+ "tags": [
+  "multi_turn",
+  "pilot_replay",
+  "message",
+  "official",
+  "voice_send",
+  "undo",
+  "dictation",
+  "find_contact",
+  "call_context",
+  "misheard_name",
+  "noise"
+ ],
+ "now": "2026-10-16T10:20:00Z",
+ "src": "synthetic",
+ "note": "Harsha's call 22e016e0 (16 Oct 10:20Z, 5:17, srv6; he tapped Problems; architect 16:05 SLT, golden #10), his words from the Risi chat transcript. Anonymised: his friend Shenika is Nimali Perera, the other near name (Bhanu Senanayake) is Kasun Senaratne; Whisper's spellings of Shenika (Seneca, Sineka, Shinneka, Srinikar) are 'Senamali', 'Senarali', 'Nimaly', 'Neemara' here, chosen to score against the two names as the real ones do. Was: 'send it to work' → 'I couldn't find work in your contacts'; 'Sineka' silently drafted to the other person although Shenika was this call's recipient; 'that is the message I want sent' at the end of a long dictation → 'I can't send it from the call'; 'I'm listening. Please go ahead.' twice; every pause-split utterance restarted the turn. Turns 13–14 add the v1.55 §41.11 flow he asked for (send it on Official by voice, undo); the speech-fix question is covered by its unit test (dictation_test.exs).",
+ "voice_send": true,
+ "turns": [
+  {
+   "say": "Can you tell her that this is a test message from me and then send it to work? so that you can't access the personal one so just send it to work and you can send directly",
+   "expect": {
+    "route": "message_write",
+    "no_send": true,
+    "must": [
+     "Who"
+    ],
+    "must_not": [
+     "couldn't find work",
+     "in your contacts"
+    ]
+   }
+  },
+  {
+   "say": "Yeah, I have sent a draft to Senamali.",
+   "expect": {
+    "must_not": [
+     "couldn't find",
+     "work"
+    ],
+    "no_filler": true
+   }
+  },
+  {
+   "say": "No. What you need to do is to send a message to Nimali.",
+   "expect": {
+    "route": "message_write",
+    "send_to": "Nimali",
+    "send_has": [
+     "test message"
+    ],
+    "send_tab": "official",
+    "must": [
+     "Send it?"
+    ],
+    "must_not": [
+     "What should I say",
+     "Tap Add",
+     "couldn't find"
+    ]
+   }
+  },
+  {
+   "say": "So now can you send another message to Senarali? And can you tell her that I'm going to send another text message? and just testing how it receives sending the messages.",
+   "expect": {
+    "route": "message_write",
+    "send_to": "Nimali",
+    "send_has": [
+     "another text message"
+    ],
+    "must_not": [
+     "Kasun",
+     "What should I say"
+    ]
+   }
+  },
+  {
+   "say": "So actually the message has to say, send it to Nimaly, not to Kasun.",
+   "expect": {
+    "route": "message_write",
+    "must": [
+     "Nimali"
+    ],
+    "must_not": [
+     "Kasun"
+    ]
+   }
+  },
+  {
+   "say": "Now let's redraft it. Let me draft the message back again. Let's try to draft a... bigger message. Okay, so the message is going to be. Hi, Nimali. How are you? What are you doing? What time are you going home?",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "can't send",
+     "Here's your message"
+    ]
+   }
+  },
+  {
+   "say": "You know, I'm pissing greasy.",
+   "noise": false,
+   "expect": {
+    "silent": true,
+    "no_send": true
+   }
+  },
+  {
+   "say": "and I'm proud to see how RISD can send these messages. I'm just testing with the resequence and long messages. and whether the long messages are getting right or getting wrong. and that is the message that I want to get it sent.",
+   "expect": {
+    "must_any": [
+     "Send it?",
+     "Tap Send",
+     "Shall I fix"
+    ],
+    "send_has_not": [
+     "pissing",
+     "that is the message"
+    ],
+    "must_not": [
+     "can't send it from the call",
+     "I'm listening"
+    ]
+   }
+  },
+  {
+   "say": "No. Risi, I wanted to send an answer. Just modify the message. So, let me start the message, Neemara. Right? So the message should stray. Hi, Senamali. How are you? And good morning. And good afternoon.",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "can't send it from the call"
+    ]
+   }
+  },
+  {
+   "say": "and just say, let me finish the whole thing and then I'm trying to make sure that I'm doing",
+   "expect": {
+    "silent": true,
+    "no_send": true
+   }
+  },
+  {
+   "say": "All right. So listen until, when I say okay, until that time, you just listen to me. So, hi, Nimali. How are you? Are you going home or are you staying at work? While I'm here going home. I'm actually writing this. Just to send a long message to you and to see whether a receipt can send. really cool messages or not.",
+   "expect": {
+    "silent": true,
+    "no_send": true
+   }
+  },
+  {
+   "say": "Yeah, it's all done now. So I told you exactly what needs to be said.",
+   "expect": {
+    "must_any": [
+     "Send it?",
+     "Shall I fix"
+    ],
+    "send_has_not": [
+     "that is the message"
+    ],
+    "must_not": [
+     "I'm listening",
+     "can't send it from the call"
+    ]
+   }
+  },
+  {
+   "say": "Yes, send it.",
+   "expect": {
+    "voice_sent": "Nimali",
+    "must": [
+     "Sent."
+    ]
+   }
+  },
+  {
+   "say": "Undo that.",
+   "expect": {
+    "undone": true,
+    "must": [
+     "Undone"
+    ]
+   }
+  }
+ ]
+}

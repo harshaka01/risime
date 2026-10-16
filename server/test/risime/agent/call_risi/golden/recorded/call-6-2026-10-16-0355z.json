@@ -2,121 +2,108 @@
   "can you send a message to nimali?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "tab": "private",
       "text": "",
       "to": "Nimali",
       "tool": "message_draft"
     },
-    "ms": 1301
+    "ms": 1185
   },
   "cancel that.": {
     "decision": {
       "action": "tool",
-      "cancel_open": true,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "cancel_open"
     },
-    "ms": 1379
+    "ms": 1219
   },
-  "good morning, and i'm just testing whether you can send a message on behalf of me.": {
+  "dictation| >> good morning, and i'm just testing whether you can send a message on behalf of me.": {
     "decision": {
-      "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
       "text": "Good morning, and I'm just testing whether you can send a message on behalf of me.",
-      "to": "Nimali Perera",
-      "tool": "message_draft"
+      "tool": "more"
     },
-    "ms": 1766
+    "ms": 910
+  },
+  "dictation| >> no, just. cancel that and then start a new message i'll tell you the message and listen to my message first just say, good morning, nimali. how are you doing? and this is written by risi and then published by me.": {
+    "decision": {
+      "text": "good morning, Nimali. How are you doing? And this is written by Risi and then published by me.",
+      "tool": "restart"
+    },
+    "ms": 1023
   },
   "how are you doing?": {
     "decision": {
       "action": "reply",
-      "cancel_open": false,
-      "request": "",
+      "confidence": 1,
       "say": "I'm doing well, thank you. How are you?",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "none"
     },
-    "ms": 1441
-  },
-  "no, just. cancel that and then start a new message i'll tell you the message and listen to my message first just say, good morning, nimali. how are you doing? and this is written by risi and then published by me.": {
-    "decision": {
-      "action": "tool",
-      "cancel_open": true,
-      "request": "",
-      "say": "",
-      "text": "Good morning, Nimali. How are you doing? And this is written by Risi and then published by me.",
-      "to": "Nimali Perera",
-      "tool": "message_draft"
-    },
-    "ms": 1863
+    "ms": 1787
   },
   "no, no, no... i want to send a message to nimali. so you should ask, like, what is the message should be? and then i'll tell you...": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "cancel_open": true,
+      "confidence": 1,
+      "tab": "",
       "text": "",
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 1387
+    "ms": 1817
   },
   "rishi, what else can you do?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1285
+    "ms": 1422
   },
   "we see i'm asking to send a message to nimali. but the content should be, hey, how are you doing? this is a message just to make sure. receive and send a message to you.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "cancel_open": true,
+      "confidence": 0.9,
+      "request": "send a message to Nimali",
+      "tab": "private",
       "text": "hey, how are you doing? This is a message just to make sure. receive and send a message to you.",
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 1849
+    "ms": 2062
   },
   "what time do i have the next meeting?": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
+      "confidence": 1,
       "request": "What time do I have the next meeting?",
-      "say": "",
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1492
+    "ms": 1760
   },
   "yes, send it.": {
     "decision": {
       "action": "tool",
-      "cancel_open": false,
-      "request": "",
-      "say": "",
+      "confidence": 1,
+      "tab": "",
       "text": "",
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1409
+    "ms": 1477
   }
 }

@@ -1,0 +1,281 @@
+{
+  "para-my-promises-01": {
+    "what did i promise?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What did I promise?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1683
+    }
+  },
+  "para-my-promises-02": {
+    "what are my open promises?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What are my open promises?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1689
+    }
+  },
+  "para-my-promises-03": {
+    "what do i have to do, my to-dos?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What do I have to do, my to-dos?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1824
+    }
+  },
+  "para-my-promises-04": {
+    "what did i promise today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What did I promise today?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1695
+    }
+  },
+  "para-my-promises-05": {
+    "any promises due tomorrow?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Any promises due tomorrow?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1602
+    }
+  },
+  "para-my-promises-06": {
+    "did i promise anything to kamal?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did I promise anything to Kamal?",
+        "tab": "",
+        "text": "",
+        "to": "Kamal",
+        "tool": "promises_by"
+      },
+      "ms": 1578
+    }
+  },
+  "para-my-promises-07": {
+    "what have i committed to?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What have I committed to?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1687
+    }
+  },
+  "para-my-promises-08": {
+    "remind me what i said i'd do.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Remind me what I said I'd do.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1785
+    }
+  },
+  "para-my-promises-09": {
+    "hmm, what was it i promised everyone?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "what was it I promised everyone?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1733
+    }
+  },
+  "para-my-promises-10": {
+    "what did i promise?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What did I promise?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1420
+    }
+  },
+  "para-my-promises-11": {
+    "my promises for today, please.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "My promises for today, please.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1713
+    }
+  },
+  "para-my-promises-12": {
+    "what are my follow-ups this week?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What are my follow-ups this week?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1667
+    }
+  },
+  "para-my-promises-13": {
+    "do i owe anyone anything?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Do I owe anyone anything?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1692
+    }
+  },
+  "para-my-promises-14": {
+    "what's on my to-do list?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What's on my to-do list?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1741
+    }
+  },
+  "para-my-promises-15": {
+    "list my promises.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1345
+    }
+  },
+  "para-my-promises-16": {
+    "did i promise anything today or tomorrow?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did I promise anything today or tomorrow?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1734
+    }
+  },
+  "para-my-promises-17": {
+    "anything i promised for monday?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Anything I promised for Monday?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1611
+    }
+  },
+  "para-my-promises-18": {
+    "tell me my commitments.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Tell me my commitments.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1694
+    }
+  },
+  "para-my-promises-19": {
+    "what did i say i would do for nimali?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "What did I say I would do for Nimali?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1782
+    }
+  },
+  "para-my-promises-20": {
+    "okay so what are the things i promised?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "what are the things I promised?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "my_promises"
+      },
+      "ms": 1484
+    }
+  }
+}

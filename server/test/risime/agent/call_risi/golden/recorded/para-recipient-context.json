@@ -1,0 +1,477 @@
+{
+  "para-recipient-context-01": {
+    "send another message to senarali saying bring the files.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "Bring the files.",
+        "to": "Senarali",
+        "tool": "message_draft"
+      },
+      "ms": 1505
+    },
+    "tell nimali the meeting is at three.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The meeting is at three.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1465
+    }
+  },
+  "para-recipient-context-02": {
+    "and send her another one saying thanks.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "Thanks",
+        "to": "Nimali Perera",
+        "tool": "message_draft"
+      },
+      "ms": 1504
+    },
+    "tell nimali the report is ready.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The report is ready.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1456
+    }
+  },
+  "para-recipient-context-03": {
+    "send him another one saying bring the keys.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "Bring the keys.",
+        "to": "Ruwan Silva",
+        "tool": "message_draft"
+      },
+      "ms": 1234
+    },
+    "tell ruwan the car is ready.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The car is ready.",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1432
+    }
+  },
+  "para-recipient-context-04": {
+    "send a message to senamali saying hello.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "Hello",
+        "to": "Senamali",
+        "tool": "message_draft"
+      },
+      "ms": 1391
+    }
+  },
+  "para-recipient-context-05": {
+    "no, it's for nimali, not kasun.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Tell Nimali the report is ready.",
+        "tab": "private",
+        "text": "The report is ready.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1806
+    },
+    "send senarali another one saying see you soon.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Send Senarali another one saying see you soon.",
+        "tab": "private",
+        "text": "See you soon.",
+        "to": "Senarali",
+        "tool": "message_draft"
+      },
+      "ms": 1899
+    },
+    "tell kasun the report is ready.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The report is ready.",
+        "to": "Kasun",
+        "tool": "message_draft"
+      },
+      "ms": 1440
+    }
+  },
+  "para-recipient-context-06": {
+    "now tell senamali i'll call her at noon.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "I'll call you at noon.",
+        "to": "Senamali",
+        "tool": "message_draft"
+      },
+      "ms": 1296
+    },
+    "tell nimali good morning.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "Good morning",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1149
+    }
+  },
+  "para-recipient-context-07": {
+    "message kasan, the budget is approved.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The budget is approved.",
+        "to": "Kasan",
+        "tool": "message_draft"
+      },
+      "ms": 1445
+    }
+  },
+  "para-recipient-context-08": {
+    "tell kamal lunch is at one.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "Lunch is at one.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1449
+    },
+    "tell kamel also that the car is outside.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "Also, the car is outside.",
+        "to": "Kamal Jayasuriya",
+        "tool": "message_draft"
+      },
+      "ms": 1656
+    }
+  },
+  "para-recipient-context-09": {
+    "did she reply?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali Perera",
+        "tool": "read_messages"
+      },
+      "ms": 1465
+    },
+    "send nimali: the review is at ten.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "the review is at ten.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1476
+    }
+  },
+  "para-recipient-context-10": {
+    "tell her that this is a test message.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.5,
+        "request": "Tell her that this is a test message.",
+        "tab": "private",
+        "text": "this is a test message.",
+        "to": "",
+        "tool": "message_draft"
+      },
+      "ms": 1714
+    }
+  },
+  "para-recipient-context-11": {
+    "send it to work.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "official",
+        "text": "I'm on my way.",
+        "to": "Nimali Perera",
+        "tool": "message_draft"
+      },
+      "ms": 1614
+    },
+    "tell nimali i'm on my way.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "I'm on my way.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1209
+    }
+  },
+  "para-recipient-context-12": {
+    "and send senarali another message, see you soon.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "And send Senarali another message, see you soon.",
+        "tab": "private",
+        "text": "see you soon.",
+        "to": "Senarali",
+        "tool": "message_draft"
+      },
+      "ms": 1910
+    },
+    "no, nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "I'm running late.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1495
+    },
+    "tell senarali i'm running late.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "I'm running late.",
+        "to": "Senarali",
+        "tool": "message_draft"
+      },
+      "ms": 1443
+    }
+  },
+  "para-recipient-context-13": {
+    "message kasun: the server is down.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "the server is down.",
+        "to": "Kasun",
+        "tool": "message_draft"
+      },
+      "ms": 1447
+    },
+    "send him another saying i'm fixing it.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "I'm fixing it.",
+        "to": "Kasun Senaratne",
+        "tool": "message_draft"
+      },
+      "ms": 1431
+    }
+  },
+  "para-recipient-context-14": {
+    "so now can you send another message to senarali? tell her i'm just testing.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "I'm just testing.",
+        "to": "Senarali",
+        "tool": "message_draft"
+      },
+      "ms": 1384
+    },
+    "tell nimali the files are on the desk.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The files are on the desk.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1487
+    }
+  },
+  "para-recipient-context-15": {
+    "actually send it to kamal, not ruwan.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Tell Kamal the shop is closed.",
+        "tab": "private",
+        "text": "The shop is closed.",
+        "to": "Kamal",
+        "tool": "message_draft"
+      },
+      "ms": 1768
+    },
+    "send kamal another one: open at ten tomorrow.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "open at ten tomorrow",
+        "to": "Kamal Jayasuriya",
+        "tool": "message_draft"
+      },
+      "ms": 1467
+    },
+    "tell ruwan the shop is closed.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The shop is closed.",
+        "to": "Ruwan",
+        "tool": "message_draft"
+      },
+      "ms": 1427
+    }
+  },
+  "para-recipient-context-16": {
+    "send a message to nimally saying thanks.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Nimally",
+        "tool": "message_draft"
+      },
+      "ms": 1387
+    }
+  },
+  "para-recipient-context-17": {
+    "send the same to kasun.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Send the same to Kasun.",
+        "tab": "",
+        "text": "Happy birthday!",
+        "to": "Kasun",
+        "tool": "message_draft"
+      },
+      "ms": 1704
+    },
+    "tell nimali happy birthday.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "Happy birthday!",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1401
+    }
+  },
+  "para-recipient-context-18": {
+    "send senarali another one, sorry for the short notice.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "Sorry for the short notice.",
+        "to": "Senarali",
+        "tool": "message_draft"
+      },
+      "ms": 1580
+    },
+    "tell kasun the meeting is cancelled.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The meeting is cancelled.",
+        "to": "Kasun",
+        "tool": "message_draft"
+      },
+      "ms": 1451
+    }
+  },
+  "para-recipient-context-19": {
+    "senamali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "",
+        "to": "Senamali",
+        "tool": "message_draft"
+      },
+      "ms": 1056
+    },
+    "send a message to my friend.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "message_draft"
+      },
+      "ms": 1265
+    }
+  },
+  "para-recipient-context-20": {
+    "has she replied to that?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali Perera",
+        "tool": "read_messages"
+      },
+      "ms": 1091
+    },
+    "tell nimali the meeting is at three.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "The meeting is at three.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1208
+    }
+  }
+}

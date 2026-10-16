@@ -1,0 +1,287 @@
+{
+  "para-read-messages-01": {
+    "did nimali reply to me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did Nimali reply to me?",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "read_messages"
+      },
+      "ms": 1614
+    }
+  },
+  "para-read-messages-02": {
+    "so, did nima lee get back to me or not?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "did Nima Lee get back to me",
+        "tab": "private",
+        "text": "",
+        "to": "Nima Lee",
+        "tool": "read_messages"
+      },
+      "ms": 1647
+    }
+  },
+  "para-read-messages-03": {
+    "any new messages?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "",
+        "tool": "read_messages"
+      },
+      "ms": 1258
+    }
+  },
+  "para-read-messages-04": {
+    "do i have any new messages, risi?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "",
+        "tool": "read_messages"
+      },
+      "ms": 1331
+    }
+  },
+  "para-read-messages-05": {
+    "what did ruwan say?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What did Ruwan say?",
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "read_messages"
+      },
+      "ms": 1549
+    }
+  },
+  "para-read-messages-06": {
+    "read me kamal's last message.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Read me Kamal's last message.",
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "read_messages"
+      },
+      "ms": 1611
+    }
+  },
+  "para-read-messages-07": {
+    "has nimali replied yet?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Has Nimali replied yet?",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "read_messages"
+      },
+      "ms": 1596
+    }
+  },
+  "para-read-messages-08": {
+    "did ruvan send me anything?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.9,
+        "request": "Did Ruvan send me anything?",
+        "tab": "",
+        "text": "",
+        "to": "Ruvan",
+        "tool": "read_messages"
+      },
+      "ms": 1573
+    }
+  },
+  "para-read-messages-09": {
+    "any messages from kamel?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Any messages from Kamel?",
+        "tab": "private",
+        "text": "",
+        "to": "Kamel",
+        "tool": "read_messages"
+      },
+      "ms": 1558
+    }
+  },
+  "para-read-messages-10": {
+    "did nimali reply?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did Nimali reply?",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "read_messages"
+      },
+      "ms": 1583
+    }
+  },
+  "para-read-messages-11": {
+    "anything new in my messages?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "",
+        "tool": "read_messages"
+      },
+      "ms": 1325
+    }
+  },
+  "para-read-messages-12": {
+    "can you tell me if someone messaged me?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Can you tell me if someone messaged me?",
+        "tab": "private",
+        "text": "",
+        "to": "",
+        "tool": "read_messages"
+      },
+      "ms": 1529
+    }
+  },
+  "para-read-messages-13": {
+    "what did nimali say in my private chat?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "read_messages"
+      },
+      "ms": 1362
+    }
+  },
+  "para-read-messages-14": {
+    "okay. and did she reply to my earlier message?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "did Nimali reply to my earlier message?",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali Perera",
+        "tool": "read_messages"
+      },
+      "ms": 1800
+    },
+    "tell nimali the review moved to three.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.95,
+        "tab": "private",
+        "text": "The review moved to three.",
+        "to": "Nimali",
+        "tool": "message_draft"
+      },
+      "ms": 1523
+    }
+  },
+  "para-read-messages-15": {
+    "hmm, let me see, has ruwan written anything today?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 0.95,
+        "request": "has Ruwan written anything today?",
+        "tab": "private",
+        "text": "",
+        "to": "Ruwan",
+        "tool": "read_messages"
+      },
+      "ms": 1655
+    }
+  },
+  "para-read-messages-16": {
+    "check whether nimali has answered me.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Check whether Nimali has answered me.",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "read_messages"
+      },
+      "ms": 1655
+    }
+  },
+  "para-read-messages-17": {
+    "is there any reply from kamal?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Is there any reply from Kamal?",
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "read_messages"
+      },
+      "ms": 1599
+    }
+  },
+  "para-read-messages-18": {
+    "did anybody message me this morning?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "",
+        "tool": "read_messages"
+      },
+      "ms": 1327
+    }
+  },
+  "para-read-messages-19": {
+    "read my latest messages please.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "",
+        "tool": "read_messages"
+      },
+      "ms": 1323
+    }
+  },
+  "para-read-messages-20": {
+    "nimali. did she reply? the sales figures thing.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "Did Nimali reply about the sales figures?",
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "read_messages"
+      },
+      "ms": 1672
+    }
+  }
+}

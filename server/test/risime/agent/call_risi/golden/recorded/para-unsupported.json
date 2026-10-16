@@ -1,0 +1,267 @@
+{
+  "para-unsupported-01": {
+    "call ruwan for me.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1338
+    }
+  },
+  "para-unsupported-02": {
+    "book me a taxi to the airport.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1346
+    }
+  },
+  "para-unsupported-03": {
+    "search the web for the best laptop.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1264
+    }
+  },
+  "para-unsupported-04": {
+    "read my private chat with nimali.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "private",
+        "text": "",
+        "to": "Nimali",
+        "tool": "read_messages"
+      },
+      "ms": 1347
+    }
+  },
+  "para-unsupported-05": {
+    "order lunch for the team.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1338
+    }
+  },
+  "para-unsupported-06": {
+    "can you phone kamal right now?": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "I can't make phone calls, but I can send a message to Kamal for you.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1837
+    }
+  },
+  "para-unsupported-07": {
+    "transfer five thousand rupees to ruwan's account.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "I can't handle bank transfers. You'll need to use your banking app for that.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1824
+    }
+  },
+  "para-unsupported-08": {
+    "play some music.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1311
+    }
+  },
+  "para-unsupported-09": {
+    "turn off the lights in the office.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1303
+    }
+  },
+  "para-unsupported-10": {
+    "post this on facebook.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1300
+    }
+  },
+  "para-unsupported-11": {
+    "what did kamal say in our private messages?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "request": "What did Kamal say in our private messages?",
+        "tab": "private",
+        "text": "",
+        "to": "Kamal",
+        "tool": "read_messages"
+      },
+      "ms": 1638
+    }
+  },
+  "para-unsupported-12": {
+    "book a table for two at seven tonight.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1348
+    }
+  },
+  "para-unsupported-13": {
+    "can you join my zoom meeting?": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1301
+    }
+  },
+  "para-unsupported-14": {
+    "email the report to the auditors.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1429
+    }
+  },
+  "para-unsupported-15": {
+    "check the stock price of john keells.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "I can't check live stock prices. Would you like me to add a reminder to check it later?",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1873
+    }
+  },
+  "para-unsupported-16": {
+    "buy me a train ticket to kandy.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1206
+    }
+  },
+  "para-unsupported-17": {
+    "open whatsapp and message my wife.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1341
+    }
+  },
+  "para-unsupported-18": {
+    "record this call.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1317
+    }
+  },
+  "para-unsupported-19": {
+    "translate this whole call into tamil and send it to everyone.": {
+      "decision": {
+        "action": "tool",
+        "confidence": 1,
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1192
+    }
+  },
+  "para-unsupported-20": {
+    "find me a hotel in galle.": {
+      "decision": {
+        "action": "reply",
+        "confidence": 1,
+        "say": "I can't search for hotels, but I can help with your calendar, messages, or reminders.",
+        "tab": "",
+        "text": "",
+        "to": "",
+        "tool": "unsupported"
+      },
+      "ms": 1850
+    }
+  }
+}

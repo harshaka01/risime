@@ -12,8 +12,9 @@
      "say": "Can you send a message for me?",
      "expect": {
       "no_send": true,
-      "must": [
-       "Who should I send it to"
+      "must_any": [
+       "Who should I send it to",
+       "Who would you like"
       ]
      }
     },
@@ -57,8 +58,9 @@
      "say": "I want to message someone.",
      "expect": {
       "no_send": true,
-      "must": [
-       "Who should I send it to"
+      "must_any": [
+       "Who should I send it to",
+       "Who would you like"
       ]
      }
     },
@@ -210,8 +212,9 @@
      "say": "Send a private message.",
      "expect": {
       "no_send": true,
-      "must": [
-       "Who should I send it to"
+      "must_any": [
+       "Who should I send it to",
+       "Who would you like"
       ]
      }
     },
@@ -438,8 +441,9 @@
      "say": "Send a message on a private chat.",
      "expect": {
       "no_send": true,
-      "must": [
-       "Who should I send it to"
+      "must_any": [
+       "Who should I send it to",
+       "Who would you like"
       ]
      }
     },
@@ -516,8 +520,9 @@
      "say": "I want to send a text.",
      "expect": {
       "no_send": true,
-      "must": [
-       "Who should I send it to"
+      "must_any": [
+       "Who should I send it to",
+       "Who would you like"
       ]
      }
     },
@@ -591,8 +596,9 @@
      "say": "Can you send a message to her?",
      "expect": {
       "no_send": true,
-      "must": [
-       "Who should I send it to"
+      "must_any": [
+       "Who should I send it to",
+       "Who would you like"
       ]
      }
     },
@@ -711,8 +717,9 @@
      "say": "Can you send a message to my friend?",
      "expect": {
       "no_send": true,
-      "must": [
-       "Who should I send it to"
+      "must_any": [
+       "Who should I send it to",
+       "Who would you like"
       ]
      }
     },

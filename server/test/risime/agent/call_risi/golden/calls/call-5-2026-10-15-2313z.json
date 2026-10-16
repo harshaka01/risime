@@ -1,94 +1,99 @@
 {
-  "id": "harsha-2026-10-16-call-5",
-  "lang": "en",
-  "script": "latin",
-  "tags": [
-    "multi_turn",
-    "pilot_replay",
-    "hallucination",
-    "noise",
-    "not_swallowed"
-  ],
-  "now": "2026-10-15T07:11:00Z",
-  "turns": [
-    {
-      "say": "Good morning.",
-      "expect": {
-        "route": "chat"
-      }
-    },
-    {
-      "say": "Do I have anything to do today?",
-      "expect": {
-        "route": "calendar_read",
-        "range": [
-          "2026-10-15",
-          "2026-10-16"
-        ]
-      }
-    },
-    {
-      "say": "All right. Can I have a meeting set up today for two? Bye-bye. Ready?",
-      "expect": {
-        "text": "All right. Can I have a meeting set up today for two?",
-        "must_not": [
-          "not sure what you mean",
-          "say that again",
-          "I have added",
-          "I've added"
-        ]
-      }
-    },
-    {
-      "say": "You're on.",
-      "noise": true,
-      "expect": {
-        "silent": true
-      }
-    },
-    {
-      "say": "you know",
-      "noise": true,
-      "expect": {
-        "silent": true
-      }
-    },
-    {
-      "say": "It'll be fun.",
-      "noise": true,
-      "expect": {
-        "silent": true
-      }
-    },
-    {
-      "say": "Yeah.",
-      "expect": {
-        "route": "chat",
-        "must_not": [
-          "That sounds",
-          "say that again"
-        ]
-      }
-    },
-    {
-      "say": "Yeah, I didn't know I was going to promote. And, uh... And I'd say it is. It's fascinating, isn't it?",
-      "noise": true,
-      "expect": {
-        "silent": true
-      }
-    },
-    {
-      "say": "And I tend to come out. So do I.",
-      "noise": true,
-      "expect": {
-        "silent": true
-      }
-    }
-  ],
-  "src": "synthetic",
-  "checked": false,
-  "checked_by": null,
-  "checked_on": null,
-  "note": "Harsha's real call 56f51277 on the pilot (srv14), 15 Oct 23:13-23:16Z (04:43 SLT). Harsha: he never said 'Bye-bye. Ready?', 'You're on.', 'you know', 'It'll be fun.', the 'promote' line or 'And I tend to come out. So do I.': Whisper made them up from noise, silence or echo (turns with noise: true carry Whisper's own scores, no_speech_prob 0.9). Was: the request was replaced by the made-up fragments and got 'I'm not sure what you mean'; made-up lines got 'That sounds nice/exciting' and 'Could you say that again?'. Now: the request is answered with its made-up tail stripped; made-up lines get no answer. (The write flow for 'for two' = 2 pm is the next fix.)",
-  "golden_id": "call-5-2026-10-15-2313z"
+ "id": "harsha-2026-10-16-call-5",
+ "lang": "en",
+ "script": "latin",
+ "tags": [
+  "multi_turn",
+  "pilot_replay",
+  "hallucination",
+  "noise",
+  "not_swallowed"
+ ],
+ "now": "2026-10-15T07:11:00Z",
+ "turns": [
+  {
+   "say": "Good morning.",
+   "expect": {
+    "route": "chat"
+   }
+  },
+  {
+   "say": "Do I have anything to do today?",
+   "expect": {
+    "route": "calendar_read",
+    "range": [
+     "2026-10-15",
+     "2026-10-16"
+    ]
+   }
+  },
+  {
+   "say": "All right. Can I have a meeting set up today for two? Bye-bye. Ready?",
+   "expect": {
+    "text": "All right. Can I have a meeting set up today for two?",
+    "must_not": [
+     "not sure what you mean",
+     "say that again",
+     "I have added",
+     "I've added"
+    ]
+   }
+  },
+  {
+   "say": "You're on.",
+   "noise": true,
+   "expect": {
+    "silent": true
+   }
+  },
+  {
+   "say": "you know",
+   "noise": true,
+   "expect": {
+    "silent": true
+   }
+  },
+  {
+   "say": "It'll be fun.",
+   "noise": true,
+   "expect": {
+    "silent": true
+   }
+  },
+  {
+   "say": "Yeah.",
+   "expect": {
+    "must_not": [
+     "That sounds",
+     "say that again",
+     "I've added",
+     "I have added"
+    ],
+    "route_in": [
+     "chat",
+     "write_status"
+    ]
+   }
+  },
+  {
+   "say": "Yeah, I didn't know I was going to promote. And, uh... And I'd say it is. It's fascinating, isn't it?",
+   "noise": true,
+   "expect": {
+    "silent": true
+   }
+  },
+  {
+   "say": "And I tend to come out. So do I.",
+   "noise": true,
+   "expect": {
+    "silent": true
+   }
+  }
+ ],
+ "src": "synthetic",
+ "checked": false,
+ "checked_by": null,
+ "checked_on": null,
+ "note": "Harsha's real call 56f51277 on the pilot (srv14), 15 Oct 23:13-23:16Z (04:43 SLT). Harsha: he never said 'Bye-bye. Ready?', 'You're on.', 'you know', 'It'll be fun.', the 'promote' line or 'And I tend to come out. So do I.': Whisper made them up from noise, silence or echo (turns with noise: true carry Whisper's own scores, no_speech_prob 0.9). Was: the request was replaced by the made-up fragments and got 'I'm not sure what you mean'; made-up lines got 'That sounds nice/exciting' and 'Could you say that again?'. Now: the request is answered with its made-up tail stripped; made-up lines get no answer. (The write flow for 'for two' = 2 pm is the next fix.) (16 Oct: a bare 'Yeah.' with the meeting card open may get the card's honest status: 'I haven't added it yet. Tap Add …'.)",
+ "golden_id": "call-5-2026-10-15-2313z"
 }
