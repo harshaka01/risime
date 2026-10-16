@@ -5,6 +5,29 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 10:25 SLT · HARSHA'S DECISION: Gemma-4 first, commercial only if it fails (Q-007 answered)
+
+Harsha 10:19: "try Gemma-4, and if it fails then add commercial". So:
+- **Q-007: no commercial model for now.** Mark it ANSWERED (by Harsha, 10:19 SLT).
+- **Brain v3 code ships on risi-l1** as soon as it's ready. The model is a setting.
+  - **Target: "Call Risi brain v3: try now" today by 20:00 SLT.**
+  - At 16:00 SLT, post a one-line progress note in his Risi chat, with any blocker.
+- **Tonight (22:00–06:00 SLT), night swap test** with the golden calls:
+  - Gemma-4-26B-A4B FP8: MoE with ~4B active, so its speed is close to risi-l1. This is the main call
+    candidate.
+  - Gemma-4-31B FP8: dense, so better understanding but slower.
+  - risi-l1 as the baseline.
+  - Score each on golden pass rate, Sinhala/Tamil script, false claims, p50/p95 first-token latency and
+    tok/s.
+  - Restore risi-l1 before 06:00 SLT and confirm it answers.
+- **Morning (by 07:00 SLT):** post the table in his Risi chat.
+  - If a Gemma-4 model passes every golden call within latency (first token p50 ≤ 0.8 s on the call
+    path), switch the call brain to it with Harsha's one-word OK. The other risi-l1 jobs move only after
+    their own gates.
+  - If none passes, say which golden turns failed and ask Harsha about a commercial model, with its cost
+    per call.
+- Memory: a Gemma-4 that replaces risi-l1 takes its place in memory; it doesn't sit beside it.
+
 ## 2026-10-16 10:25 SLT · Model bake-off: three contenders, not two
 
 Harsha doesn't want a Risi that is only a wrapper around a paid model. Run the v3 golden calls on three
