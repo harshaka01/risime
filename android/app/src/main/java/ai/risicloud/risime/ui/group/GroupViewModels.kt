@@ -433,7 +433,8 @@ class GroupChatViewModel(private val c: AppContainer, private val meId: String, 
 
     // ---- Proposal 2026-10-14-call-risi (decision 090): the Risi chat's Call Risi button ----
 
-    private val _callRisiUser = MutableStateFlow(false)
+    // Architect 14:15: shared with the app-wide refresh (start, foreground, rejoin), not only this screen.
+    private val _callRisiUser = c.callRisiUser
 
     /** §41.1: `User.call_risi`, the developer flag `call_risi`, and this device advertising `group_calls`. */
     val callRisiVisible: StateFlow<Boolean> = combine(_callRisiUser, c.callRisiFlag.on) { user, flag ->

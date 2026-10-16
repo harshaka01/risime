@@ -293,7 +293,8 @@ class ChatsViewModel(private val c: AppContainer, private val meId: String) : Vi
 
     // ---- v1.48 §41.1 (Harsha 2026-10-14): Call Risi on the Risi contact sheet (the chat list's Risi avatar) ----
 
-    private val _callRisiUser = MutableStateFlow(false)
+    // Architect 14:15: shared with the app-wide refresh (start, foreground, rejoin), not only this screen.
+    private val _callRisiUser = c.callRisiUser
 
     /** The Risi chat button's rules (`User.call_risi`, the developer flag `call_risi`, a `group_calls` device). */
     val callRisiAllowed: StateFlow<Boolean> = combine(_callRisiUser, c.callRisiFlag.on) { user, flag ->

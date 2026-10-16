@@ -1218,6 +1218,39 @@ class AppContainer(
     /** The one guarded construction site of the online recogniser. */
     private val onlineRecogniser by lazy { ai.risicloud.risime.voice.OnlineRecogniser(appContext, phoneRecogniser) }
 
+    /** Decision 090 / §41.4: the account's `call_risi` from `GET /me` (the Call Risi button), refreshed by [refreshServerConfig]. */
+    val callRisiUser = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /**
+     * Architect 2026-10-16 14:15: every server-driven capability the app caches, refetched from one place
+     * ([ai.risicloud.risime.data.ServerConfigRefresh]) at app start, on every ON_START and every socket
+     * (re)join: `/auth/config` (tabs, Risi tools/skills/ledger/events/notes, Google Calendar, call and voice
+     * transcription, action items), `/risi/voice` (translate available, always-translate, my transcription),
+     * and `GET /me` (private transcribe, Call Risi, the developer flags).
+     */
+    private val serverConfig by lazy {
+        ai.risicloud.risime.data.ServerConfigRefresh(
+            tasks = listOf(
+                "auth_config" to { refreshTabsSwitch() },
+                "risi_voice" to { voice.refreshSettings() },
+                "me" to {
+                    (api.me() as? ApiResult.Ok)?.value?.user?.let { u ->
+                        privateTranscribeFlag.set(u.privateTranscribe)
+                        callRisiUser.value = u.callRisi
+                    }
+                    Unit
+                },
+            ),
+            log = { Log.i("RisiMe", it) },
+        )
+    }
+
+    /** See [serverConfig]; [force] skips the 30-s throttle (a rejoin, the `config_changed` event). Signed-in only. */
+    suspend fun refreshServerConfig(why: String, force: Boolean = false) {
+        if (sessionStore.current() == null) return
+        runCatching { serverConfig.refresh(why, force) }
+    }
+
     /** A fresh `GET /me` for `private_transcribe`, at most every 10 minutes. */
     suspend fun refreshPrivateTranscribe() {
         privateTranscribeFlag.refreshIfStale { (runCatching { api.me() }.getOrNull() as? ApiResult.Ok)?.value?.user?.privateTranscribe }
@@ -2480,6 +2513,8 @@ class AppContainer(
                 appLock.checkOnReturn()
                 scope.launch { appLock.onForeground() }
                 refreshCapabilities()
+                // Architect 14:15: the cached server flags on every return to the app.
+                scope.launch { refreshServerConfig("foreground") }
                 // Proposal 2026-10-14-send-for-me §42.5: report the skill/permission state whenever the app comes back.
                 if (risiSkillsOn()) scope.launch { runCatching { risiSkillsStore.onForeground(backgroundSkillPermissions) } }
                 scope.launch {
@@ -2699,9 +2734,11 @@ class AppContainer(
             realtime.state.collect { if (it == ConnectionState.Live) runCatching { syncGroups() } }
         }
         // §24.15: the server's `tabs` switch, read on every (re)join (a change re-advertises `tabs`).
+        // Architect 14:15: every server-driven capability (not only `tabs`) on every (re)join.
         scope.launch {
-            realtime.state.collect { if (it == ConnectionState.Live) runCatching { refreshTabsSwitch() } }
+            realtime.state.collect { if (it == ConnectionState.Live) refreshServerConfig("rejoin", force = true) }
         }
+        scope.launch { refreshServerConfig("start", force = true) }
         // §24.11: the phone's timezone to the server on every (re)join (a no-op when unchanged) and when it changes.
         scope.launch {
             realtime.state.collect { if (it == ConnectionState.Live) runCatching { syncTimezone() } }
