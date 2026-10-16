@@ -48,7 +48,11 @@ defmodule RisiMe.Agent.TTS.Kokoro do
           send(parent, {ref, :first, System.monotonic_time(:millisecond)})
         end
 
-        {:cont, {req, Req.Response.update_private(resp, :pcm, [], &[&1 | data])}}
+        # Newest chunk first (reversed below). Not `update_private/4`: it stores its default without
+        # the chunk, so the first chunk was lost and later ones made an improper list.
+        {:cont,
+         {req,
+          Req.Response.put_private(resp, :pcm, [data | Req.Response.get_private(resp, :pcm, [])])}}
       end
 
       body = %{"text" => text, "voice" => voice_id, "speed" => Keyword.get(opts, :speed, 1.0)}
