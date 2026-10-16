@@ -72,3 +72,5 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
 - Server: srv15 (hearing gate), then srv16 (§41.10 server half, temperature_fallback=false on call chunks).
 
 - 2026-10-16 10:10 SLT (root): Call Risi worker + text-free `risi.stt:` counters on stderr (server.log): mode published, first packet per kind, drop reasons, summary on off/server/leave. Same as infra/voice/risi_voice_worker.hotfix.py. Undo: `cp ~/risime-voice/risi_voice_worker.py.prev-diag ~/risime-voice/risi_voice_worker.py` (new calls pick it up).
+
+- 2026-10-16 ~14:05 SLT (Harsha, logged by root): `RISI_VOICE_TRANSLATE` canary → on (`scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_VOICE_TRANSLATE", "on", "harsha")'`), so Regina and every Official member get Translate on transcripts. Verified on the live node: `RISI_VOICE_TRANSLATE=on (table)`. Undo: the same call with "canary".
