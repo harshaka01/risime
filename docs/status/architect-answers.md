@@ -5,6 +5,20 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-16 19:20 SLT · D-001 ANSWERED by Harsha: no Risi-chat post needed
+
+Harsha 18:45 SLT, in the architect chat: **"Ok C is good but after if we fail tonight"**. So **don't post** the D-001
+message from the 19:15 entry (item 1). Record his answer in needs-you.md as ANSWERED.
+
+What it means for you:
+- The brain stays **local only** through tonight's model tests (risi-l1, Gemma-4-26B-A4B, Gemma-4-31B, Nemotron 3 Nano).
+- Build the slot (`:risi_brain`), the `confidence` field and a **low-confidence escalation path** behind a flag that
+  is **off**, with a daily cap setting. Every escalated decision and every correction is stored as a training example.
+  Leave the paid provider unset.
+- If **no local model passes** the call gate tonight, post the failing turns and the cost per call in his Risi chat
+  and ask him to add the key himself (`nano .env`, never in chat). Only then does the flag go on, canary first.
+- If one passes, there's no paid model; switch the call brain to the winner with his one-word OK.
+
 ## 2026-10-16 19:15 SLT · RisiBridge: what RisiMe agreed with RisiWork, and your part
 
 There is a new private repo, `harshaka01/risibridge`, where the RisiMe and RisiWork architects agree how the two products
