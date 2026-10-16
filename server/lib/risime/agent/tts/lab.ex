@@ -47,7 +47,7 @@ defmodule RisiMe.Agent.TTS.Lab do
 
   @doc "The engine `id`'s voices, by the service's own status (see the moduledoc)."
   def voices(id) do
-    with {:ok, engines} <- engines(),
+    with {:ok, engines} <- engines_or_wake(),
          %{} = e <- Enum.find(engines, &(&1["id"] == id)) do
       case Map.get(@statuses, e["status"], :unavailable) do
         :ok -> {:ok, parse_voices(e["voices"])}
@@ -65,6 +65,19 @@ defmodule RisiMe.Agent.TTS.Lab do
   end
 
   defp parse_voices(_), do: []
+
+  # The page lists the lab's voices: a stopped lab is woken in the background (the page's Refresh
+  # shows them about 20 s later), so loading the page never waits on it.
+  defp engines_or_wake do
+    case engines() do
+      {:ok, _} = ok ->
+        ok
+
+      e ->
+        if Keyword.get(config(), :wake), do: Task.start(&wake/0)
+        e
+    end
+  end
 
   @doc "The service's engine list (`GET /v1/engines`), or `{:error, :unavailable}`."
   def engines do
@@ -92,7 +105,60 @@ defmodule RisiMe.Agent.TTS.Lab do
         {:error, :live_call}
 
       true ->
-        post(text, voice_id, opts)
+        case post(text, voice_id, opts) do
+          {:error, :unavailable} = e -> if wake(), do: post(text, voice_id, opts), else: e
+          other -> other
+        end
+    end
+  end
+
+  @wake_wait_ms 90_000
+
+  @doc """
+  Starts the lab when it isn't answering (Harsha 16 Oct: the daytime memory rule had stopped it as
+  idle, so every lab cell on the Voices page failed). Runs the configured `wake` command (fixed
+  arguments, never input) and waits until `GET /v1/engines` answers. True when it answers. One wake
+  at a time: a second caller waits on the same lock.
+  """
+  def wake do
+    case Keyword.get(config(), :wake) do
+      [cmd | args] when is_binary(cmd) ->
+        :global.trans({__MODULE__, :wake}, fn ->
+          match?({:ok, _}, engines()) or
+            (run_wake(cmd, args) and wait_up(System.monotonic_time(:millisecond) + @wake_wait_ms))
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  defp run_wake(cmd, args) do
+    case System.find_executable(cmd) do
+      nil ->
+        false
+
+      exe ->
+        try do
+          {_, code} = System.cmd(exe, args, stderr_to_stdout: true)
+          code == 0
+        rescue
+          _ -> false
+        end
+    end
+  end
+
+  defp wait_up(deadline) do
+    cond do
+      match?({:ok, _}, engines()) ->
+        true
+
+      System.monotonic_time(:millisecond) > deadline ->
+        false
+
+      true ->
+        Process.sleep(1_000)
+        wait_up(deadline)
     end
   end
 

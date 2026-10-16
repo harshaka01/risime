@@ -257,7 +257,14 @@ if config_env() != :test do
 
   # TTS candidates (2026-10-14): risime-tts-lab (infra/docker-compose.tts-lab.yml) on RISI_TTS_LAB_URL
   # (loopback only, default http://127.0.0.1:8231), console tests only; Call Risi stays on Kokoro.
-  config :risime, :risi_tts_lab, url: System.get_env("RISI_TTS_LAB_URL", "http://127.0.0.1:8231")
+  # The daytime memory rule stops the idle lab (scripts/daytime-memory); a console test wakes it (16 Oct).
+  config :risime, :risi_tts_lab,
+    url: System.get_env("RISI_TTS_LAB_URL", "http://127.0.0.1:8231"),
+    wake: [
+      "docker",
+      "start",
+      System.get_env("RISI_TTS_LAB_CONTAINER", "risime-tts-lab-tts-lab-1")
+    ]
 
   config :risime, :risi_tts_engines, [
     RisiMe.Agent.TTS.Kokoro,

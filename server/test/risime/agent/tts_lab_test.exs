@@ -99,6 +99,46 @@ defmodule RisiMe.Agent.TTSLabTest do
              {:error, :unavailable}
   end
 
+  describe "wake (16 Oct: the daytime rule had stopped the idle lab)" do
+    setup do
+      old = Application.get_env(:risime, :risi_tts_lab)
+      on_exit(fn -> Application.put_env(:risime, :risi_tts_lab, old) end)
+      %{old: old}
+    end
+
+    test "a stopped lab is started and the test runs", %{old: old} do
+      Application.put_env(:risime, :risi_tts_lab, Keyword.put(old, :wake, ["true"]))
+      {:ok, up} = Agent.start_link(fn -> false end)
+
+      Req.Test.stub(Lab, fn conn ->
+        cond do
+          not Agent.get(up, & &1) ->
+            Agent.update(up, fn _ -> true end)
+            Req.Test.transport_error(conn, :econnrefused)
+
+          conn.request_path == "/v1/engines" ->
+            Req.Test.json(conn, @engines)
+
+          true ->
+            conn
+            |> Plug.Conn.put_resp_header("x-first-audio-ms", "250")
+            |> Plug.Conn.send_resp(200, "RIFFwav")
+        end
+      end)
+
+      assert {:ok, %{audio: "RIFFwav"}} =
+               Lab.synthesize("indic-parler", "Hi", "indic-parler:en:mary")
+    end
+
+    test "a wake that fails (or none configured) says the service isn't reachable", %{old: old} do
+      Req.Test.stub(Lab, fn conn -> Req.Test.transport_error(conn, :econnrefused) end)
+      assert {:error, :unavailable} = Lab.synthesize("indic-parler", "Hi", "indic-parler:en:mary")
+      Application.put_env(:risime, :risi_tts_lab, Keyword.put(old, :wake, ["false"]))
+      refute Lab.wake()
+      assert {:error, :unavailable} = Lab.synthesize("indic-parler", "Hi", "indic-parler:en:mary")
+    end
+  end
+
   test "synthesize: one WAV with load, first audio and audio length from the service" do
     Req.Test.stub(Lab, fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
