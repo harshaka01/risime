@@ -27,6 +27,7 @@ in one checkout: `/home/harsha/development/risime`, branch `main`.
 | server | `server/`, `docs/status/server.md` |
 | android | `android/`, `docs/status/android.md` |
 | risi (Risi Brain, 2026-10-11) | `server/lib/risime/agent/**`, `server/test/risime/agent/**`, `server/priv/repo/migrations/*risi*`, `docs/status/risi.md`; ships through the **fast lane** (rule 12) |
+| marketplace (2026-10-16, decision 095) | `marketplace/**` only: a separable Phoenix app (`:risi_registry`), its own DB, docs, decisions and CLAUDE.md; never imports `server/`, meets RisiMe only over HTTP |
 
 - **Laptop** (Deepin 25, x86_64) has the same path, `/home/harsha/development/risime`, as a Git
   mirror. It also runs the emulator, the USB phone and the `spark2-tunnel`.
