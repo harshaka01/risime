@@ -307,6 +307,7 @@ SUITES=(test/risime/agent/call_risi/golden)
 log "golden calls live (suites: ${SUITES[*]}; limit ${left}s)"
 timeout "$left" bash -c 'cd server && ~/.local/bin/mise exec -- mix test --only llm_live "$@"' _ "${SUITES[@]}" > "$TMP/golden.txt" 2>&1
 GRC=$?
+mkdir -p "$REPO/results/model-swap"; grep -E "^(GOLDEN CALLS|PARAPHRASES|SHARED CASES|SIMULATED CALLERS|DECISION LATENCY|  [a-z_-]+: [0-9]+/[0-9]+)|tests, " "$TMP/golden.txt" > "$REPO/results/model-swap/$(date -u +%Y%m%dT%H%MZ)-$KEY-gate.txt" 2>/dev/null || true
 GOLDEN=$(grep -E "^GOLDEN CALLS" "$TMP/golden.txt" | tail -1 | sed 's/GOLDEN CALLS (live [^)]*): //')
 [ -n "$GOLDEN" ] || GOLDEN="no result line (mix exit $GRC)"
 TOOLS=$(python3 -I "$REPO/scripts/model-swap-tools" "$TMP/golden.txt" "$REPO/server/test/risime/agent/call_risi/golden" 2>&1)
