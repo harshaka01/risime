@@ -182,7 +182,9 @@ umask 077
   echo "RISI_MLS_KEK=$(head -c 32 /dev/urandom | base64 -w0)"; echo "RISI_DATA_KEY=$(head -c 32 /dev/urandom | base64 -w0)"
   echo "RISI_MEMORY_KEY=$(head -c 32 /dev/urandom | base64 -w0)"; } > "$WORK/risi.env"
 # 4b: §37.8 voice notes in the Risi chat (the local speech service; the key is copied, never printed).
-[ "$VOICE" = 1 ] && { echo "RISI_VOICE_TRANSCRIBE=on"; echo "RISI_SPEECH_URL=$SPEECH_URL"; grep -E '^WHISPER_API_KEY=' "$REPO/.env" | tail -1; } >> "$WORK/risi.env"
+# The dev-only speech-compare card (RISI_SPEECH_COMPARE_DEV, canary = A here) is posted after the send card and pushes
+# it off screen: this gate tests sending, so compare stays off on its temp server (root 2026-10-16, nightly.12).
+[ "$VOICE" = 1 ] && { echo "RISI_VOICE_TRANSCRIBE=on"; echo "RISI_SPEECH_COMPARE_DEV=off"; echo "RISI_SPEECH_URL=$SPEECH_URL"; grep -E '^WHISPER_API_KEY=' "$REPO/.env" | tail -1; } >> "$WORK/risi.env"
 umask 022
 cat > "$WORK/fixtures.exs" <<'EXS'
 alias RisiMe.{Accounts, Repo}
