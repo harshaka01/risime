@@ -68,6 +68,21 @@ Caddy that answers only spark's IP with a shared header secret (weaker). Plus th
 (public, standard flow, PKCE S256, redirect https://risicloud.ai/marketplace/auth/callback).
 **Options:** A / B / later. **Default:** later; it stays on loopback.
 
+### Q-016 · 2026-10-17 06:50 SLT · [architect] · blocking: no · REPLAY GATE (04:20), risi-l1, before "try now"
+Stop-the-line items 4, 6, 7, 5, 1, 2, 3, 9, 8, 10, 12 done (commit 9efa7107, full mix test running, then fast lane).
+Private real-call replay (~/risime-replays/calls, outside git), live risi-l1, per call:
+- 17 Oct 04:0x (the failed call, 7:03): **22/22** turns
+- 16 Oct 09:2x 8/8 · 10:0x 7/7 · 11:3x 5/5 · 15:2x 12/12 · 15:5x 12/12
+- Total **66/66**; 0 repeated answers; 0 instruction words in any drafted or sent body; no false "none" (Shakya's 6 texts,
+  Shenika's 13 Oct Official text + "in your Private chat" line). Invented-name copies (eval/call-risi-replays) also 66/66.
+- Same build: golden 11/11 · paraphrases 340/340 · shared intent/contact/dictation 10/10/10 · simulated callers 30/30 ·
+  30 argue-back callers 30/30 (0 repeated questions or answers).
+- Item 2 on the 04:0x call: the replay's final draft keeps only the message ("Hi, Shanika, good morning. How are you doing? …");
+  the instruction sentences are dropped.
+- **Item 11 not fixed yet** (latency, 04:0x call): first audio p50 2.57 s, p95 4.51 s, max 7.0 s (n=26); 9 turns "replaced".
+- **Pending:** the same replay on Gemma-4-26B (root swaps after the fast lane), then "try now" with the change list.
+  RISI_CALL_SEND stays off until Harsha has tried it.
+
 ### Q-014 · 2026-10-17 04:50 SLT · [architect] · blocking: no · TRACE (04:25 items a–d), before any fix
 **Shakya Adikari** (Harsha's 04:0x call):
 - a) find_contact: one account (20ae82c3…), picked right ("Shakya Adhikari" → Shakya Adikari 0.93; Swan Adikari 0.67 second).
