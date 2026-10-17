@@ -1,0 +1,33 @@
+  message: "cannot find ownership process for #PID<0.573.0> (:\"Elixir.RisiMe.PromEx.Poller.5000\")\n(RisiMe.Repo) using mode :manual.\n(Note that a connection's mode reverts to :manual if its owner\nterminates.)\n\nWhen using ownership, you must manage connections in one\nof the four ways:\n\n* By explicitly checking out a connection\n* By explicitly allowing a spawned process\n* By running the pool in shared mode\n* By using :caller option with allowed process\n\nThe first two options require every new process to explicitly\ncheck a connection out or be allowed by calling checkout or\nallow respectively.\n\nThe third option requires a {:shared, pid} mode to be set.\nIf using shared mode in tests, make sure your tests are not\nasync.\n\nThe fourth option requires [caller: pid] to be used when\nchecking out a connection from the pool. The caller process\nshould already be allowed on a connection.\n\nIf you are reading this error, it means you have not done one\nof the steps above or that the owner process has crashed.\n\nSee Ecto.Adapters.SQL.Sandbox docs for more information."
+DECISION LATENCY (simulated callers, live risi-l1): turn p50 1637 ms, p95 2281 ms (n=38); dictation p50 1920 ms, p95 1920 ms (n=2)
+SIMULATED CALLERS (live risi-l1): 30/30 goals reached within 4 turns, 0 repeated questions
+SHARED CASES (live risi-l1): intent 8/10, contact 10/10, dictation 8/10
+DECISION LATENCY (shared cases, live risi-l1): turn p50 1592 ms, p95 2614 ms (n=40); dictation p50 716 ms, p95 1715 ms (n=9)
+ARGUE-BACK CALLERS (live risi-l1): 30/30 goals reached within 6 turns, 0 repeated questions or answers
+PARAPHRASES (live risi-l1): 323/340 variants passed (per tool below)
+  calendar-add: 20/20
+  calendar-cancel: 15/20
+  calendar-read: 20/20
+  card-edit-cancel: 14/20
+  chat: 20/20
+  dictation-instruction: 19/20
+  dictation-long: 20/20
+  list-contacts: 18/20
+  message-oneshot: 19/20
+  message-steps: 20/20
+  my-promises: 20/20
+  promises-by: 20/20
+  read-messages: 20/20
+  recipient-context: 20/20
+  reminder: 20/20
+  send-official: 18/20
+  unsupported: 20/20
+DECISION LATENCY (paraphrases, live risi-l1): turn p50 1562 ms, p95 2183 ms (n=440); dictation p50 840 ms, p95 1364 ms (n=109)
+REAL-CALL REPLAYS (live risi-l1, /home/harsha/risime-replays/calls):
+  replay-2026-10-16-0358z: 5/8 turns pass
+  replay-2026-10-16-0430z: 7/7 turns pass
+  replay-2026-10-16-0605z: 5/5 turns pass
+  replay-2026-10-16-0951z: 12/12 turns pass
+  replay-2026-10-16-1027z: 11/12 turns pass
+  replay-2026-10-16-2234z: 19/22 turns pass
+DECISION LATENCY (real-call replays, live risi-l1): turn p50 1765 ms, p95 2376 ms (n=52); dictation p50 1086 ms, p95 3402 ms (n=16)

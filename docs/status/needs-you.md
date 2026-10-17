@@ -80,7 +80,11 @@ Private real-call replay (~/risime-replays/calls, outside git), live risi-l1, pe
 - Item 2 on the 04:0x call: the replay's final draft keeps only the message ("Hi, Shanika, good morning. How are you doing? …");
   the instruction sentences are dropped.
 - **Item 11 not fixed yet** (latency, 04:0x call): first audio p50 2.57 s, p95 4.51 s, max 7.0 s (n=26); 9 turns "replaced".
-- **Pending:** the same replay on Gemma-4-26B (root swaps after the fast lane), then "try now" with the change list.
+- **Gemma-4-26B, same build and replay (07:39 SLT run, scores kept from the 50-min watchdog stop):** replays **59/66**
+  (0358z 5/8, 0430z 7/7, 0605z 5/5, 0951z 12/12, 1027z 11/12, 2234z 19/22; it misses the 04:0x straight send), paraphrases
+  323/340 (cancel 15/20, card-cancel 14/20: it drafts "Cancel that" as a message), shared 8/10/8, simulated 30/30, argue-back
+  30/30; golden did not finish. **risi-l1 stays** (66/66, 340/340). Scores: results/model-swap/20261017T0423Z-gemma4-26b-a4b-fp8-gate.txt.
+- **Next:** device test on the live build, then "try now" with the change list.
   RISI_CALL_SEND stays off until Harsha has tried it.
 
 ### Q-014 · 2026-10-17 04:50 SLT · [architect] · blocking: no · TRACE (04:25 items a–d), before any fix

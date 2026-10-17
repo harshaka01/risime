@@ -175,8 +175,18 @@ preflight || die "refusing to start (see BLOCK lines above)" 2
 mkdir -p "$REPO/results/model-swap"
 
 STOPPED=0; WATCH=""; WD=""; RESULT_STATE="not finished"
+# Score lines only (no FAIL lines: replay failures quote real names). Also run on an interrupt, so a watchdog stop keeps
+# the suites that did finish (2026-10-17: the first Gemma replay run was cut at 50 min and its scores were nearly lost).
+GATE_COPIED=0
+copy_gate() {
+  [ "$GATE_COPIED" = 0 ] && [ -s "$TMP/golden.txt" ] || return 0; GATE_COPIED=1
+  mkdir -p "$REPO/results/model-swap"
+  grep -aE "^(GOLDEN CALLS|PARAPHRASES|SHARED CASES|SIMULATED CALLERS|ARGUE-BACK CALLERS|REAL-CALL REPLAYS|DECISION LATENCY|  [a-z0-9_-]+: [0-9]+/[0-9]+)|tests, " "$TMP/golden.txt" \
+    > "$REPO/results/model-swap/$(date -u +%Y%m%dT%H%MZ)-$KEY-gate.txt" 2>/dev/null || true
+}
 restore() {
   trap '' INT TERM; set +e
+  copy_gate
   [ -n "$WATCH" ] && kill "$WATCH" 2>/dev/null; [ -n "$WD" ] && kill "$WD" 2>/dev/null
   log "RESTORE: removing $NAME, starting $LIVE"
   [ "$BASE" = 1 ] || docker rm -f "$NAME" >/dev/null 2>&1   # never remove the live container (baseline)
@@ -309,7 +319,7 @@ SUITES=(test/risime/agent/call_risi/golden)
 log "golden calls live (suites: ${SUITES[*]}; limit ${left}s)"
 timeout "$left" bash -c 'cd server && ~/.local/bin/mise exec -- mix test --only llm_live "$@"' _ "${SUITES[@]}" > "$TMP/golden.txt" 2>&1
 GRC=$?
-mkdir -p "$REPO/results/model-swap"; grep -E "^(GOLDEN CALLS|PARAPHRASES|SHARED CASES|SIMULATED CALLERS|DECISION LATENCY|  [a-z_-]+: [0-9]+/[0-9]+)|tests, " "$TMP/golden.txt" > "$REPO/results/model-swap/$(date -u +%Y%m%dT%H%MZ)-$KEY-gate.txt" 2>/dev/null || true
+copy_gate
 GOLDEN=$(grep -E "^GOLDEN CALLS" "$TMP/golden.txt" | tail -1 | sed 's/GOLDEN CALLS (live [^)]*): //')
 [ -n "$GOLDEN" ] || GOLDEN="no result line (mix exit $GRC)"
 TOOLS=$(python3 -I "$REPO/scripts/model-swap-tools" "$TMP/golden.txt" "$REPO/server/test/risime/agent/call_risi/golden" 2>&1)
