@@ -217,6 +217,12 @@ defmodule RisiMe.Agent.SendForMe do
     end
   end
 
+  # Official off: said, with what to do next (device test 17 Oct, call 10: the line was a dead end).
+  defp off_line(name),
+    do:
+      "Official is off in your chat with #{name}, so I didn't write it. Turn Official on in that chat, " <>
+        "or ask me to send it to the Private chat."
+
   # The asker's 1:1 with `id` (Private), or its Official conversation when asked and on.
   defp chat(ctx, id, name, tab) do
     dm = RisiMe.Messaging.conversation_id(ctx.asker, id)
@@ -232,11 +238,11 @@ defmodule RisiMe.Agent.SendForMe do
         case Chats.official_group(dm) do
           %{state: "active", id: og} ->
             if Chats.off?(dm),
-              do: {:answer, "failed", "Official is off in your chat with #{name}."},
+              do: {:answer, "failed", off_line(name)},
               else: {:ok, %{conv: og, name: name, user_id: id, tab: "official"}}
 
           _ ->
-            {:answer, "failed", "Official is off in your chat with #{name}."}
+            {:answer, "failed", off_line(name)}
         end
 
       true ->

@@ -420,7 +420,10 @@ defmodule RisiMe.Agent.SendForMeTest do
 
       scripted_llm!(send_script(%{"to" => "Upali", "text" => "Hi", "tab" => "official"}))
       {_, :ok} = ask!(ctx.rc, ctx.harsha.user, "message Upali in official hi", ctx.dev)
-      assert_receive {:risi_post, _, "Official is off in your chat with Upali Perera.", _}
+
+      assert_receive {:risi_post, _,
+                      "Official is off in your chat with Upali Perera, so I didn't write it. Turn Official on in that chat, or ask me to send it to the Private chat.",
+                      _}
 
       refute_received {:risi_post, _, _, %{"kind" => "confirm"}}
     end

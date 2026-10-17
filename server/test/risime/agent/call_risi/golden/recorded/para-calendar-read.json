@@ -10,7 +10,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1522
+      "ms": 835
     }
   },
   "para-calendar-read-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1441
+      "ms": 817
     }
   },
   "para-calendar-read-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1442
+      "ms": 833
     }
   },
   "para-calendar-read-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1533
+      "ms": 839
     }
   },
   "para-calendar-read-05": {
@@ -66,7 +66,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1499
+      "ms": 828
     }
   },
   "para-calendar-read-06": {
@@ -80,7 +80,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1438
+      "ms": 811
     }
   },
   "para-calendar-read-07": {
@@ -94,7 +94,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1462
+      "ms": 832
     }
   },
   "para-calendar-read-08": {
@@ -108,7 +108,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1600
+      "ms": 915
     }
   },
   "para-calendar-read-09": {
@@ -116,13 +116,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Read my Risi calendar today.",
+        "request": "Read my calendar today.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1460
+      "ms": 807
     }
   },
   "para-calendar-read-10": {
@@ -130,27 +130,27 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "What is happening tomorrow, calendar wise?",
+        "request": "what is happening tomorrow on the calendar",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1481
+      "ms": 828
     }
   },
   "para-calendar-read-11": {
     "am i busy at ten?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "Am I busy at ten?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1501
+      "ms": 889
     }
   },
   "para-calendar-read-12": {
@@ -164,7 +164,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1440
+      "ms": 815
     }
   },
   "para-calendar-read-13": {
@@ -178,7 +178,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1468
+      "ms": 832
     }
   },
   "para-calendar-read-14": {
@@ -186,13 +186,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Is my morning free on Friday 16 October 2026?",
+        "request": "Is my morning free?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1647
+      "ms": 793
     }
   },
   "para-calendar-read-15": {
@@ -206,7 +206,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1417
+      "ms": 800
     }
   },
   "para-calendar-read-16": {
@@ -220,7 +220,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1260
+      "ms": 817
     }
   },
   "para-calendar-read-17": {
@@ -228,13 +228,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "What is on my calendar for tomorrow?",
+        "request": "What is on my calendar tomorrow?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1491
+      "ms": 862
     },
     "what's on my calendar today?": {
       "decision": {
@@ -246,7 +246,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1514
+      "ms": 832
     }
   },
   "para-calendar-read-18": {
@@ -260,19 +260,19 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1496
+      "ms": 816
     },
     "you should be able to read your own calendar, why can't you?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "request": "Do I have anything today?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1515
+      "ms": 888
     }
   },
   "para-calendar-read-19": {
@@ -286,21 +286,21 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1467
+      "ms": 853
     }
   },
   "para-calendar-read-20": {
     "what time do i have to be somewhere today?": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 0.9,
         "request": "What time do I have to be somewhere today?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1644
+      "ms": 932
     }
   }
 }

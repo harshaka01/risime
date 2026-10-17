@@ -842,4 +842,36 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
 
     refute_received {:turn_run, _}
   end
+
+  test "insisting on access after a read runs that read again (golden call-2 t3)" do
+    script(%{
+      "Did I promise anything today or tomorrow?" => %{
+        "tool" => "my_promises",
+        "action" => "tool"
+      }
+    })
+
+    ctx = %{user_id: Ecto.UUID.generate(), conv: nil, call_id: "t", dialogue: nil}
+    dec = RisiMe.Agent.CallRisi.Decider.normalize(%{"tool" => "capabilities", "action" => "tool"})
+
+    input = %{
+      now: "now",
+      tz: "UTC",
+      dialogue: RisiMe.Agent.CallRisi.Dialogue.get(nil),
+      history: [%{"role" => "user", "content" => "Did I promise anything today or tomorrow?"}],
+      text: "You should have access, you add the notes and calendar"
+    }
+
+    assert %{tool: "my_promises"} =
+             RisiMe.Agent.CallRisi.BrainV3.insisted(dec, ctx, input, input.text)
+
+    # A real question about what Risi can do stays one.
+    assert %{tool: "capabilities"} =
+             RisiMe.Agent.CallRisi.BrainV3.insisted(
+               dec,
+               ctx,
+               %{input | text: "What can you do?"},
+               "What can you do?"
+             )
+  end
 end

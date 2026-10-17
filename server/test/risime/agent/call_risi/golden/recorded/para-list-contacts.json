@@ -9,20 +9,20 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1181
+      "ms": 632
     }
   },
   "para-list-contacts-02": {
     "who is in my contacts?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "",
         "text": "",
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1179
+      "ms": 679
     }
   },
   "para-list-contacts-03": {
@@ -35,20 +35,20 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1185
+      "ms": 631
     }
   },
   "para-list-contacts-04": {
     "can you list my contacts?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "",
         "text": "",
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1175
+      "ms": 673
     }
   },
   "para-list-contacts-05": {
@@ -61,7 +61,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1197
+      "ms": 635
     }
   },
   "para-list-contacts-06": {
@@ -74,20 +74,21 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1182
+      "ms": 636
     }
   },
   "para-list-contacts-07": {
     "who can i send messages to?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
+        "request": "Who can I send messages to?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1173
+      "ms": 908
     }
   },
   "para-list-contacts-08": {
@@ -100,7 +101,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1177
+      "ms": 635
     }
   },
   "para-list-contacts-09": {
@@ -113,7 +114,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1185
+      "ms": 632
     }
   },
   "para-list-contacts-10": {
@@ -126,7 +127,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1176
+      "ms": 635
     }
   },
   "para-list-contacts-11": {
@@ -139,20 +140,20 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1177
+      "ms": 632
     }
   },
   "para-list-contacts-12": {
     "tell me who's in my address book.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "",
         "text": "",
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1180
+      "ms": 673
     }
   },
   "para-list-contacts-13": {
@@ -160,12 +161,13 @@
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "tab": "",
+        "request": "Who are my RisiMe friends?",
+        "tab": "private",
         "text": "",
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1218
+      "ms": 930
     }
   },
   "para-list-contacts-14": {
@@ -178,7 +180,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1175
+      "ms": 640
     }
   },
   "para-list-contacts-15": {
@@ -191,7 +193,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1187
+      "ms": 636
     }
   },
   "para-list-contacts-16": {
@@ -204,7 +206,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1183
+      "ms": 629
     }
   },
   "para-list-contacts-17": {
@@ -217,20 +219,20 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1176
+      "ms": 634
     }
   },
   "para-list-contacts-18": {
     "what contacts are there?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "",
         "text": "",
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1175
+      "ms": 670
     }
   },
   "para-list-contacts-19": {
@@ -243,7 +245,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1177
+      "ms": 632
     }
   },
   "para-list-contacts-20": {
@@ -256,7 +258,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1175
+      "ms": 632
     }
   }
 }

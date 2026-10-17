@@ -5,18 +5,18 @@
         "text": "Tell her that I called her a couple of times and she did not answer, call me back.",
         "tool": "more"
       },
-      "ms": 961
+      "ms": 807
     },
     "send a message to madhavi.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "Madhavi",
         "tool": "message_draft"
       },
-      "ms": 1156
+      "ms": 718
     }
   },
   "shared-D-02": {
@@ -25,7 +25,7 @@
         "text": "Good morning, and I'm just testing whether you can send a message on behalf of me.",
         "tool": "more"
       },
-      "ms": 1137
+      "ms": 786
     },
     "send a message to oshan.": {
       "decision": {
@@ -36,61 +36,62 @@
         "to": "Oshan",
         "tool": "message_draft"
       },
-      "ms": 1188
+      "ms": 696
     }
   },
   "shared-D-03": {
     "cancel that.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1483
+      "ms": 681
     },
     "dictation| >> cancel that.": {
       "decision": {
         "tool": "instruction"
       },
-      "ms": 720
+      "ms": 354
     },
     "send a message to dilhan.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
-        "tab": "private",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "Dilhan",
         "tool": "message_draft"
       },
-      "ms": 1242
+      "ms": 671
     }
   },
   "shared-D-04": {
     "no, no, i want to send a message to anura. so you should ask me what the message should be and then i'll tell you.": {
       "decision": {
         "action": "tool",
+        "cancel_open": true,
         "confidence": 1,
         "tab": "private",
         "text": "",
         "to": "Anura Jayakody",
         "tool": "message_draft"
       },
-      "ms": 1279
+      "ms": 886
     },
     "send a message to anura saying no no i want to send a message.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
         "tab": "private",
-        "text": "",
+        "text": "no no I want to send a message.",
         "to": "Anura",
         "tool": "message_draft"
       },
-      "ms": 1184
+      "ms": 870
     }
   },
   "shared-D-05": {
@@ -103,14 +104,14 @@
         "to": "Kavindu Seneviratne",
         "tool": "replied_since"
       },
-      "ms": 1343
+      "ms": 1029
     },
     "dictation| >> check whether kavindu replied.": {
       "decision": {
-        "text": "",
+        "text": "Check whether Kavindu replied.",
         "tool": "instruction"
       },
-      "ms": 558
+      "ms": 532
     },
     "send a message to kavindu.": {
       "decision": {
@@ -121,7 +122,7 @@
         "to": "Kavindu",
         "tool": "message_draft"
       },
-      "ms": 1210
+      "ms": 711
     }
   },
   "shared-D-06": {
@@ -130,18 +131,18 @@
         "text": "The meeting is moved to Friday at three, please confirm.",
         "tool": "end"
       },
-      "ms": 799
+      "ms": 1356
     },
     "listen to my message properly and then send it to tharindi.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "tab": "private",
         "text": "",
         "to": "Tharindi",
         "tool": "dictate"
       },
-      "ms": 1691
+      "ms": 978
     }
   },
   "shared-D-07": {
@@ -150,24 +151,24 @@
         "action": "tool",
         "confidence": 1,
         "tab": "official",
-        "text": "The files are ready.",
+        "text": "the files are ready.",
         "to": "Oshan",
         "tool": "message_draft"
       },
-      "ms": 1286
+      "ms": 793
     }
   },
   "shared-D-08": {
     "can you just send it by yourself?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "official",
         "text": "The report is done.",
         "to": "Ishara Wickrama",
         "tool": "confirm_open"
       },
-      "ms": 2403
+      "ms": 934
     },
     "tell ishara on work that the report is done.": {
       "decision": {
@@ -178,7 +179,7 @@
         "to": "Ishara",
         "tool": "message_draft"
       },
-      "ms": 1741
+      "ms": 1094
     }
   },
   "shared-D-09": {
@@ -186,18 +187,18 @@
       "decision": {
         "tool": "instruction"
       },
-      "ms": 450
+      "ms": 357
     },
     "send a message to lakmal.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
-        "tab": "",
+        "confidence": 1,
+        "tab": "private",
         "text": "",
         "to": "Lakmal",
         "tool": "message_draft"
       },
-      "ms": 1383
+      "ms": 711
     }
   },
   "shared-D-10": {
@@ -207,18 +208,18 @@
         "text_fixed": "Please tell her the shipment arrived, and Risi can send me the invoice.",
         "tool": "more"
       },
-      "ms": 1342
+      "ms": 1905
     },
     "send a message to sanduni.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "Sanduni",
         "tool": "message_draft"
       },
-      "ms": 1161
+      "ms": 691
     }
   },
   "shared-I-01": {
@@ -226,12 +227,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Oshan",
         "tool": "replied_since"
       },
-      "ms": 1268
+      "ms": 670
     }
   },
   "shared-I-02": {
@@ -239,7 +240,7 @@
       "decision": {
         "tool": "instruction"
       },
-      "ms": 440
+      "ms": 357
     },
     "no, no, i'm not asking you to write any message, i'm asking you to read the messages sent by dilhan.": {
       "decision": {
@@ -251,32 +252,32 @@
         "to": "Dilhan Kottage",
         "tool": "read_messages"
       },
-      "ms": 1534
+      "ms": 962
     },
     "send a message to dilhan.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
-        "tab": "private",
+        "confidence": 1,
+        "tab": "",
         "text": "",
         "to": "Dilhan",
         "tool": "message_draft"
       },
-      "ms": 1237
+      "ms": 673
     }
   },
   "shared-I-03": {
     "any promises by madhavi or anura?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "Any promises by Madhavi or Anura?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "promises_by"
       },
-      "ms": 1425
+      "ms": 990
     }
   },
   "shared-I-04": {
@@ -290,7 +291,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1565
+      "ms": 828
     }
   },
   "shared-I-05": {
@@ -304,7 +305,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 2257
+      "ms": 849
     }
   },
   "shared-I-06": {
@@ -318,19 +319,20 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1788
+      "ms": 1032
     },
     "i don't know, from nine to ten, discuss the supplier visit.": {
       "decision": {
         "action": "tool",
+        "cancel_open": true,
         "confidence": 1,
-        "request": "Add to your Risi Calendar: Appointment · Fri 16 Oct, 9–10 AM, discuss the supplier visit",
+        "request": "Add to your Risi Calendar: Appointment · Fri 16 Oct, 9–10 AM, discuss the supplier visit.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1885
+      "ms": 1373
     }
   },
   "shared-I-07": {
@@ -343,7 +345,7 @@
         "to": "",
         "tool": "list_contacts"
       },
-      "ms": 1332
+      "ms": 632
     }
   },
   "shared-I-08": {
@@ -357,7 +359,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1684
+      "ms": 920
     }
   },
   "shared-I-09": {
@@ -370,21 +372,21 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1164
+      "ms": 628
     }
   },
   "shared-I-10": {
     "let me see. i need to listen to it.": {
       "decision": {
         "action": "reply",
-        "confidence": 1,
+        "confidence": 0.95,
         "say": "",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1602
+      "ms": 758
     }
   },
   "shared-N-01": {
@@ -397,7 +399,7 @@
         "to": "Tharindy",
         "tool": "message_draft"
       },
-      "ms": 1342
+      "ms": 854
     }
   },
   "shared-N-02": {
@@ -405,12 +407,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "official",
         "text": "The invoice is ready.",
         "to": "Sandune",
         "tool": "message_draft"
       },
-      "ms": 1277
+      "ms": 791
     }
   },
   "shared-N-03": {
@@ -423,17 +425,10 @@
         "to": "Ishara",
         "tool": "message_draft"
       },
-      "ms": 1608
+      "ms": 746
     }
   },
   "shared-N-04": {
-    "dictation| >> send it to sineka.": {
-      "decision": {
-        "text": "",
-        "tool": "instruction"
-      },
-      "ms": 563
-    },
     "send it to sineka.": {
       "decision": {
         "action": "tool",
@@ -444,55 +439,57 @@
         "to": "Sineka",
         "tool": "message_draft"
       },
-      "ms": 2071
+      "ms": 853
     },
     "tell tharindi about the schedule.": {
       "decision": {
         "action": "tool",
         "confidence": 0.9,
         "tab": "private",
-        "text": "",
+        "text": "about the schedule",
         "to": "Tharindi",
         "tool": "message_draft"
       },
-      "ms": 1257
+      "ms": 837
     }
   },
   "shared-N-05": {
     "no, tharindi, not tharindu.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
-        "tab": "",
-        "text": "",
+        "cancel_open": false,
+        "confidence": 0.9,
+        "tab": "private",
+        "text": "The room is booked.",
         "to": "Tharindi",
         "tool": "message_draft"
       },
-      "ms": 1406
+      "ms": 970
     },
     "send a message to tharindu saying the room is booked.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
         "tab": "private",
-        "text": "The room is booked.",
+        "text": "the room is booked.",
         "to": "Tharindu",
         "tool": "message_draft"
       },
-      "ms": 1503
+      "ms": 815
     }
   },
   "shared-N-06": {
     "send it to work.": {
       "decision": {
         "action": "tool",
+        "cancel_open": true,
         "confidence": 1,
         "tab": "official",
         "text": "The files are ready.",
         "to": "Oshan Peiris",
-        "tool": "confirm_open"
+        "tool": "message_draft"
       },
-      "ms": 1436
+      "ms": 971
     },
     "tell oshan the files are ready.": {
       "decision": {
@@ -503,7 +500,7 @@
         "to": "Oshan",
         "tool": "message_draft"
       },
-      "ms": 1282
+      "ms": 793
     }
   },
   "shared-N-07": {
@@ -511,13 +508,13 @@
       "decision": {
         "action": "tool",
         "confidence": 0.95,
-        "request": "Read the messages from Dill-han.",
-        "tab": "private",
+        "request": "",
+        "tab": "",
         "text": "",
         "to": "Dill-han",
         "tool": "read_messages"
       },
-      "ms": 1580
+      "ms": 792
     }
   },
   "shared-N-08": {
@@ -530,7 +527,7 @@
         "to": "Nishan",
         "tool": "message_draft"
       },
-      "ms": 1678
+      "ms": 683
     },
     "send a message please.": {
       "decision": {
@@ -541,7 +538,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1123
+      "ms": 655
     }
   },
   "shared-N-09": {
@@ -550,11 +547,11 @@
         "action": "tool",
         "confidence": 1,
         "tab": "private",
-        "text": "The parcel arrived.",
+        "text": "the parcel arrived.",
         "to": "Madhavi Rancoat",
         "tool": "message_draft"
       },
-      "ms": 1365
+      "ms": 853
     }
   },
   "shared-N-10": {
@@ -562,12 +559,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Janet",
         "tool": "replied_since"
       },
-      "ms": 1204
+      "ms": 673
     }
   }
 }

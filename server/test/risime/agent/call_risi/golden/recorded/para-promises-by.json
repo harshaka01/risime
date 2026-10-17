@@ -3,14 +3,14 @@
     "has kamal followed up on the computer delivery?": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 0.95,
         "request": "Has Kamal followed up on the computer delivery?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1560
+      "ms": 1001
     }
   },
   "para-promises-by-02": {
@@ -24,7 +24,7 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1414
+      "ms": 868
     }
   },
   "para-promises-by-03": {
@@ -38,7 +38,7 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1396
+      "ms": 848
     }
   },
   "para-promises-by-04": {
@@ -52,7 +52,7 @@
         "to": "Ruvan",
         "tool": "promises_by"
       },
-      "ms": 1477
+      "ms": 933
     }
   },
   "para-promises-by-05": {
@@ -61,12 +61,12 @@
         "action": "tool",
         "confidence": 0.9,
         "request": "Is Kamel going to deliver the new computer?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Kamel",
         "tool": "promises_by"
       },
-      "ms": 1557
+      "ms": 972
     }
   },
   "para-promises-by-06": {
@@ -80,7 +80,7 @@
         "to": "Nimali",
         "tool": "promises_by"
       },
-      "ms": 1463
+      "ms": 909
     }
   },
   "para-promises-by-07": {
@@ -94,7 +94,7 @@
         "to": "Kasun",
         "tool": "promises_by"
       },
-      "ms": 1424
+      "ms": 869
     }
   },
   "para-promises-by-08": {
@@ -108,7 +108,7 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1413
+      "ms": 868
     }
   },
   "para-promises-by-09": {
@@ -117,40 +117,40 @@
         "action": "tool",
         "confidence": 0.9,
         "request": "has Kamal followed up on the computer delivery",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1561
+      "ms": 952
     }
   },
   "para-promises-by-10": {
     "what's pending from kamal?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "What's pending from Kamal?",
         "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1417
+      "ms": 924
     }
   },
   "para-promises-by-11": {
     "has ruwan sent the vehicle report he promised?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "request": "Has Ruwan sent the vehicle report he promised?",
         "tab": "",
         "text": "",
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1474
+      "ms": 974
     }
   },
   "para-promises-by-12": {
@@ -164,7 +164,7 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1455
+      "ms": 916
     }
   },
   "para-promises-by-13": {
@@ -178,7 +178,7 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1498
+      "ms": 948
     }
   },
   "para-promises-by-14": {
@@ -192,7 +192,7 @@
         "to": "Nima Lee",
         "tool": "promises_by"
       },
-      "ms": 1477
+      "ms": 928
     }
   },
   "para-promises-by-15": {
@@ -206,7 +206,7 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1414
+      "ms": 865
     }
   },
   "para-promises-by-16": {
@@ -220,20 +220,21 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1393
+      "ms": 845
     }
   },
   "para-promises-by-17": {
     "what do i owe kamal and what does he owe me?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
+        "request": "What do I owe Kamal and what does he owe me?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1211
+      "ms": 1027
     }
   },
   "para-promises-by-18": {
@@ -247,7 +248,7 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1418
+      "ms": 849
     }
   },
   "para-promises-by-19": {
@@ -261,7 +262,7 @@
         "to": "Kamal Jayasuriya",
         "tool": "promises_by"
       },
-      "ms": 1639
+      "ms": 1090
     },
     "tell kamal the meeting is at two.": {
       "decision": {
@@ -272,7 +273,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1163
+      "ms": 809
     }
   },
   "para-promises-by-20": {
@@ -286,7 +287,7 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1439
+      "ms": 907
     }
   }
 }

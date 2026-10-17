@@ -10,7 +10,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1558
+      "ms": 936
     }
   },
   "para-reminder-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1597
+      "ms": 972
     }
   },
   "para-reminder-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1540
+      "ms": 891
     }
   },
   "para-reminder-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1563
+      "ms": 939
     }
   },
   "para-reminder-05": {
@@ -60,13 +60,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "buy flowers",
+        "request": "tomorrow at noon, buy flowers.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1365
+      "ms": 853
     }
   },
   "para-reminder-06": {
@@ -74,13 +74,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "remind me on Sunday at 8 to water the plants",
+        "request": "remind me on Sunday at 8 to water the plants.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1579
+      "ms": 957
     }
   },
   "para-reminder-07": {
@@ -94,7 +94,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1545
+      "ms": 912
     }
   },
   "para-reminder-08": {
@@ -108,7 +108,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1568
+      "ms": 933
     }
   },
   "para-reminder-09": {
@@ -116,13 +116,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "remind me on the 20th to send the quote to Lotusbay",
+        "request": "remind me on the 20th to send the quote to Lotusbay.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1687
+      "ms": 1073
     }
   },
   "para-reminder-10": {
@@ -130,13 +130,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "I need a reminder tomorrow at 7 for the gym.",
+        "request": "reminder tomorrow at 7 for the gym.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1560
+      "ms": 875
     }
   },
   "para-reminder-11": {
@@ -150,7 +150,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1496
+      "ms": 872
     }
   },
   "para-reminder-12": {
@@ -164,7 +164,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1581
+      "ms": 988
     }
   },
   "para-reminder-13": {
@@ -178,7 +178,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1622
+      "ms": 992
     }
   },
   "para-reminder-14": {
@@ -186,13 +186,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "set me a reminder for tomorrow 6 am, airport",
+        "request": "set a reminder for tomorrow 6 am, airport",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1557
+      "ms": 890
     }
   },
   "para-reminder-15": {
@@ -206,7 +206,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1598
+      "ms": 971
     }
   },
   "para-reminder-16": {
@@ -220,7 +220,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1577
+      "ms": 974
     }
   },
   "para-reminder-17": {
@@ -234,7 +234,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1555
+      "ms": 918
     }
   },
   "para-reminder-18": {
@@ -248,7 +248,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1494
+      "ms": 870
     }
   },
   "para-reminder-19": {
@@ -262,7 +262,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1601
+      "ms": 954
     }
   },
   "para-reminder-20": {
@@ -276,7 +276,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1637
+      "ms": 1009
     }
   }
 }

@@ -8,25 +8,25 @@
       "to": "Nimali Perera",
       "tool": "replied_since"
     },
-    "ms": 1225
+    "ms": 859
   },
   "can you just send it by yourself rather than me tapping?": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
+      "confidence": 1.0,
       "tab": "private",
       "text": "What time are you going home?",
       "to": "Nimali Perera",
       "tool": "confirm_open"
     },
-    "ms": 1570
+    "ms": 978
   },
   "dictation| >> what time are you going home?": {
     "decision": {
       "text": "What time are you going home?",
       "tool": "more"
     },
-    "ms": 696
+    "ms": 557
   },
   "no, no. you send a message to nimali. did she reply to me?": {
     "decision": {
@@ -37,18 +37,19 @@
       "to": "Nimali Perera",
       "tool": "replied_since"
     },
-    "ms": 1340
+    "ms": 857
   },
   "no, when i asked you to send a message... you should be sending the message directly, not asking me to tap anything.": {
     "decision": {
       "action": "tool",
       "confidence": 0.9,
+      "say": "",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1197
+    "ms": 753
   },
   "okay, can you send me send a message to nimali?": {
     "decision": {
@@ -59,31 +60,31 @@
       "to": "Nimali",
       "tool": "message_draft"
     },
-    "ms": 1238
+    "ms": 754
   },
   "okay, read back. read my calendar today.": {
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "request": "Read my calendar today.",
+      "request": "read my calendar today",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1506
+    "ms": 882
   },
   "so it is being connected and skills calendars are already being connected.": {
     "decision": {
       "action": "reply",
       "confidence": 0.9,
-      "say": "I'm listening.",
+      "say": "Okay, I've noted that the computer is being connected and the calendars are linked.",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "none"
     },
-    "ms": 1343
+    "ms": 1132
   },
   "so what did i promise today?": {
     "decision": {
@@ -95,7 +96,7 @@
       "to": "",
       "tool": "my_promises"
     },
-    "ms": 1645
+    "ms": 935
   },
   "so, risi, can you tell me whether... whether you have followed up with. that's it, kamal. for the computer delivery.": {
     "decision": {
@@ -107,29 +108,30 @@
       "to": "Kamal",
       "tool": "promises_by"
     },
-    "ms": 1472
+    "ms": 1064
   },
   "yeah, the calendars are being, you know, set up and it should be working. and you should be able to read the risi calendar. not anybody else's calendar so how come you can't you can't read your own calendar": {
     "decision": {
       "action": "tool",
       "confidence": 0.9,
-      "say": "I can read your calendar, but I cannot read my own.",
+      "say": "",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1531
+    "ms": 786
   },
   "you should be able to reply. and you should be able to tell me that if somebody has sent a message to me, you should be able to tell me that they have sent a message.": {
     "decision": {
       "action": "tool",
-      "confidence": 0.9,
+      "confidence": 0.95,
+      "say": "",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1238
+    "ms": 806
   }
 }

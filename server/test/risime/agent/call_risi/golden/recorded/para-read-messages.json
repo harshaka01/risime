@@ -4,12 +4,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "replied_since"
       },
-      "ms": 1214
+      "ms": 689
     }
   },
   "para-read-messages-02": {
@@ -17,12 +17,13 @@
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "tab": "private",
+        "request": "did Nima Lee get back to me",
+        "tab": "",
         "text": "",
         "to": "Nima Lee",
         "tool": "replied_since"
       },
-      "ms": 1258
+      "ms": 950
     }
   },
   "para-read-messages-03": {
@@ -35,7 +36,7 @@
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1073
+      "ms": 616
     }
   },
   "para-read-messages-04": {
@@ -43,13 +44,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Do I have any new messages?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1439
+      "ms": 617
     }
   },
   "para-read-messages-05": {
@@ -58,12 +58,12 @@
         "action": "tool",
         "confidence": 1,
         "request": "What did Ruwan say?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Ruwan",
         "tool": "read_messages"
       },
-      "ms": 1412
+      "ms": 827
     }
   },
   "para-read-messages-06": {
@@ -72,12 +72,12 @@
         "action": "tool",
         "confidence": 1,
         "request": "Read me Kamal's last message.",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "read_messages"
       },
-      "ms": 1466
+      "ms": 850
     }
   },
   "para-read-messages-07": {
@@ -85,12 +85,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "replied_since"
       },
-      "ms": 1217
+      "ms": 690
     }
   },
   "para-read-messages-08": {
@@ -99,12 +99,12 @@
         "action": "tool",
         "confidence": 0.9,
         "request": "Did Ruvan send me anything?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Ruvan",
         "tool": "read_messages"
       },
-      "ms": 1480
+      "ms": 883
     }
   },
   "para-read-messages-09": {
@@ -118,7 +118,7 @@
         "to": "Kamel",
         "tool": "read_messages"
       },
-      "ms": 1419
+      "ms": 869
     }
   },
   "para-read-messages-10": {
@@ -126,12 +126,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "replied_since"
       },
-      "ms": 1219
+      "ms": 689
     }
   },
   "para-read-messages-11": {
@@ -139,13 +139,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Anything new in my messages?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1415
+      "ms": 616
     }
   },
   "para-read-messages-12": {
@@ -153,13 +152,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Can you tell me if someone messaged me?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1400
+      "ms": 614
     }
   },
   "para-read-messages-13": {
@@ -172,7 +170,7 @@
         "to": "Nimali",
         "tool": "read_messages"
       },
-      "ms": 1198
+      "ms": 714
     }
   },
   "para-read-messages-14": {
@@ -185,18 +183,18 @@
         "to": "Nimali Perera",
         "tool": "replied_since"
       },
-      "ms": 1159
+      "ms": 794
     },
     "tell nimali the review moved to three.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 0.9,
         "tab": "private",
         "text": "The review moved to three.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1382
+      "ms": 876
     }
   },
   "para-read-messages-15": {
@@ -210,7 +208,7 @@
         "to": "Ruwan",
         "tool": "read_messages"
       },
-      "ms": 1493
+      "ms": 941
     }
   },
   "para-read-messages-16": {
@@ -218,40 +216,40 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "replied_since"
       },
-      "ms": 1225
+      "ms": 693
     }
   },
   "para-read-messages-17": {
     "is there any reply from kamal?": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 0.9,
         "request": "Is there any reply from Kamal?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "replied_since"
       },
-      "ms": 1537
+      "ms": 927
     }
   },
   "para-read-messages-18": {
     "did anybody message me this morning?": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 1,
         "request": "Did anybody message me this morning?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1500
+      "ms": 808
     }
   },
   "para-read-messages-19": {
@@ -265,7 +263,7 @@
         "to": "",
         "tool": "read_messages"
       },
-      "ms": 1316
+      "ms": 788
     }
   },
   "para-read-messages-20": {
@@ -273,12 +271,13 @@
       "decision": {
         "action": "tool",
         "confidence": 0.95,
-        "tab": "private",
+        "request": "Did Nimali reply to the sales figures thing?",
+        "tab": "",
         "text": "",
         "to": "Nimali",
         "tool": "replied_since"
       },
-      "ms": 1280
+      "ms": 1033
     }
   }
 }

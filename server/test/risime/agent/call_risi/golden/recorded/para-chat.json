@@ -4,13 +4,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "I'm doing well, thank you. How are you?",
+        "say": "I'm doing well, thanks for asking. How can I help you today?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1642
+      "ms": 1088
     }
   },
   "para-chat-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1541
+      "ms": 895
     }
   },
   "para-chat-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1575
+      "ms": 928
     }
   },
   "para-chat-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1592
+      "ms": 951
     }
   },
   "para-chat-05": {
@@ -60,13 +60,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "You say thank you in Sinhala as 'Oba wada'. Would you like me to send a message with that to someone?",
+        "say": "You say 'Oba wada'. It means thank you very much.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1947
+      "ms": 1048
     }
   },
   "para-chat-06": {
@@ -80,21 +80,20 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1759
+      "ms": 1086
     }
   },
   "para-chat-07": {
     "what is two plus two?": {
       "decision": {
-        "action": "reply",
+        "action": "tool",
         "confidence": 1,
-        "say": "Two plus two is four.",
         "tab": "",
         "text": "",
         "to": "",
-        "tool": "none"
+        "tool": "unsupported"
       },
-      "ms": 1520
+      "ms": 633
     }
   },
   "para-chat-08": {
@@ -102,13 +101,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "William Shakespeare wrote Romeo and Juliet.",
+        "say": "I can't look up that information for you.",
         "tab": "",
         "text": "",
         "to": "",
-        "tool": "none"
+        "tool": "unsupported"
       },
-      "ms": 1536
+      "ms": 895
     }
   },
   "para-chat-09": {
@@ -122,7 +121,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1646
+      "ms": 993
     }
   },
   "para-chat-10": {
@@ -136,21 +135,21 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1590
+      "ms": 911
     }
   },
   "para-chat-11": {
     "that's great, thank you so much.": {
       "decision": {
         "action": "reply",
-        "confidence": 1,
+        "confidence": 0.9,
         "say": "You're welcome. Let me know if you need anything else.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1665
+      "ms": 1046
     }
   },
   "para-chat-12": {
@@ -164,21 +163,21 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1984
+      "ms": 1323
     }
   },
   "para-chat-13": {
     "okay, bye for now.": {
       "decision": {
         "action": "reply",
-        "confidence": 1,
-        "say": "Bye for now.",
+        "confidence": 1.0,
+        "say": "Bye!",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1498
+      "ms": 855
     }
   },
   "para-chat-14": {
@@ -186,13 +185,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "RSVP stands for 'Répondez s'il vous plaît', which is French for 'please respond'.",
+        "say": "It stands for Répondez s'il vous plaît, which is French for 'please respond'.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1840
+      "ms": 1146
     }
   },
   "para-chat-15": {
@@ -200,53 +199,53 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "A budget is a plan for how you will spend and save your money over a specific period.",
+        "say": "A budget is a plan that estimates your income and expenses over a specific period.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1802
+      "ms": 1073
     }
   },
   "para-chat-16": {
     "how far is the moon, roughly?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "",
         "text": "",
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1044
+      "ms": 676
     }
   },
   "para-chat-17": {
     "what's the boiling point of water?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "",
         "text": "",
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1207
+      "ms": 694
     }
   },
   "para-chat-18": {
     "nice, you are getting better.": {
       "decision": {
         "action": "reply",
-        "confidence": 1,
-        "say": "Thank you. I'm here to help, so what can I do for you?",
+        "confidence": 0.9,
+        "say": "Thank you. I'm here to help.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1766
+      "ms": 975
     }
   },
   "para-chat-19": {
@@ -254,13 +253,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "Focus on your audience. Know who they are and what they need, and tailor your content to speak directly to their interests.",
+        "say": "Keep it simple and focus on your key message. Practice makes perfect, so rehearse until you feel confident.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1933
+      "ms": 1191
     }
   },
   "para-chat-20": {
@@ -274,7 +273,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1544
+      "ms": 887
     }
   }
 }

@@ -3,12 +3,12 @@
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "request": "Read messages from Ruwan.",
-      "tab": "private",
+      "request": "",
+      "tab": "",
       "text": "",
       "to": "Ruwan",
       "tool": "read_messages"
     },
-    "ms": 1415
+    "ms": 696
   }
 }

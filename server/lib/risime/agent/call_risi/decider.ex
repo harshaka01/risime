@@ -61,6 +61,10 @@ defmodule RisiMe.Agent.CallRisi.Decider do
     "additionalProperties" => false
   }
 
+  # Item 11: the same schemas as compact-JSON grammars (no whitespace: ~35 tokens a decision, not
+  # ~65; the prompt is unchanged).
+  @grammar RisiMe.Agent.CompactJson.grammar(@schema)
+
   @system """
   You decide what Risi does next on a live phone call. Risi is the user's assistant. You get the \
   open state, the call so far and the user's latest words (speech-to-text: words and names may be \
@@ -184,6 +188,8 @@ defmodule RisiMe.Agent.CallRisi.Decider do
     "required" => ~w(tool),
     "additionalProperties" => false
   }
+
+  @dictation_grammar RisiMe.Agent.CompactJson.grammar(@dictation_schema)
 
   @dictation_system """
   Risi (the assistant; speech-to-text often writes its name as "a receipt", "Rishi", "Reese" or \
@@ -403,6 +409,12 @@ defmodule RisiMe.Agent.CallRisi.Decider do
 
   defp text?(t), do: is_binary(t) and t != ""
 
+  defp grammar_for("call_dictation"), do: if(compact?(), do: @dictation_grammar)
+  defp grammar_for(_name), do: if(compact?(), do: @grammar)
+
+  # Config `compact_json: false` goes back to the JSON schema (pretty-printed output).
+  defp compact?, do: Keyword.get(config(), :compact_json, true)
+
   defp request(ctx, model, task, system, user, name, schema, max, log) do
     req = %{
       task: task,
@@ -418,6 +430,7 @@ defmodule RisiMe.Agent.CallRisi.Decider do
       # D-001: the call brain stays on RisiMe's own model (no automatic fallback); the only way
       # to another model is the escalation path above, off and with none configured.
       local_only: model == model(),
+      grammar: if(model == model(), do: grammar_for(name)),
       # One decision, the same for the same call: greedy (the golden calls replay it).
       temperature: 0.0,
       timeout_ms: Keyword.get(config(), :timeout_ms, 8_000),

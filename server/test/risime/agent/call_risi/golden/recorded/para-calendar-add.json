@@ -10,7 +10,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1636
+      "ms": 1491
     }
   },
   "para-calendar-add-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1559
+      "ms": 930
     }
   },
   "para-calendar-add-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1600
+      "ms": 1169
     }
   },
   "para-calendar-add-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1536
+      "ms": 933
     }
   },
   "para-calendar-add-05": {
@@ -66,21 +66,21 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1599
+      "ms": 977
     }
   },
   "para-calendar-add-06": {
     "add a meeting with the auditors from 2 to 3.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "Add a meeting with the auditors from 2 to 3.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1597
+      "ms": 1051
     },
     "tomorrow.": {
       "decision": {
@@ -92,7 +92,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1832
+      "ms": 1217
     }
   },
   "para-calendar-add-07": {
@@ -106,7 +106,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1564
+      "ms": 938
     },
     "put a team lunch on my calendar at one.": {
       "decision": {
@@ -118,7 +118,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1525
+      "ms": 914
     }
   },
   "para-calendar-add-08": {
@@ -132,7 +132,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1600
+      "ms": 1998
     }
   },
   "para-calendar-add-09": {
@@ -146,7 +146,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1644
+      "ms": 1034
     }
   },
   "para-calendar-add-10": {
@@ -160,7 +160,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1621
+      "ms": 1029
     }
   },
   "para-calendar-add-11": {
@@ -174,7 +174,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1541
+      "ms": 916
     }
   },
   "para-calendar-add-12": {
@@ -188,7 +188,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1679
+      "ms": 1058
     }
   },
   "para-calendar-add-13": {
@@ -202,7 +202,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1617
+      "ms": 1206
     }
   },
   "para-calendar-add-14": {
@@ -216,19 +216,20 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1536
+      "ms": 1191
     },
     "make it 5 to 6 instead.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
-        "request": "Add a meeting tomorrow from 5 to 6",
+        "cancel_open": true,
+        "confidence": 0.9,
+        "request": "Add a meeting tomorrow from 5 to 6.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1574
+      "ms": 1088
     }
   },
   "para-calendar-add-15": {
@@ -242,35 +243,35 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1477
+      "ms": 852
     }
   },
   "para-calendar-add-16": {
     "block my whole day on the 18th.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "Block my whole day on the 18th.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1539
+      "ms": 990
     }
   },
   "para-calendar-add-17": {
     "add a meeting with ruwan at 3.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 0.95,
         "request": "Add a meeting with Ruwan at 3.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1641
+      "ms": 973
     },
     "monday.": {
       "decision": {
@@ -282,7 +283,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1567
+      "ms": 961
     }
   },
   "para-calendar-add-18": {
@@ -296,7 +297,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1606
+      "ms": 994
     }
   },
   "para-calendar-add-19": {
@@ -310,7 +311,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1539
+      "ms": 948
     }
   },
   "para-calendar-add-20": {
@@ -324,7 +325,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1649
+      "ms": 1042
     }
   }
 }

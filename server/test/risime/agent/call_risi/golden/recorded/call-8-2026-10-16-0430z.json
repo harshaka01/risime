@@ -5,10 +5,10 @@
       "confidence": 0.9,
       "tab": "private",
       "text": "Hello, how are you, this is a text message that's given by Harsha.",
-      "to": "",
+      "to": "Harsha",
       "tool": "message_draft"
     },
-    "ms": 1523
+    "ms": 1093
   },
   "just tell me 10 names in my contacts.": {
     "decision": {
@@ -19,7 +19,7 @@
       "to": "",
       "tool": "list_contacts"
     },
-    "ms": 1214
+    "ms": 687
   },
   "n-i-m-a-l-i.": {
     "decision": {
@@ -30,7 +30,7 @@
       "to": "Nimali",
       "tool": "message_draft"
     },
-    "ms": 1571
+    "ms": 1082
   },
   "what time is my next meeting?": {
     "decision": {
@@ -42,6 +42,6 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1500
+    "ms": 871
   }
 }

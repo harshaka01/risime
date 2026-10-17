@@ -2,37 +2,38 @@
   "do you have anything on the 18th of october?": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
+      "confidence": 0.95,
       "request": "Do you have anything on the 18th of October?",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1584
+    "ms": 1014
   },
   "i don't know. from 9 to 10. discuss about racing": {
     "decision": {
       "action": "tool",
       "confidence": 0.9,
       "request": "Add to your Risi Calendar: Appointment · Fri 16 Oct, 9–10 AM, discuss about racing",
-      "tab": "",
+      "tab": "private",
       "text": "",
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1946
+    "ms": 1336
   },
   "rishi, i can't see that you have added something.": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
+      "confidence": 0.95,
+      "request": "",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "card_status"
     },
-    "ms": 1249
+    "ms": 826
   },
   "so what's on my calendar on the 18th of october?": {
     "decision": {
@@ -44,30 +45,30 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1447
+    "ms": 1027
   },
   "that's correct": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
-      "tab": "",
-      "text": "",
-      "to": "",
+      "confidence": 1.0,
+      "tab": "private",
+      "text": "Discuss racing",
+      "to": "Risi Calendar",
       "tool": "confirm_open"
     },
-    "ms": 1257
+    "ms": 898
   },
   "the 16th?": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
+      "confidence": 0.95,
       "request": "What is on my calendar on the 16th of October?",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1635
+    "ms": 1096
   },
   "yeah, but do i have anything from, say, 2 a.m. until... until maybe like, you know, 10 p.m.": {
     "decision": {
@@ -79,29 +80,29 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1916
+    "ms": 1248
   },
   "yeah, can you add an appointment tomorrow? just add an entry on my calendar and block it out from 10 to 12. discuss about risd.": {
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "request": "add an entry on my calendar and block it out from 10 to 12. discuss about RISD",
+      "request": "add an appointment tomorrow from 10 to 12 to discuss about RISD",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1854
+    "ms": 1107
   },
   "yeah, yeah, that's for you, just to add that particular entry.": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
+      "confidence": 1.0,
       "tab": "",
       "text": "",
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1255
+    "ms": 768
   }
 }

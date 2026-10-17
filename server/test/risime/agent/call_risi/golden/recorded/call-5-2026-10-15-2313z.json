@@ -4,12 +4,12 @@
       "action": "tool",
       "confidence": 0.9,
       "request": "set up a meeting today for two",
-      "tab": "",
+      "tab": "private",
       "text": "",
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1589
+    "ms": 925
   },
   "do i have anything to do today?": {
     "decision": {
@@ -21,7 +21,7 @@
       "to": "",
       "tool": "my_promises"
     },
-    "ms": 1529
+    "ms": 904
   },
   "good morning.": {
     "decision": {
@@ -33,17 +33,17 @@
       "to": "",
       "tool": "none"
     },
-    "ms": 1605
+    "ms": 958
   },
   "yeah.": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
+      "confidence": 1.0,
       "tab": "",
       "text": "",
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1213
+    "ms": 728
   }
 }

@@ -125,7 +125,7 @@ defmodule RisiMe.Agent.LLM do
     started = System.monotonic_time(:millisecond)
     local = provider()
     opts = call_opts(req)
-    result = attempt(local, body, req.schema, 1, opts)
+    result = attempt(local, local_body(body, req), req.schema, 1, opts)
     confidence_of = Map.get(req, :confidence, &default_confidence/1)
     # Decision 092: a `local_only` task (Private translate) never reaches another provider.
     fb = if req[:local_only], do: RisiMe.Agent.LLM.Fallback.Never, else: fallback_provider()
@@ -339,6 +339,17 @@ defmodule RisiMe.Agent.LLM do
 
   defp default_confidence(%{"confidence" => c}) when is_number(c), do: c / 1
   defp default_confidence(_), do: 1.0
+
+  # Item 11 (call latency): a task with a `grammar` (RisiMe.Agent.CompactJson) asks the local
+  # model for compact JSON through that grammar instead of the JSON schema (vLLM takes one of the
+  # two). The output is still checked against `req.schema`; another provider gets the schema.
+  defp local_body(body, %{grammar: g}) when is_binary(g) and g != "" do
+    body
+    |> Map.delete("response_format")
+    |> Map.put("structured_outputs", %{"grammar" => g})
+  end
+
+  defp local_body(body, _req), do: body
 
   @doc "Hex SHA-256 of the exact request messages (the only trace of the prompt that is kept)."
   def prompt_hash(messages),

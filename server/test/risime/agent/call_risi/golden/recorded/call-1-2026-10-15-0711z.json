@@ -3,13 +3,13 @@
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "request": "Check my calendar for today and tomorrow",
+      "request": "Check my calendar for today and tomorrow?",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1295
+    "ms": 898
   },
   "do you have anything on the 18th?": {
     "decision": {
@@ -21,7 +21,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1409
+    "ms": 944
   },
   "give me the entire week… tell me the important": {
     "decision": {
@@ -33,30 +33,29 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1482
+    "ms": 1002
   },
   "what can you do?": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
-      "request": "What can you do?",
+      "confidence": 1.0,
       "tab": "",
       "text": "",
       "to": "",
       "tool": "capabilities"
     },
-    "ms": 1544
+    "ms": 651
   },
   "why can't you get the calendar information?": {
     "decision": {
       "action": "tool",
       "confidence": 0.9,
-      "request": "Do you have anything on the 18th?",
+      "request": "Check my calendar for the 18th of October 2026",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1614
+    "ms": 1123
   }
 }

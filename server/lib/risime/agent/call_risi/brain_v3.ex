@@ -383,7 +383,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
     case decide(ctx, input) do
       {{:ok, dec}, neutral?} ->
-        dec = dec |> said_tab(text) |> in_task(d, text)
+        dec = dec |> insisted(ctx, input, text) |> said_tab(text) |> in_task(d, text)
         report(ctx, {:decided, {:v3, dec.tool, dec.action}})
         act(Map.put(ctx, :neutral?, neutral?), dec, d, text, lang)
 
@@ -392,6 +392,28 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         Brain.legacy_answer(Map.put(ctx, :filler?, not neutral?), text, lang)
     end
   end
+
+  # Golden call-2 t3: "You should have access, you add the notes and calendar" right after a read
+  # is the caller insisting, not asking what Risi can do: the read they asked before runs again.
+  @insist ~r/\byou\s+(?:should|do|must|already|definitely)?\s*(?:have|got)\s+(?:the\s+)?access\b|\byou\s+can\s+(?:see|read|access)\b|\byou\s+add(?:ed)?\s+(?:the|my|all)\b/iu
+  @reads ~w(calendar_read my_promises promises_by read_messages replied_since)
+
+  @doc false
+  def insisted(%{tool: t} = dec, ctx, input, text) when t in ~w(capabilities sources none) do
+    prev =
+      for(%{"role" => "user", "content" => c} <- input.history, is_binary(c), c != text, do: c)
+      |> List.last()
+
+    with true <- Regex.match?(@insist, text),
+         true <- is_binary(prev),
+         {{:ok, %{tool: r} = again}, _} when r in @reads <- decide(ctx, %{input | text: prev}) do
+      again
+    else
+      _ -> dec
+    end
+  end
+
+  def insisted(dec, _ctx, _input, _text), do: dec
 
   # C: a cut-off utterance waits for the words that follow (the session restarts the turn with
   # both). A turn that already merged a prefix isn't held again.

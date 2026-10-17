@@ -4,28 +4,30 @@
       "text": "Hi Kamal, the delivery is moved to Friday morning, please be at the office by nine.",
       "tool": "end"
     },
-    "ms": 955
+    "ms": 813
   },
   "listen to my message properly and then send it to kamal.": {
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "tab": "private",
+      "say": "",
+      "tab": "",
       "text": "",
       "to": "Kamal",
       "tool": "dictate"
     },
-    "ms": 1173
+    "ms": 713
   },
   "send it to work.": {
     "decision": {
       "action": "tool",
-      "confidence": 0.9,
+      "cancel_open": true,
+      "confidence": 1,
       "tab": "official",
       "text": "Hi Kamal, the delivery is moved to Friday morning, please be at the office by nine.",
       "to": "Kamal Jayasuriya",
       "tool": "message_draft"
     },
-    "ms": 1773
+    "ms": 1323
   }
 }

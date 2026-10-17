@@ -5,11 +5,11 @@
         "action": "tool",
         "confidence": 1,
         "tab": "private",
-        "text": "Bring the files.",
+        "text": "bring the files",
         "to": "Senarali",
         "tool": "message_draft"
       },
-      "ms": 1299
+      "ms": 817
     },
     "tell nimali the meeting is at three.": {
       "decision": {
@@ -20,20 +20,21 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1315
+      "ms": 834
     }
   },
   "para-recipient-context-02": {
     "and send her another one saying thanks.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "cancel_open": false,
+        "confidence": 0.95,
         "tab": "private",
-        "text": "Thanks.",
+        "text": "Thanks",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1299
+      "ms": 969
     },
     "tell nimali the report is ready.": {
       "decision": {
@@ -44,7 +45,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1294
+      "ms": 811
     }
   },
   "para-recipient-context-03": {
@@ -57,7 +58,7 @@
         "to": "Ruwan Silva",
         "tool": "message_draft"
       },
-      "ms": 1304
+      "ms": 810
     },
     "tell ruwan the car is ready.": {
       "decision": {
@@ -68,7 +69,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1294
+      "ms": 788
     }
   },
   "para-recipient-context-04": {
@@ -77,24 +78,26 @@
         "action": "tool",
         "confidence": 1,
         "tab": "private",
-        "text": "Hello",
+        "text": "hello",
         "to": "Senamali",
         "tool": "message_draft"
       },
-      "ms": 1242
+      "ms": 760
     }
   },
   "para-recipient-context-05": {
     "no, it's for nimali, not kasun.": {
       "decision": {
         "action": "tool",
+        "cancel_open": false,
         "confidence": 1,
-        "tab": "official",
+        "request": "Tell Nimali the report is ready.",
+        "tab": "private",
         "text": "The report is ready.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1320
+      "ms": 1152
     },
     "send senarali another one saying see you soon.": {
       "decision": {
@@ -105,7 +108,7 @@
         "to": "Senarali",
         "tool": "message_draft"
       },
-      "ms": 1352
+      "ms": 866
     },
     "tell kasun the report is ready.": {
       "decision": {
@@ -116,7 +119,7 @@
         "to": "Kasun",
         "tool": "message_draft"
       },
-      "ms": 1305
+      "ms": 817
     }
   },
   "para-recipient-context-06": {
@@ -129,31 +132,31 @@
         "to": "Senamali",
         "tool": "message_draft"
       },
-      "ms": 1362
+      "ms": 869
     },
     "tell nimali good morning.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "tab": "private",
         "text": "Good morning",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1255
+      "ms": 827
     }
   },
   "para-recipient-context-07": {
     "message kasan, the budget is approved.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
-        "tab": "private",
+        "confidence": 0.95,
+        "tab": "official",
         "text": "The budget is approved.",
         "to": "Kasan",
         "tool": "message_draft"
       },
-      "ms": 1285
+      "ms": 852
     }
   },
   "para-recipient-context-08": {
@@ -166,18 +169,19 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1296
+      "ms": 808
     },
     "tell kamel also that the car is outside.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "cancel_open": true,
+        "confidence": 1,
         "tab": "private",
-        "text": "Also, the car is outside.",
+        "text": "Lunch is at one. Also, the car is outside.",
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1464
+      "ms": 1167
     }
   },
   "para-recipient-context-09": {
@@ -190,7 +194,7 @@
         "to": "Nimali Perera",
         "tool": "replied_since"
       },
-      "ms": 1278
+      "ms": 795
     },
     "send nimali: the review is at ten.": {
       "decision": {
@@ -201,33 +205,35 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1332
+      "ms": 833
     }
   },
   "para-recipient-context-10": {
     "tell her that this is a test message.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.5,
+        "confidence": 0.9,
         "tab": "private",
-        "text": "this is a test message",
+        "text": "this is a test message.",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1275
+      "ms": 826
     }
   },
   "para-recipient-context-11": {
     "send it to work.": {
       "decision": {
         "action": "tool",
+        "cancel_open": true,
         "confidence": 1,
+        "request": "Send it to work.",
         "tab": "official",
         "text": "I'm on my way.",
         "to": "Nimali Perera",
-        "tool": "confirm_open"
+        "tool": "message_draft"
       },
-      "ms": 1522
+      "ms": 1148
     },
     "tell nimali i'm on my way.": {
       "decision": {
@@ -238,32 +244,33 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1319
+      "ms": 835
     }
   },
   "para-recipient-context-12": {
     "and send senarali another message, see you soon.": {
       "decision": {
         "action": "tool",
+        "cancel_open": true,
         "confidence": 0.9,
         "tab": "private",
         "text": "See you soon.",
-        "to": "Kasun Senaratne",
+        "to": "Senarali",
         "tool": "message_draft"
       },
-      "ms": 1407
+      "ms": 955
     },
     "no, nimali.": {
       "decision": {
         "action": "tool",
         "cancel_open": true,
-        "confidence": 0.9,
+        "confidence": 1,
         "tab": "private",
         "text": "I'm running late.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1347
+      "ms": 976
     },
     "tell senarali i'm running late.": {
       "decision": {
@@ -274,7 +281,7 @@
         "to": "Senarali",
         "tool": "message_draft"
       },
-      "ms": 1296
+      "ms": 812
     }
   },
   "para-recipient-context-13": {
@@ -282,23 +289,23 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "private",
+        "tab": "official",
         "text": "the server is down.",
         "to": "Kasun",
         "tool": "message_draft"
       },
-      "ms": 1303
+      "ms": 814
     },
     "send him another saying i'm fixing it.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "official",
+        "tab": "private",
         "text": "I'm fixing it.",
         "to": "Kasun Senaratne",
         "tool": "message_draft"
       },
-      "ms": 1239
+      "ms": 955
     }
   },
   "para-recipient-context-14": {
@@ -311,7 +318,7 @@
         "to": "Senarali",
         "tool": "message_draft"
       },
-      "ms": 1181
+      "ms": 854
     },
     "tell nimali the files are on the desk.": {
       "decision": {
@@ -322,31 +329,34 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1356
+      "ms": 856
     }
   },
   "para-recipient-context-15": {
     "actually send it to kamal, not ruwan.": {
       "decision": {
         "action": "tool",
+        "cancel_open": true,
         "confidence": 1,
-        "tab": "",
-        "text": "",
+        "request": "Tell Kamal the shop is closed.",
+        "tab": "private",
+        "text": "The shop is closed.",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1158
+      "ms": 1124
     },
     "send kamal another one: open at ten tomorrow.": {
       "decision": {
         "action": "tool",
+        "cancel_open": false,
         "confidence": 1,
         "tab": "private",
         "text": "open at ten tomorrow",
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1257
+      "ms": 1011
     },
     "tell ruwan the shop is closed.": {
       "decision": {
@@ -357,20 +367,20 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1278
+      "ms": 793
     }
   },
   "para-recipient-context-16": {
     "send a message to nimally saying thanks.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 1,
         "tab": "private",
-        "text": "",
+        "text": "thanks",
         "to": "Nimally",
         "tool": "message_draft"
       },
-      "ms": 1097
+      "ms": 762
     }
   },
   "para-recipient-context-17": {
@@ -379,35 +389,35 @@
         "action": "tool",
         "confidence": 1,
         "tab": "private",
-        "text": "Happy birthday!",
+        "text": "Happy birthday",
         "to": "Kasun",
         "tool": "message_draft"
       },
-      "ms": 1281
+      "ms": 812
     },
     "tell nimali happy birthday.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "tab": "private",
-        "text": "Happy birthday!",
+        "text": "Happy birthday",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1262
+      "ms": 884
     }
   },
   "para-recipient-context-18": {
     "send senarali another one, sorry for the short notice.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 0.95,
         "tab": "private",
         "text": "Sorry for the short notice.",
         "to": "Senarali",
         "tool": "message_draft"
       },
-      "ms": 1237
+      "ms": 915
     },
     "tell kasun the meeting is cancelled.": {
       "decision": {
@@ -418,7 +428,7 @@
         "to": "Kasun",
         "tool": "message_draft"
       },
-      "ms": 1296
+      "ms": 811
     }
   },
   "para-recipient-context-19": {
@@ -431,18 +441,18 @@
         "to": "Senamali",
         "tool": "message_draft"
       },
-      "ms": 1170
+      "ms": 682
     },
     "send a message to my friend.": {
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1161
+      "ms": 653
     }
   },
   "para-recipient-context-20": {
@@ -455,7 +465,7 @@
         "to": "Nimali Perera",
         "tool": "replied_since"
       },
-      "ms": 1286
+      "ms": 792
     },
     "tell nimali the meeting is at three.": {
       "decision": {
@@ -466,7 +476,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1321
+      "ms": 832
     }
   }
 }

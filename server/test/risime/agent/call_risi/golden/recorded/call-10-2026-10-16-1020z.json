@@ -2,72 +2,74 @@
   "can you tell her that this is a test message from me and then send it to work? so that you can't access the personal one so just send it to work and you can send directly": {
     "decision": {
       "action": "tool",
+      "cancel_open": false,
       "confidence": 0.9,
       "tab": "official",
       "text": "this is a test message from me",
       "to": "",
       "tool": "message_draft"
     },
-    "ms": 1322
+    "ms": 956
   },
   "dictation| hi, nimali. how are you? what are you doing? what time are you going home? / you know, i'm pissing greasy. >> and i'm proud to see how risd can send these messages. i'm just testing with the resequence and long messages. and whether the long messages are getting right or getting wrong. and that is the message that i want to get it sent.": {
     "decision": {
       "text": "and I'm proud to see how RISD can send these messages. I'm just testing with the resequence and long messages. and whether the long messages are getting right or getting wrong. and that is the message that I want to get it sent.",
       "tool": "end"
     },
-    "ms": 1582
+    "ms": 1426
   },
   "dictation| hi, nimali. how are you? what are you doing? what time are you going home? >> you know, i'm pissing greasy.": {
     "decision": {
       "text": "You know, I'm pissing greasy.",
-      "text_fixed": "You know, I'm pissed off.",
+      "text_fixed": "You know, I'm pissing grease.",
       "tool": "more"
     },
-    "ms": 1059
+    "ms": 851
   },
-  "dictation| hi, senamali. how are you? and good morning. and good afternoon. / let me finish the whole thing and then i'm trying to make sure that i'm doing / all right. so listen until, when i say okay, until that time, you just listen to me. so, hi, nimali. how are you? are you going home or are you staying at work? while i'm here going home. i'm actually writing this. just to send a long message to you and to see whether a receipt can send. really cool messages or not. >> yeah, it's all done now. so i told you exactly what needs to be said.": {
+  "dictation| hi, senamali. how are you? and good morning. and good afternoon. / and just say, let me finish the whole thing and then i'm trying to make sure that i'm doing / all right. so listen until, when i say okay, until that time, you just listen to me. so, hi, nimali. how are you? are you going home or are you staying at work? while i'm here going home. i'm actually writing this. just to send a long message to you and to see whether a receipt can send. really cool messages or not. >> yeah, it's all done now. so i told you exactly what needs to be said.": {
     "decision": {
-      "text": "",
       "tool": "end"
     },
-    "ms": 572
+    "ms": 396
   },
-  "dictation| hi, senamali. how are you? and good morning. and good afternoon. / let me finish the whole thing and then i'm trying to make sure that i'm doing >> all right. so listen until, when i say okay, until that time, you just listen to me. so, hi, nimali. how are you? are you going home or are you staying at work? while i'm here going home. i'm actually writing this. just to send a long message to you and to see whether a receipt can send. really cool messages or not.": {
+  "dictation| hi, senamali. how are you? and good morning. and good afternoon. / and just say, let me finish the whole thing and then i'm trying to make sure that i'm doing >> all right. so listen until, when i say okay, until that time, you just listen to me. so, hi, nimali. how are you? are you going home or are you staying at work? while i'm here going home. i'm actually writing this. just to send a long message to you and to see whether a receipt can send. really cool messages or not.": {
     "decision": {
       "text": "All right. So listen until, when I say okay, until that time, you just listen to me. So, hi, Nimali. How are you? Are you going home or are you staying at work? While I'm here going home. I'm actually writing this. Just to send a long message to you and to see whether a receipt can send. really cool messages or not.",
       "tool": "more"
     },
-    "ms": 2168
+    "ms": 2021
   },
   "dictation| hi, senamali. how are you? and good morning. and good afternoon. >> and just say, let me finish the whole thing and then i'm trying to make sure that i'm doing": {
     "decision": {
-      "text": "let me finish the whole thing and then I'm trying to make sure that I'm doing",
+      "text": "and just say, let me finish the whole thing and then I'm trying to make sure that I'm doing",
       "tool": "more"
     },
-    "ms": 933
+    "ms": 851
   },
   "no. risi, i wanted to send an answer. just modify the message. so, let me start the message, neemara. right? so the message should stray. hi, senamali. how are you? and good morning. and good afternoon.": {
     "decision": {
       "action": "tool",
+      "cancel_open": true,
       "confidence": 0.9,
-      "request": "Hi, Senamali. How are you? And good morning. And good afternoon.",
       "tab": "private",
       "text": "Hi, Senamali. How are you? And good morning. And good afternoon.",
       "to": "Senamali",
       "tool": "dictate"
     },
-    "ms": 2183
+    "ms": 1336
   },
   "no. what you need to do is to send a message to nimali.": {
     "decision": {
       "action": "tool",
+      "cancel_open": true,
       "confidence": 1,
+      "request": "send a message to Nimali",
       "tab": "official",
-      "text": "This is a test message from me",
+      "text": "",
       "to": "Nimali",
       "tool": "message_draft"
     },
-    "ms": 1380
+    "ms": 1109
   },
   "now let's redraft it. let me draft the message back again. let's try to draft a... bigger message. okay, so the message is going to be. hi, nimali. how are you? what are you doing? what time are you going home?": {
     "decision": {
@@ -78,52 +80,54 @@
       "to": "Nimali Perera",
       "tool": "dictate"
     },
-    "ms": 1741
+    "ms": 1271
   },
   "so actually the message has to say, send it to nimaly, not to kasun.": {
     "decision": {
       "action": "tool",
-      "confidence": 0.95,
+      "cancel_open": false,
+      "confidence": 0.9,
       "request": "I'm going to send another text message? and just testing how it receives sending the messages.",
       "tab": "official",
       "text": "I'm going to send another text message? and just testing how it receives sending the messages.",
       "to": "Nimali Perera",
       "tool": "message_draft"
     },
-    "ms": 2228
+    "ms": 1734
   },
   "so now can you send another message to senarali? and can you tell her that i'm going to send another text message? and just testing how it receives sending the messages.": {
     "decision": {
       "action": "tool",
+      "cancel_open": false,
       "confidence": 0.9,
-      "tab": "private",
+      "tab": "official",
       "text": "I'm going to send another text message? and just testing how it receives sending the messages.",
       "to": "Senarali",
       "tool": "message_draft"
     },
-    "ms": 1512
+    "ms": 1260
   },
   "undo that.": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
+      "confidence": 1.0,
       "tab": "",
       "text": "",
       "to": "",
       "tool": "undo_send"
     },
-    "ms": 1269
+    "ms": 766
   },
   "yeah, i have sent a draft to senamali.": {
     "decision": {
       "action": "reply",
-      "confidence": 1,
-      "say": "Okay, I've cancelled that draft. How else can I help you?",
+      "confidence": 0.9,
+      "say": "Okay, I won't send anything then.",
       "tab": "",
       "text": "",
       "to": "",
-      "tool": "cancel_open"
+      "tool": "none"
     },
-    "ms": 1655
+    "ms": 926
   }
 }

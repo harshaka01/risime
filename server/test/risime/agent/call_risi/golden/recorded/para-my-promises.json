@@ -3,41 +3,42 @@
     "what did i promise?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "request": "What did I promise?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1530
+      "ms": 849
     }
   },
   "para-my-promises-02": {
     "what are my open promises?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
+        "request": "What are my open promises?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1195
+      "ms": 867
     }
   },
   "para-my-promises-03": {
     "what do i have to do, my to-dos?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "request": "What do I have to do, my to-dos?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1676
+      "ms": 990
     }
   },
   "para-my-promises-04": {
@@ -51,21 +52,21 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1552
+      "ms": 828
     }
   },
   "para-my-promises-05": {
     "any promises due tomorrow?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "Any promises due tomorrow?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1451
+      "ms": 889
     }
   },
   "para-my-promises-06": {
@@ -76,66 +77,66 @@
         "request": "Did I promise anything to Kamal?",
         "tab": "",
         "text": "",
-        "to": "",
-        "tool": "my_promises"
+        "to": "Kamal",
+        "tool": "promises_by"
       },
-      "ms": 1593
+      "ms": 890
     }
   },
   "para-my-promises-07": {
     "what have i committed to?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "request": "What have I committed to?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1552
+      "ms": 871
     }
   },
   "para-my-promises-08": {
     "remind me what i said i'd do.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "request": "Remind me what I said I'd do.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1655
+      "ms": 952
     }
   },
   "para-my-promises-09": {
     "hmm, what was it i promised everyone?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "what was it I promised everyone?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1574
+      "ms": 953
     }
   },
   "para-my-promises-10": {
     "what did i promise?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "request": "What did I promise?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1539
+      "ms": 849
     }
   },
   "para-my-promises-11": {
@@ -149,7 +150,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1576
+      "ms": 850
     }
   },
   "para-my-promises-12": {
@@ -163,48 +164,48 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1593
+      "ms": 869
     }
   },
   "para-my-promises-13": {
     "do i owe anyone anything?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "Do I owe anyone anything?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1552
+      "ms": 909
     }
   },
   "para-my-promises-14": {
     "what's on my to-do list?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "request": "What's on my to-do list?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1595
+      "ms": 910
     }
   },
   "para-my-promises-15": {
     "list my promises.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1194
+      "ms": 696
     }
   },
   "para-my-promises-16": {
@@ -218,35 +219,35 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1510
+      "ms": 888
     }
   },
   "para-my-promises-17": {
     "anything i promised for monday?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "Anything I promised for Monday?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1491
+      "ms": 905
     }
   },
   "para-my-promises-18": {
     "tell me my commitments.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "request": "Tell me my commitments.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1551
+      "ms": 847
     }
   },
   "para-my-promises-19": {
@@ -260,21 +261,21 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1618
+      "ms": 1026
     }
   },
   "para-my-promises-20": {
     "okay so what are the things i promised?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 1.0,
         "request": "what are the things I promised?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1573
+      "ms": 908
     }
   }
 }
