@@ -408,7 +408,17 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
   defp answer_model(ctx, d, text, lang) do
     input = model_input(ctx, d, text)
-    result = decide(ctx, input)
+
+    result =
+      case certain_read(d, text) do
+        %{} = dec ->
+          if pre = ctx[:prefetch], do: Task.shutdown(elem(pre, 2), :brutal_kill)
+          {{:ok, dec}, false}
+
+        nil ->
+          decide(ctx, input)
+      end
+
     ctx = ctx |> Map.delete(:prefetch) |> Map.put(:early_filler, early_filler?(ctx))
 
     # Item 11 profile: the turn log's "tok" is the decision ready, ms after the brain got the words
@@ -453,6 +463,41 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   end
 
   def insisted(dec, _ctx, _input, _text), do: dec
+
+  # Item 11 (architect 11:15: "skip the model for reads whose intent is certain"): with nothing
+  # open in the call, a whole utterance that is only a day question ("What do I have tomorrow?",
+  # "Am I free on Friday?") or only "Any new messages?" is that read; no model call. Anything
+  # more (a name, add, cancel, remind, send…) goes to the model.
+  @days "(?:today|tomorrow|tonight|this (?:morning|afternoon|evening|week)|next week|" <>
+          "(?:on |this |next )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))"
+  @certain_calendar Regex.compile!(
+                      "^(?:(?:hi |hey |ok(?:ay)? |so )?risi[,.]? )?(?:what(?:'s| is| do i have)(?: on)?" <>
+                        "(?: my)?(?: calendar| schedule| day)?(?: like)?|do i have anything(?: on)?|" <>
+                        "am i (?:free|busy)(?: on)?|what's on (?:for )?)\\s+" <>
+                        @days <> "\\s*\\??$",
+                      "iu"
+                    )
+  @certain_messages ~r/^(?:(?:hi |hey |ok(?:ay)? |so )?risi[,.]? )?(?:any|do i have any|are there any|have i got any) new messages\s*\??$/iu
+
+  @doc false
+  def certain_read(d, text) when is_binary(text) do
+    t = text |> String.trim() |> String.replace(~r/\s+/u, " ")
+
+    if d.pending == nil and d.awaiting == nil and d.dictation == nil and d.card == nil do
+      cond do
+        Regex.match?(@certain_calendar, t) ->
+          Decider.normalize(%{"tool" => "calendar_read", "action" => "tool", "request" => t})
+
+        Regex.match?(@certain_messages, t) ->
+          Decider.normalize(%{"tool" => "read_messages", "action" => "tool"})
+
+        true ->
+          nil
+      end
+    end
+  end
+
+  def certain_read(_d, _text), do: nil
 
   # Item 11 (architect 11:15: speak as soon as the decision streams): with nothing open in the
   # call, a calendar read is certain once the streamed decision starts

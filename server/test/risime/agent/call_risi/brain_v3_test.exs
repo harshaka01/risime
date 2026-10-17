@@ -551,6 +551,46 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     said(pid, 1)
   end
 
+  test "certain reads skip the model; anything more goes to it" do
+    alias RisiMe.Agent.CallRisi.{BrainV3, Dialogue}
+    d = Dialogue.get(nil)
+
+    for t <- [
+          "What do I have tomorrow?",
+          "what's on my calendar today",
+          "Am I free on Friday?",
+          "Risi, what's my day like tomorrow?",
+          "Do I have anything next week?",
+          "What's on this afternoon?"
+        ],
+        do: assert(%{tool: "calendar_read"} = BrainV3.certain_read(d, t), t)
+
+    assert %{tool: "read_messages", to: ""} = BrainV3.certain_read(d, "Any new messages?")
+
+    for t <- [
+          "What do I have tomorrow with Nimali?",
+          "Add a meeting tomorrow",
+          "Cancel what I have tomorrow",
+          "What did Kamal say today?",
+          "Any new messages from Ruwan?",
+          "Remind me tomorrow",
+          "What do I have tomorrow and send it to Kamal"
+        ],
+        do: assert(BrainV3.certain_read(d, t) == nil, t)
+
+    # Something open in the call: always the model.
+    assert BrainV3.certain_read(%{d | awaiting: %{slot: "x"}}, "What do I have tomorrow?") == nil
+  end
+
+  test "a certain read runs without the model" do
+    pid = call!()
+    script(%{})
+    utter(pid, 1, "What do I have tomorrow?", 800)
+    assert_receive {:turn_run, %{"__schedule" => %{}}}, 3_000
+    refute_received {:decided, _, _}
+    said(pid, 1)
+  end
+
   test "a calendar read says its filler as the decision streams, once" do
     pid = call!()
 
