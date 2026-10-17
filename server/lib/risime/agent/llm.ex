@@ -234,7 +234,8 @@ defmodule RisiMe.Agent.LLM do
       invalid: Map.get(req, :invalid_output, :retry),
       chat:
         if(t = Map.get(req, :timeout_ms), do: [timeout: t], else: []) ++
-          if(u = Map.get(req, :base_url), do: [base_url: u], else: [])
+          if(u = Map.get(req, :base_url), do: [base_url: u], else: []) ++
+          if(f = Map.get(req, :on_partial), do: [on_partial: f], else: [])
     ]
   end
 

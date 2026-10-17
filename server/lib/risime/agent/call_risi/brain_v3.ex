@@ -24,7 +24,17 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   Regex keeps only: "Risi, stop" (the session), the filler choice and the safety checks.
   """
 
-  alias RisiMe.Agent.CallRisi.{Brain, Decider, Dialogue, Reads, Sentences, Spoken, WriteTruth}
+  alias RisiMe.Agent.CallRisi.{
+    Brain,
+    Decider,
+    Dialogue,
+    Fillers,
+    Reads,
+    Sentences,
+    Spoken,
+    WriteTruth
+  }
+
   alias RisiMe.Agent.{Clock, FindContact, ScheduleIntent}
 
   @flag "RISI_CALL_BRAIN"
@@ -57,7 +67,10 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
       nil ->
         ctx =
-          ctx |> Map.put(:heard, text) |> Map.put(:t_brain, System.monotonic_time(:millisecond))
+          ctx
+          |> Map.put(:heard, text)
+          |> Map.put(:t_brain, System.monotonic_time(:millisecond))
+          |> Map.put(:say_lang, lang)
 
         # Item 7 (Harsha's 04:0x call): "No", "That's not true", "I mean…", a spelled name: what Risi
         # waited for is dropped and the model decides again from the whole utterance (a person
@@ -396,7 +409,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   defp answer_model(ctx, d, text, lang) do
     input = model_input(ctx, d, text)
     result = decide(ctx, input)
-    ctx = Map.delete(ctx, :prefetch)
+    ctx = ctx |> Map.delete(:prefetch) |> Map.put(:early_filler, early_filler?(ctx))
 
     # Item 11 profile: the turn log's "tok" is the decision ready, ms after the brain got the words
     # (hold included).
@@ -409,9 +422,13 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         report(ctx, {:decided, {:v3, dec.tool, dec.action}})
         act(Map.put(ctx, :neutral?, neutral?), dec, d, text, lang)
 
-      {{:error, _}, neutral?} ->
+      {{:error, _}, _neutral?} ->
         # The model failed: the legacy brain answers this turn (no second holding line).
-        Brain.legacy_answer(Map.put(ctx, :filler?, not neutral?), text, lang)
+        Brain.legacy_answer(
+          Map.put(ctx, :filler?, ctx[:early_filler] != true),
+          text,
+          lang
+        )
     end
   end
 
@@ -436,6 +453,39 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   end
 
   def insisted(dec, _ctx, _input, _text), do: dec
+
+  # Item 11 (architect 11:15: speak as soon as the decision streams): with nothing open in the
+  # call, a calendar read is certain once the streamed decision starts
+  # {"tool":"calendar_read","action":"tool" and its filler is said then, ~0.5 s before the whole
+  # decision is in; the tool turn then says none (`:early_filler`).
+  @early ~s({"tool":"calendar_read","action":"tool")
+
+  defp early(ctx, %{dialogue: d}) do
+    if d.pending == nil and d.awaiting == nil and d.dictation == nil and d.card == nil and
+         ctx[:neutral?] != true do
+      brain = self()
+      key = {__MODULE__, :early, make_ref()}
+      lang = ctx[:say_lang] || "en"
+
+      Map.put(ctx, :on_partial, fn so_far ->
+        if String.starts_with?(so_far, @early) and Process.get(key) != true do
+          Process.put(key, true)
+          Brain.say(ctx, Fillers.pick("calendar_read", lang, ctx[:filler_n] || 0), :filler)
+          send(brain, {:early_filler, ctx.utt})
+        end
+      end)
+    else
+      ctx
+    end
+  end
+
+  defp early_filler?(ctx) do
+    receive do
+      {:early_filler, utt} when utt == ctx.utt -> true
+    after
+      0 -> false
+    end
+  end
 
   # C: a cut-off utterance waits for the words that follow (the session restarts the turn with
   # both). A turn that already merged a prefix isn't held again.
@@ -468,10 +518,12 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
         {_, _, t} ->
           Task.shutdown(t, :brutal_kill)
-          Task.async(fn -> Decider.run(input, ctx) end)
+          ectx = early(ctx, input)
+          Task.async(fn -> Decider.run(input, ectx) end)
 
         _ ->
-          Task.async(fn -> Decider.run(input, ctx) end)
+          ectx = early(ctx, input)
+          Task.async(fn -> Decider.run(input, ectx) end)
       end
 
     case Task.yield(task, neutral_ms()) do
@@ -1625,7 +1677,13 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         w -> Map.put(range, :window, w)
       end
 
-    Brain.tool_turn(Map.put(ctx, :filler?, true), text, lang, "calendar_read", range)
+    Brain.tool_turn(
+      Map.put(ctx, :filler?, ctx[:early_filler] != true),
+      text,
+      lang,
+      "calendar_read",
+      range
+    )
   end
 
   defp write(ctx, dec, d, text, lang, cancelled) do

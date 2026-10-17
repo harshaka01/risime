@@ -30,55 +30,157 @@ defmodule RisiMe.Agent.LLM.Local do
       end
 
     with {:ok, base} <- base_result do
-      req =
-        Req.new(
-          [
-            url: base <> "/chat/completions",
-            json: body,
-            receive_timeout: Keyword.get(opts, :timeout, timeout()),
-            connect_options: [timeout: 5_000],
-            retry: false,
-            redirect: false,
-            headers: auth_headers()
-          ] ++ req_options()
-        )
+      case Keyword.get(opts, :on_partial) do
+        f when is_function(f, 1) -> stream_chat(base, body, opts, f)
+        _ -> plain_chat(base, body, opts)
+      end
+    end
+  end
 
+  # Item 11: `on_partial` streams the completion (server-sent events) and is called with the
+  # text so far after each piece, in this process; the result is the same as the plain call's.
+  defp stream_chat(base, body, opts, on_partial) do
+    key = {__MODULE__, make_ref()}
+    Process.put(key, %{buf: "", text: "", model: nil, usage: %{}})
+
+    into = fn {:data, data}, acc ->
+      st = Process.get(key)
+      {events, buf} = RisiMe.Agent.CallRisi.LLMStream.split_events(st.buf <> data)
+      st = Enum.reduce(events, %{st | buf: buf}, &stream_event(&1, &2, on_partial))
+      Process.put(key, st)
+      {:cont, acc}
+    end
+
+    body =
+      body
+      |> Map.put("stream", true)
+      |> Map.put("stream_options", %{"include_usage" => true})
+
+    req =
+      Req.new(
+        [
+          url: base <> "/chat/completions",
+          json: body,
+          receive_timeout: Keyword.get(opts, :timeout, timeout()),
+          connect_options: [timeout: 5_000],
+          retry: false,
+          redirect: false,
+          headers: auth_headers(),
+          into: into
+        ] ++ req_options()
+      )
+
+    result =
       case Req.post(req) do
-        {:ok, %{status: 200, body: %{"choices" => [%{"message" => msg} | _]} = resp}} ->
-          case msg do
-            %{"content" => content} when is_binary(content) ->
-              usage = resp["usage"] || %{}
+        {:ok, %{status: 200}} ->
+          st = Process.get(key)
 
+          if st.text == "",
+            do: {:error, :bad_response},
+            else:
               {:ok,
                %{
-                 content: content,
-                 model: real_model(base, resp["model"]),
-                 prompt_tokens: usage["prompt_tokens"],
-                 completion_tokens: usage["completion_tokens"]
+                 content: st.text,
+                 model: real_model(base, st.model),
+                 prompt_tokens: st.usage["prompt_tokens"],
+                 completion_tokens: st.usage["completion_tokens"]
                }}
 
-            _ ->
-              {:error, :bad_response}
-          end
-
-        {:ok, %{status: 200}} ->
-          {:error, :bad_response}
-
-        {:ok, %{status: 429}} ->
-          {:error, :busy}
-
-        {:ok, %{status: s}} when s >= 500 ->
-          {:error, :http_5xx}
-
-        {:ok, %{status: _}} ->
-          {:error, :http_4xx}
-
-        {:error, %{reason: :timeout}} ->
-          {:error, :timeout}
-
-        {:error, _} ->
-          {:error, :transport}
+        other ->
+          status(other)
       end
+
+    Process.delete(key)
+    result
+  end
+
+  defp stream_event(ev, st, on_partial) do
+    with "data: " <> json <-
+           Enum.find(String.split(ev, "\n"), "", &String.starts_with?(&1, "data: {")),
+         {:ok, m} <- Jason.decode(json) do
+      delta =
+        case m["choices"] do
+          [%{"delta" => %{"content" => c}} | _] when is_binary(c) -> c
+          _ -> ""
+        end
+
+      st = %{
+        st
+        | text: st.text <> delta,
+          model: st.model || m["model"],
+          usage: m["usage"] || st.usage
+      }
+
+      if delta != "", do: safe_partial(on_partial, st.text)
+      st
+    else
+      _ -> st
+    end
+  end
+
+  defp safe_partial(f, text) do
+    f.(text)
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp status({:ok, %{status: 429}}), do: {:error, :busy}
+  defp status({:ok, %{status: s}}) when s >= 500, do: {:error, :http_5xx}
+  defp status({:ok, %{status: _}}), do: {:error, :http_4xx}
+  defp status({:error, %{reason: :timeout}}), do: {:error, :timeout}
+  defp status(_), do: {:error, :transport}
+
+  defp plain_chat(base, body, opts) do
+    req =
+      Req.new(
+        [
+          url: base <> "/chat/completions",
+          json: body,
+          receive_timeout: Keyword.get(opts, :timeout, timeout()),
+          connect_options: [timeout: 5_000],
+          retry: false,
+          redirect: false,
+          headers: auth_headers()
+        ] ++ req_options()
+      )
+
+    case Req.post(req) do
+      {:ok, %{status: 200, body: %{"choices" => [%{"message" => msg} | _]} = resp}} ->
+        case msg do
+          %{"content" => content} when is_binary(content) ->
+            usage = resp["usage"] || %{}
+
+            {:ok,
+             %{
+               content: content,
+               model: real_model(base, resp["model"]),
+               prompt_tokens: usage["prompt_tokens"],
+               completion_tokens: usage["completion_tokens"]
+             }}
+
+          _ ->
+            {:error, :bad_response}
+        end
+
+      {:ok, %{status: 200}} ->
+        {:error, :bad_response}
+
+      {:ok, %{status: 429}} ->
+        {:error, :busy}
+
+      {:ok, %{status: s}} when s >= 500 ->
+        {:error, :http_5xx}
+
+      {:ok, %{status: _}} ->
+        {:error, :http_4xx}
+
+      {:error, %{reason: :timeout}} ->
+        {:error, :timeout}
+
+      {:error, _} ->
+        {:error, :transport}
     end
   end
 

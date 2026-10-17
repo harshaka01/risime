@@ -221,12 +221,20 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
       end
     end
 
-    def decide(input, _ctx) do
+    def decide(input, ctx) do
       send(:persistent_term.get({__MODULE__, :test}), {:decided, input.text, input.dialogue})
 
       case Map.get(:persistent_term.get({__MODULE__, :script}), input.text) do
-        nil -> {:error, :model_unavailable}
-        d -> {:ok, Map.merge(blank(), d)}
+        nil ->
+          {:error, :model_unavailable}
+
+        d ->
+          # "__partial": the decision as it streams (the brain's on_partial hears it first).
+          with p when is_binary(p) <- d["__partial"],
+               f when is_function(f, 1) <- ctx[:on_partial],
+               do: send(:persistent_term.get({__MODULE__, :test}), {:partial, f.(p)})
+
+          {:ok, Map.merge(blank(), Map.delete(d, "__partial"))}
       end
     end
 
@@ -541,6 +549,39 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     assert from.day == 18
     refute_received {:decided, "Do you have anything on the 18th,", _}
     said(pid, 1)
+  end
+
+  test "a calendar read says its filler as the decision streams, once" do
+    pid = call!()
+
+    script(%{
+      "What do I have on the 18th?" => %{
+        "__partial" => ~s({"tool":"calendar_read","action":"tool","conf),
+        "tool" => "calendar_read",
+        "action" => "tool",
+        "request" => "What do I have on the 18th?"
+      }
+    })
+
+    utter(pid, 1, "What do I have on the 18th?", 800)
+    assert_receive {:turn_run, %{"__schedule" => %{from: from}}}, 3_000
+    assert from.day == 18
+    pieces = raw_said(pid, 1)
+    assert_received {:partial, _}
+    assert Enum.count(pieces, &(&1 in Fillers.all())) == 1
+    assert hd(pieces) in Fillers.all()
+  end
+
+  defp raw_said(pid, utt, acc \\ [], wait \\ 3_000) do
+    receive do
+      {:media_cmd, %{"cmd" => "say", "utt" => ^utt} = c} ->
+        ev(pid, %{"ev" => "said", "seq" => c["seq"], "utt" => utt, "interrupted" => false})
+        raw_said(pid, utt, acc ++ [c["text"]], 400)
+    after
+      wait ->
+        ev(pid, %{"ev" => "idle"})
+        acc
+    end
   end
 
   test "unclear words in Risi's echo window: v3 is silent, the legacy brain says Sorry" do

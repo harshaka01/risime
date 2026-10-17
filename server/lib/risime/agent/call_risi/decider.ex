@@ -431,6 +431,8 @@ defmodule RisiMe.Agent.CallRisi.Decider do
       # to another model is the escalation path above, off and with none configured.
       local_only: model == model(),
       grammar: if(model == model(), do: grammar_for(name)),
+      # Item 11: the brain hears the decision as it streams (the calendar filler at once).
+      on_partial: if(model == model(), do: ctx[:on_partial]),
       # One decision, the same for the same call: greedy (the golden calls replay it).
       temperature: 0.0,
       timeout_ms: Keyword.get(config(), :timeout_ms, 8_000),
