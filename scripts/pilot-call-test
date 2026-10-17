@@ -99,9 +99,19 @@ say c8b2 "It comes in a few pieces, with pauses between them."
 say c8b3 "Please call me back after six."
 say c8c "Okay, that's it."
 say c8d "Did David reply to me?"
+# Call 9 (Harsha 17 Oct 04:0x, the Shakya part): read someone's last message, argue, spell, meta question.
+say c9a "Read me the last message from David."
+say c9b "That's not true."
+say c9c "Check the messages sent by D-A-V-I-D."
+say c9d "To which account are you reading?"
+# Call 10 (04:0x, the dictation part): an instruction while Risi waits for the text, then a long
+# text with sending instructions in it (never in the body).
+say c10a "Send a message to David."
+say c10b "No, I'm not asking you to write anything, read me David's last message."
+say c10c "Send David a message saying good morning, I'm testing the call. Send it to his work chat, not the private one."
 say b1 "you know it will be fun, yeah I did not know I was going to promote, and I tend to come out, so do I"
 say b2 "it's fascinating, isn't it, bye bye, ready, you're on"
-for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c c5a c5b c5c c5f c6a c6b c6c c6d c6e c6f1 c6f2 c6g c6h c6i c7a c7b c7c c7d c7e c8a c8b1 c8b2 c8b3 c8c c8d; do
+for c in c1a c1b c1c1 c1c2 c1d c1e c2a c2b c2c c3a c3b c3c c3d c3e c3f c3g c3h c3i c4a c4b c4c c5a c5b c5c c5f c6a c6b c6c c6d c6e c6f1 c6f2 c6g c6h c6i c7a c7b c7c c7d c7e c8a c8b1 c8b2 c8b3 c8c c8d c9a c9b c9c c9d c10a c10b c10c; do
   "$PY" -I -c 'import sys, wave, numpy as np
 p = sys.argv[1]
 w = wave.open(p, "rb"); prm = w.getparams(); x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16); w.close()
@@ -216,6 +226,8 @@ for n in $CALLS; do case "$n" in
   6) call 6 c6a c6b c6c c6d c6e c6f c6g c6h c6i ;;
   7) call 7 c7a c7b c7c c7d c7e ;;
   8) call 8 c8a c8b c8c c8d ;;
+  9) call 9 c9a c9b c9c c9d ;;
+  10) call 10 c10a c10b c10c ;;
 esac; done
 curl -s -o /dev/null "${H[@]}" -X POST "$API/auth/logout" || true
 echo "PCT DONE (out $OUT)"
