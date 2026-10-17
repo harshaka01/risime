@@ -20,11 +20,13 @@ while [ $# -gt 0 ]; do case "$1" in --skip-canary) CANARY=0; shift;; --ref) REF=
 LOGD="$HOME/risime-logs/fastlane"; mkdir -p "$LOGD"; LOG="$LOGD/$(date -u +%m%d-%H%M).log"
 say() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOG"; }
 die() { say "FASTLANE FAILED: $*"; exit 1; }
-git fetch -q origin --tags
+# A failed fetch must stop the run (2026-10-17: a cut-off fetch left a stale origin/main and tagged nightly.11-srv8).
+git fetch -q origin --tags || die "git fetch origin (network?)"
 REF="${REF:-$(git rev-parse origin/main)}"
 WT="$HOME/risime-fastlane-wt"
-if [ -e "$WT/.git" ]; then git -C "$WT" fetch -q origin && git -C "$WT" checkout -q --detach "$REF" && git -C "$WT" clean -qfdx -e server/deps -e server/_build
-else git worktree add -q --detach "$WT" "$REF"; fi
+if [ -e "$WT/.git" ]; then { git -C "$WT" fetch -q origin && git -C "$WT" checkout -q --detach "$REF" && git -C "$WT" clean -qfdx -e server/deps -e server/_build; } || die "worktree at $REF"
+else git worktree add -q --detach "$WT" "$REF" || die "worktree add $REF"; fi
+[ "$(git -C "$WT" rev-parse HEAD)" = "$(git rev-parse "$REF^{commit}")" ] || die "worktree is not at $REF"
 ln -sfn "$REPO/.env" "$WT/.env"
 say "ref $(git -C "$WT" log -1 --format='%h %s' | cut -c1-100)"
 

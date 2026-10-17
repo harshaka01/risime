@@ -78,3 +78,10 @@ Use `scripts/risi-rpc '<expr>'` (or `-f file.exs`) for every pilot rpc. It wraps
 - 2026-10-16 ~15:40 SLT (risi helper, architect OK 15:20 item 3): a second TEST account (+94770000996, `pilot-friend-test@example.com`, display name "David Test") allowlisted with `Accounts.allow/1`, signed in by dev OTP, and made a friend of the pilot-call-test account through the app's own friend request/accept, so `scripts/pilot-call-test` call 7 reaches a message draft card. No real people's data. Undo: unfriend, then delete that user and its allowlist row.
 
 - 2026-10-17 04:55 SLT (root, stop-the-line 04:20): `RISI_CALL_SEND` canary → **off**. During Harsha's 04:0x call Risi sent a message to Shenika in Official whose text likely carried his instructions (04:20 item 2). Voice sends fall back to the §42 card and the tap until items 2/3 pass the real-call replay. Undo: `scripts/risi-rpc 'RisiMe.Agents.Flags.put("RISI_CALL_SEND", "canary", "root")'`.
+
+## 2026-10-17 01:10 UTC: running tag is named v0.3.0-nightly.11-srv8 but is nightly.12 code
+- The 00:04 fast lane fetched a stale origin/main (network cut), named its tag from nightly.11's VERSION; the tag sits on
+  0e0f73a0 (nightly.12 + extraction fixes). Health failed on the name/version mismatch, and the rollback was skipped by the
+  run-server fast-lane guard, so the server kept running srv8. The 00:29 rerun (`v0.3.0-nightly.12-srv1`, same commit) was skipped as already contained.
+- Net: live code = 0e0f73a0, healthy (version 0.3.0-nightly.12). The srv8 tag stays (it is CURRENT; rollback needs it); the next fast lane replaces it.
+- Fixed: risi-fastlane dies on a failed fetch and checks its worktree is at the ref; run-server no longer skips a rollback (RISI_ALLOW_OLDER=1).

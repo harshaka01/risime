@@ -24,7 +24,8 @@ git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "no such tag: $T
 # Fast-lane guard (CLAUDE.md rule 12): never replace a running -srvN build that already contains this tag's commit
 # (a nightly cut before a fast-lane deploy would otherwise roll Risi back).
 CUR="$(cat "$RUNROOT/CURRENT" 2>/dev/null || true)"
-if [ -n "$CUR" ] && [ "$CUR" != "$TAG" ] && [[ "$CUR" == *-srv* ]] && git rev-parse -q --verify "refs/tags/$CUR" >/dev/null \
+# scripts/rollback (RISI_ALLOW_OLDER=1) must not be skipped: going back is its job.
+if [ -n "$CUR" ] && [ "$CUR" != "$TAG" ] && [ "${RISI_ALLOW_OLDER:-0}" != 1 ] && [[ "$CUR" == *-srv* ]] && git rev-parse -q --verify "refs/tags/$CUR" >/dev/null \
    && git merge-base --is-ancestor "$TAG^{commit}" "$CUR^{commit}"; then
   echo "==> SKIP deploy: the running $CUR already contains $TAG (fast lane); the server stays on $CUR"; exit 0
 fi
