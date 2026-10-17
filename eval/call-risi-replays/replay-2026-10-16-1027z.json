@@ -1,0 +1,146 @@
+{
+ "golden_id": "replay-2026-10-16-1027z",
+ "now": "2026-10-16T10:27:00Z",
+ "contacts": [
+  "Nimali",
+  "Kasun Senaratne",
+  "Tharaka Adikari",
+  "Sunil Adikari",
+  "M N M Rizan",
+  "Ruwan Silva",
+  "Kamal Jayasuriya",
+  "Dilini Fernando",
+  "Nuwan Bandara",
+  "Ishani Perera",
+  "Chamath Silva",
+  "Lahiru Gamage"
+ ],
+ "voice_send": true,
+ "turns": [
+  {
+   "say": "Can you tell her that this is a test message from me and then send it to work? so that you can't access the personal one so just send it to work and you can send directly",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "Who"
+    ],
+    "must_not": [
+     "couldn't find work"
+    ]
+   }
+  },
+  {
+   "say": "Yeah, I have sent a draft to Senamali.",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "couldn't find"
+    ]
+   }
+  },
+  {
+   "say": "No. What you need to do is to send a message to Nimali.",
+   "expect": {
+    "send_to": "Nimali",
+    "send_has": [
+     "test message"
+    ],
+    "send_has_not": [
+     "send it to work",
+     "directly"
+    ],
+    "allow_send": true
+   }
+  },
+  {
+   "say": "So, this is a..."
+  },
+  {
+   "say": "So now can you send another message to Senarali? And can you tell her that I'm going to send another text message? and just testing how it receives sending the messages.",
+   "expect": {
+    "send_to": "Nimali",
+    "must_not": [
+     "Kasun"
+    ],
+    "allow_send": true
+   },
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "So actually the message has to say, send it to Nimali, not to Kasun.",
+   "expect": {
+    "must_not": [
+     "Kasun"
+    ],
+    "allow_send": true
+   }
+  },
+  {
+   "say": "Now let's redraft it. Let me draft the message back again. Let's try to draft a... bigger message. Okay, so the message is going to be. Hi, Nimali. How are you? What are you doing? What time are you going home?",
+   "expect": {
+    "no_send": true
+   }
+  },
+  {
+   "say": "You know, I'm pissing greasy.",
+   "expect": {
+    "silent": true,
+    "no_send": true
+   }
+  },
+  {
+   "say": "and I'm proud to see how RISD can send these messages. I'm just testing with the resequence and long messages. and whether the long messages are getting right or getting wrong. and that is the message that I want to get it sent.",
+   "expect": {
+    "must_not": [
+     "can't send it from the call",
+     "I'm listening"
+    ],
+    "send_has_not": [
+     "pissing",
+     "that is the message"
+    ],
+    "allow_send": true
+   }
+  },
+  {
+   "say": "No. Rishi, I wanted to send an answer. Just modify the message. So, let me start the message, Nimali. Right? So the message should stray. Hi, Senamali. How are you? And good morning. And good afternoon.",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "can't send it from the call"
+    ]
+   }
+  },
+  {
+   "say": "and just say, let me finish the whole thing and then I'm trying to make sure that I'm doing",
+   "expect": {
+    "silent": true,
+    "no_send": true
+   }
+  },
+  {
+   "say": "All right. So listen until, when I say okay, until that time, you just listen to me. So, hi, Nimali. How are you? Are you going home or are you staying at work? While I'm here going home. I'm actually writing this. Just to send a long message to you and to see whether a receipt can send. really cool messages or not.",
+   "expect": {
+    "silent": true,
+    "no_send": true
+   }
+  },
+  {
+   "say": "Yeah, it's all done now. So I told you exactly what needs to be said.",
+   "expect": {
+    "must_any": [
+     "Send it?",
+     "Shall I fix",
+     "Sent",
+     "Tap Send"
+    ],
+    "must_not": [
+     "I'm listening"
+    ],
+    "allow_send": true
+   }
+  }
+ ],
+ "note": "Invented-name copy of a private real-call replay (architect 04:20 SLT, 17 Oct)."
+}

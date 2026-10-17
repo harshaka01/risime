@@ -1,0 +1,165 @@
+{
+ "golden_id": "replay-2026-10-16-0951z",
+ "now": "2026-10-16T09:51:00Z",
+ "contacts": [
+  "Nimali",
+  "Kasun Senaratne",
+  "Tharaka Adikari",
+  "Sunil Adikari",
+  "M N M Rizan",
+  "Ruwan Silva",
+  "Kamal Jayasuriya",
+  "Dilini Fernando",
+  "Nuwan Bandara",
+  "Ishani Perera",
+  "Chamath Silva",
+  "Lahiru Gamage"
+ ],
+ "voice_send": true,
+ "messages": [
+  {
+   "from": "me",
+   "chat": "nimali",
+   "mins_ago": 4,
+   "text": "What time are you going home?"
+  },
+  {
+   "from": "nimali",
+   "chat": "nimali",
+   "mins_ago": 4700,
+   "text": "I'll prepare the slides tonight."
+  }
+ ],
+ "private": [
+  {
+   "from": "nimali",
+   "mins_ago": 2
+  }
+ ],
+ "promises": [
+  {
+   "owner": "kamal",
+   "to": [
+    "me"
+   ],
+   "text": "Deliver the new computer",
+   "due": "2026-10-17T11:30:00Z"
+  }
+ ],
+ "turns": [
+  {
+   "say": "Okay, can you send me send a message to Nimali?",
+   "expect": {
+    "no_send": true,
+    "must": [
+     "What should I say to Nimali"
+    ]
+   }
+  },
+  {
+   "say": "What time are you going home?",
+   "expect": {
+    "send_to": "Nimali",
+    "send_has": [
+     "going home"
+    ]
+   }
+  },
+  {
+   "say": "Can you just send it by yourself rather than me tapping?",
+   "expect": {
+    "must_not": [
+     "Here's your message"
+    ]
+   }
+  },
+  {
+   "say": "No, when I asked you to send a message... You should be sending the message directly, not asking me to tap anything.",
+   "expect": {
+    "must_not": [
+     "Here's your message"
+    ]
+   }
+  },
+  {
+   "say": "So, Risi, can you tell me whether... whether you have followed up with. That's it, Kamal. for the computer delivery.",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "Connect it",
+     "couldn't read your calendar"
+    ]
+   }
+  },
+  {
+   "say": "So it is being connected and skills calendars are already being connected.",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "Connect it",
+     "couldn't read your calendar"
+    ]
+   }
+  },
+  {
+   "say": "Yeah, the calendars are being, you know, set up and it should be working. And you should be able to read the RISI calendar. not anybody else's calendar so how come you can't you can't read your own calendar",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "Connect it",
+     "couldn't read your calendar"
+    ]
+   }
+  },
+  {
+   "say": "Okay, read back. Read my calendar today.",
+   "expect": {
+    "route": "calendar_read",
+    "no_send": true
+   }
+  },
+  {
+   "say": "All right. So did Nimali reply to me or is she not?",
+   "expect": {
+    "route": "messages_read",
+    "no_send": true,
+    "must_any": [
+     "Private chat",
+     "Not yet"
+    ],
+    "must_not": [
+     "Here's your message"
+    ]
+   }
+  },
+  {
+   "say": "No, no. You send a message to Nimali. Did she reply to me?",
+   "expect": {
+    "route": "messages_read",
+    "no_send": true,
+    "must_not": [
+     "Here's your message"
+    ]
+   }
+  },
+  {
+   "say": "You should be able to reply. And you should be able to tell me that if somebody has sent a message to me, you should be able to tell me that they have sent a message.",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "Here's your message"
+    ]
+   }
+  },
+  {
+   "say": "So what did I promise today?",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "Connect it"
+    ]
+   }
+  }
+ ],
+ "note": "Invented-name copy of a private real-call replay (architect 04:20 SLT, 17 Oct)."
+}

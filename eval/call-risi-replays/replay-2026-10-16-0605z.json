@@ -1,0 +1,77 @@
+{
+ "golden_id": "replay-2026-10-16-0605z",
+ "now": "2026-10-16T06:05:00Z",
+ "contacts": [
+  "Nimali",
+  "Kasun Senaratne",
+  "Tharaka Adikari",
+  "Sunil Adikari",
+  "M N M Rizan",
+  "Ruwan Silva",
+  "Kamal Jayasuriya",
+  "Dilini Fernando",
+  "Nuwan Bandara",
+  "Ishani Perera",
+  "Chamath Silva",
+  "Lahiru Gamage"
+ ],
+ "turns": [
+  {
+   "say": "So can you send the message to her on a private chat?",
+   "expect": {
+    "no_send": true,
+    "must": [
+     "Who should I send it to"
+    ]
+   }
+  },
+  {
+   "say": "Nima Lee.",
+   "expect": {
+    "no_send": true,
+    "must": [
+     "What should I say to Nimali"
+    ]
+   }
+  },
+  {
+   "say": "Tell her that I called her a couple of times and then she did not answer. And I'll call her back or call me back.",
+   "expect": {
+    "send_to": "Nimali",
+    "send_has": [
+     "couple of times"
+    ],
+    "send_has_not": [
+     "Tell her that"
+    ],
+    "must_not": [
+     "What should I say"
+    ]
+   }
+  },
+  {
+   "say": "Hello",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "What should I say",
+     "can only draft"
+    ]
+   }
+  },
+  {
+   "say": "I just said it to you. Just tell her that I called her. couple of times, but she did not answer and called me back.",
+   "expect": {
+    "must_not": [
+     "What should I say",
+     "Who should I send"
+    ],
+    "send_has_not": [
+     "I just said it",
+     "said it to you"
+    ]
+   }
+  }
+ ],
+ "note": "Invented-name copy of a private real-call replay (architect 04:20 SLT, 17 Oct)."
+}

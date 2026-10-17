@@ -1,0 +1,355 @@
+{
+ "golden_id": "replay-2026-10-16-2234z",
+ "now": "2026-10-16T22:34:00Z",
+ "voice_send": true,
+ "contacts": [
+  "Nimali",
+  "Kasun Senaratne",
+  "Tharaka Adikari",
+  "Sunil Adikari",
+  "M N M Rizan",
+  "Ruwan Silva",
+  "Kamal Jayasuriya",
+  "Dilini Fernando",
+  "Nuwan Bandara",
+  "Ishani Perera",
+  "Chamath Silva",
+  "Lahiru Gamage"
+ ],
+ "messages": [
+  {
+   "from": "tharaka",
+   "chat": "tharaka",
+   "mins_ago": 4200,
+   "text": "I'll send the stock sheet tomorrow."
+  },
+  {
+   "from": "tharaka",
+   "chat": "tharaka",
+   "mins_ago": 3000,
+   "text": "The stock sheet is in the shared folder."
+  },
+  {
+   "from": "tharaka",
+   "chat": "tharaka",
+   "mins_ago": 2900,
+   "text": "Two items are short this week."
+  },
+  {
+   "from": "tharaka",
+   "chat": "tharaka",
+   "mins_ago": 1500,
+   "text": "The courier comes at ten."
+  },
+  {
+   "from": "tharaka",
+   "chat": "tharaka",
+   "mins_ago": 1450,
+   "text": "Courier came, all received."
+  },
+  {
+   "from": "tharaka",
+   "chat": "tharaka",
+   "mins_ago": 695,
+   "text": "Invoice for the laptops is ready, shall I send it?"
+  },
+  {
+   "from": "me",
+   "chat": "tharaka",
+   "mins_ago": 689,
+   "text": "Yes, send it to accounts."
+  },
+  {
+   "from": "nimali",
+   "chat": "nimali",
+   "mins_ago": 5200,
+   "text": "The client meeting is moved to Thursday."
+  },
+  {
+   "from": "nimali",
+   "chat": "nimali",
+   "mins_ago": 4677,
+   "text": "I'll prepare the slides tonight."
+  },
+  {
+   "from": "m",
+   "chat": "group-suppliers",
+   "mins_ago": 843,
+   "text": "The router supplier says the item comes Monday because of a flight delay."
+  },
+  {
+   "from": "m",
+   "chat": "group-suppliers",
+   "mins_ago": 900,
+   "text": "I'll follow up with the supplier."
+  }
+ ],
+ "private": [
+  {
+   "from": "nimali",
+   "mins_ago": 500
+  },
+  {
+   "from": "nimali",
+   "mins_ago": 480
+  }
+ ],
+ "turns": [
+  {
+   "say": "Rishi, good morning.",
+   "expect": {
+    "route_in": [
+     "chat"
+    ],
+    "no_send": true
+   }
+  },
+  {
+   "say": "Why is taking time to answer?",
+   "expect": {
+    "no_send": true
+   }
+  },
+  {
+   "say": "Rissi, can you send a message to... Nimali just says I'll tell you the message.",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "What should I say to Nimali",
+     "Go ahead"
+    ]
+   }
+  },
+  {
+   "say": "So can you tell that good morning? How are you? This is tested.",
+   "expect": {
+    "silent": true,
+    "no_send": true
+   }
+  },
+  {
+   "say": "Using RISI",
+   "expect": {
+    "silent": true,
+    "no_send": true
+   },
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "And I just want to take the quality of messages that",
+   "expect": {
+    "send_to": "Nimali",
+    "send_has": [
+     "good morning",
+     "quality"
+    ],
+    "must_not": [
+     "What should I say"
+    ]
+   },
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "No, I just wanted to send a long message saying, Hi, Nimali, good morning. How are you doing? I just want to check. early morning"
+  },
+  {
+   "say": "testing the solution.",
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "and see how they receive me.",
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "type the messages.",
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "and send it to Nimali's work address.",
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "and not to the private. So the work address, you can send it straight away.",
+   "expect": {
+    "voice_sent": "Nimali",
+    "must_any": [
+     "Sent"
+    ],
+    "send_has_not": [
+     "work address",
+     "straight away",
+     "private",
+     "type the messages"
+    ]
+   },
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "I don't think that you actually got what I said. So I said, start the message to say. Good morning, Nimali. How are you today? I am testing this message to see the quality of the message. and how it is been to you. And I also sent it to Nimali's work number."
+  },
+  {
+   "say": "not for the private one, so that you can send it directly. without me getting involved.",
+   "expect": {
+    "send_has_not": [
+     "work number",
+     "private one",
+     "directly",
+     "involved"
+    ],
+    "allow_send": true
+   },
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "Send it.",
+   "expect": {
+    "allow_send": true
+   }
+  },
+  {
+   "say": "No, just send it. That's fine. If she replies, just listen to it and see what she has replied. and also check what she has replied the last messages. From the Buck.",
+   "expect": {
+    "route": "messages_read",
+    "no_send": true,
+    "must_any": [
+     "Private chat",
+     "last Official message"
+    ],
+    "must_not": [
+     "I don't see any Official messages from Nimali in the last 3 days"
+    ]
+   }
+  },
+  {
+   "say": "That's not true. That can't be true.",
+   "expect": {
+    "no_send": true
+   }
+  },
+  {
+   "say": "I'm going to check the last message she has sent. And let me know what she has spoken on the last message.",
+   "expect": {
+    "route": "messages_read",
+    "no_send": true,
+    "must_any": [
+     "slides",
+     "Private chat",
+     "getting that wrong"
+    ]
+   }
+  },
+  {
+   "say": "Can you check the official messages from Ri Zan for the last three days?",
+   "expect": {
+    "route": "messages_read",
+    "no_send": true,
+    "must_any": [
+     "Rizan"
+    ],
+    "must_not": [
+     "M replied",
+     "M's last"
+    ]
+   }
+  },
+  {
+   "say": "All right, can you check what was the last message? sent by",
+   "expect": {
+    "no_send": true
+   }
+  },
+  {
+   "say": "Now you are not responding.",
+   "expect": {
+    "no_send": true
+   }
+  },
+  {
+   "say": "So check the messages, last three days messages sent by Tarka Adhikari. an official account.",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "Tharaka",
+     "Did you mean"
+    ]
+   }
+  },
+  {
+   "say": "Not tracked yet.",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "Not yet",
+     "Swan"
+    ]
+   }
+  },
+  {
+   "say": "No, check. Tharaka Adhikari.",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "Tharaka",
+     "getting that wrong",
+     "another way"
+    ],
+    "must_not": [
+     "Not yet"
+    ]
+   }
+  },
+  {
+   "say": "No, check the messages sent by. T-H-A-R-A-K-A.",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "Tharaka",
+     "getting that wrong",
+     "another way"
+    ],
+    "must_not": [
+     "Not yet"
+    ]
+   }
+  },
+  {
+   "say": "I mean, I am asking you to read the message. from Tharaka Adhikari.",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "Tharaka",
+     "getting that wrong",
+     "another way"
+    ],
+    "must_not": [
+     "Not yet"
+    ]
+   }
+  },
+  {
+   "say": "To which account are you reading?",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "Official chats",
+     "work account"
+    ]
+   }
+  },
+  {
+   "say": "Tracy, you are absolutely useless.",
+   "expect": {
+    "no_send": true
+   }
+  }
+ ],
+ "note": "Invented-name copy of a private real-call replay (architect 04:20 SLT, 17 Oct)."
+}

@@ -1,0 +1,93 @@
+{
+ "golden_id": "replay-2026-10-16-0430z",
+ "now": "2026-10-16T04:30:00Z",
+ "contacts": [
+  "Nimali",
+  "Kasun Senaratne",
+  "Tharaka Adikari",
+  "Sunil Adikari",
+  "M N M Rizan",
+  "Ruwan Silva",
+  "Kamal Jayasuriya",
+  "Dilini Fernando",
+  "Nuwan Bandara",
+  "Ishani Perera",
+  "Chamath Silva",
+  "Lahiru Gamage"
+ ],
+ "turns": [
+  {
+   "say": "now saying that hello how are you this is a text message that's given by Asela",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "Who should I send it to",
+     "Who"
+    ],
+    "must_not": [
+     "couldn't find Asela"
+    ]
+   }
+  },
+  {
+   "say": "There is a person called Senamali. You should be finding that.",
+   "expect": {
+    "no_send": true,
+    "must_any": [
+     "Did you mean",
+     "Nimali"
+    ]
+   }
+  },
+  {
+   "say": "Yes, her name is Nimali, N-I-M-A-L-I, Nimali.",
+   "expect": {
+    "send_to": "Nimali",
+    "send_has": [
+     "hello how are you"
+    ],
+    "must_not": [
+     "can't find"
+    ]
+   }
+  },
+  {
+   "say": "So, I'm going to find a person called..."
+  },
+  {
+   "say": "Hello",
+   "expect": {
+    "no_send": true
+   },
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "Can you send a message to Rizan?",
+   "expect": {
+    "no_send": true,
+    "must": [
+     "What should I say to M N M Rizan"
+    ]
+   }
+  },
+  {
+   "say": "No, you should be saying, you know, there should be a person called Rizan.",
+   "expect": {
+    "no_send": true,
+    "must_not": [
+     "couldn't find",
+     "don't see anyone"
+    ]
+   }
+  },
+  {
+   "say": "No, just tell me, like, 10 names that you can find. Just give me 10 names you can find in my contacts.",
+   "expect": {
+    "route": "contacts",
+    "no_send": true
+   }
+  }
+ ],
+ "note": "Invented-name copy of a private real-call replay (architect 04:20 SLT, 17 Oct)."
+}

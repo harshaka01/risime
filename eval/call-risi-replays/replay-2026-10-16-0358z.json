@@ -1,0 +1,105 @@
+{
+ "golden_id": "replay-2026-10-16-0358z",
+ "now": "2026-10-16T03:58:00Z",
+ "contacts": [
+  "Nimali",
+  "Kasun Senaratne",
+  "Tharaka Adikari",
+  "Sunil Adikari",
+  "M N M Rizan",
+  "Ruwan Silva",
+  "Kamal Jayasuriya",
+  "Dilini Fernando",
+  "Nuwan Bandara",
+  "Ishani Perera",
+  "Chamath Silva",
+  "Lahiru Gamage"
+ ],
+ "turns": [
+  {
+   "say": "How are you doing?",
+   "expect": {
+    "route": "chat",
+    "no_send": true,
+    "must_not": [
+     "didn't catch"
+    ]
+   }
+  },
+  {
+   "say": "What time do I have the next meeting?",
+   "expect": {
+    "route": "calendar_read",
+    "no_send": true
+   }
+  },
+  {
+   "say": "Rishi, what else can you do?",
+   "expect": {
+    "route": "capabilities",
+    "no_send": true
+   }
+  },
+  {
+   "say": "Can you send a message to Nimali?",
+   "expect": {
+    "no_send": true,
+    "must": [
+     "What should I say to Nimali"
+    ]
+   }
+  },
+  {
+   "say": "No, just. cancel that and then start a new message I'll tell you the message and listen to my message first Just say, good morning, Nimali. How are you doing? And this is written by Risi and then published by me.",
+   "expect": {
+    "route": "message_write",
+    "send_to": "Nimali",
+    "send_has": [
+     "good morning"
+    ],
+    "must_not": [
+     "calendar"
+    ]
+   }
+  },
+  {
+   "say": "We see I'm asking to send a message to Nimali. But the content should be, hey, how are you doing? This is a message just to make sure."
+  },
+  {
+   "say": "receive and send a message to you.",
+   "expect": {
+    "send_to": "Nimali",
+    "send_has": [
+     "how are you doing"
+    ],
+    "must_not": [
+     "calendar"
+    ]
+   },
+   "continues": true,
+   "after_ms": 300
+  },
+  {
+   "say": "No, no, no, no, no. I want to send a message to Nimali. So you should ask, like, what is the message should be? and then I'll tell you about the message and you send the message to her.",
+   "expect": {
+    "no_send": true,
+    "must": [
+     "What should I say to Nimali"
+    ]
+   }
+  },
+  {
+   "say": "Good morning, and I'm just testing whether you can send a message on behalf of me.",
+   "expect": {
+    "send_to": "Nimali",
+    "send_has": [
+     "testing"
+    ],
+    "must_not": [
+     "calendar"
+    ]
+   }
+  }
+ ],
+ "note": "Invented-name copy of a private real-call replay (architect 04:20 SLT, 17 Oct)."
+}
