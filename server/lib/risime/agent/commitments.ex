@@ -147,7 +147,7 @@ defmodule RisiMe.Agent.Commitments do
       owner == nil or not MapSet.member?(member_ids, owner) ->
         nil
 
-      text == "" ->
+      text == "" or RisiMe.Agent.Momentary.request?(text) ->
         nil
 
       sources == [] or not Enum.any?(sources, &MapSet.member?(new_ids, &1)) ->
@@ -161,7 +161,12 @@ defmodule RisiMe.Agent.Commitments do
 
       true ->
         tz = Map.get(tzs, owner, Clock.default_tz())
-        {due, kind} = Clock.parse_due(c["due_local"], tz)
+
+        {due, kind} =
+          case Clock.bare_day_due(c["due_text"], tz) do
+            nil -> Clock.parse_due(c["due_local"], tz)
+            at -> {at, "datetime"}
+          end
 
         %{
           text: String.slice(text, 0, 200),

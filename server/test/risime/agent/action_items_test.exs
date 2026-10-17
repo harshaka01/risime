@@ -244,6 +244,78 @@ defmodule RisiMe.Agent.ActionItemsTest do
       assert posts() == []
     end
 
+    test "a Tamil note is queued and reaches extraction (the model sees its Tamil text)", w do
+      Repo.delete_all(Oban.Job)
+      llm!(fn _ -> [] end)
+      tamil = "பில்களை சரிபார்த்து PDF ஆக கோப்பில் சேமித்து வைத்திருக்கிறேன்"
+      id = voice!(w, w.harsha, [%{"o" => 0, "t" => tamil}], language: "ta")
+
+      ActionItems.voice_transcribed(w.og, id, w.harsha.id, "ok", 12_400)
+      assert [_] = all_enqueued(worker: Job, args: %{"kind" => "voice_actions"})
+
+      assert :ok = run_voice!(w, id)
+      assert [req | _] = llm_requests()
+      assert inspect(req) =~ "பில்களை"
+      # A status update: no items, nothing posted.
+      assert posts() == []
+    end
+
+    test "'today' / 'tomorrow' with no time is 18:00 local, shown as the words said", w do
+      llm!(fn body ->
+        [
+          it(
+            body,
+            "promise",
+            "Send the accounts to Ko Jin",
+            "Harsha",
+            "send the accounts to Ko Jin today",
+            due: "2026-10-16T13:54",
+            due_text: "today"
+          ),
+          it(body, "promise", "Call the supplier", "Harsha", "send the accounts to Ko Jin today",
+            due: "2026-10-17",
+            due_text: "tomorrow"
+          )
+        ]
+      end)
+
+      id = voice!(w, w.harsha, [%{"o" => 0, "t" => "send the accounts to Ko Jin today"}])
+      assert :ok = run_voice!(w, id)
+      {_, _, card} = post_in(posts(), w.og, "action_items")
+      tz = Secretary.chat_tz(w.og)
+
+      hm = fn i ->
+        {:ok, dt, _} = DateTime.from_iso8601(i["due"])
+        dt |> RisiMe.Agent.Clock.local(tz) |> Calendar.strftime("%H:%M")
+      end
+
+      [today, tomorrow] = card["items"]
+      assert today["due_text"] == "today" and tomorrow["due_text"] == "tomorrow"
+      assert hm.(tomorrow) == "18:00"
+      now_local = RisiMe.Agent.Clock.now() |> RisiMe.Agent.Clock.local(tz)
+      assert hm.(today) == if(now_local.hour < 18, do: "18:00", else: "23:59")
+      refute today["all_day"]
+    end
+
+    test "momentary requests ('turn on the camera') are not promises", w do
+      llm!(fn body ->
+        [
+          it(
+            body,
+            "promise",
+            "Turn on the camera",
+            "Harsha",
+            "turn on the camera, can you hear me"
+          ),
+          it(body, "task", "Can you hear me", "Harsha", "turn on the camera, can you hear me")
+        ]
+      end)
+
+      id = voice!(w, w.harsha, [%{"o" => 0, "t" => "turn on the camera, can you hear me"}])
+      assert :ok = run_voice!(w, id)
+      assert posts() == []
+    end
+
     test "the trigger: switch, ≥ 5 s, the sender's opt-outs; Private and the Risi chat never",
          w do
       Repo.delete_all(Oban.Job)

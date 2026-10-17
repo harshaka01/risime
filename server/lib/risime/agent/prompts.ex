@@ -238,7 +238,9 @@ defmodule RisiMe.Agent.Prompts do
     A commitment is a chat member clearly promising, or clearly agreeing, to do a specific thing \
     ("I'll send the quote by Friday", or "ok, I'll do it" after a request). NOT commitments: \
     questions, suggestions, wishes, plans of the whole group without an owner, things already \
-    done, jokes, conditional or vague intentions ("maybe", "we should").
+    done, jokes, conditional or vague intentions ("maybe", "we should"), and momentary requests \
+    made during a call or chat ("turn on the camera", "can you hear me", "share your screen", \
+    "unmute").
     Rules:
     - Report only commitments made in messages with "new": true; older lines are context.
     - owner: the member ref (u1, u2, ...) of the person who will do it. They must have said it \
@@ -271,7 +273,8 @@ defmodule RisiMe.Agent.Prompts do
     or "YYYY-MM-DD" when only a day is given, or null; due_text: the deadline words as said, or \
     null; source: refs (m1, m2, ...) of the messages it comes from; confidence: 0 to 1.
     Not items: questions, suggestions, wishes, group plans without an owner, things already \
-    done, vague intentions. When there is no item, return "items": []. Do not invent anything.
+    done, vague intentions, momentary requests during the call or chat ("turn on the camera", \
+    "can you hear me", "share your screen", "unmute"). When there is no item, return "items": []. Do not invent anything.
     #{@untrusted}
     """
 
@@ -411,6 +414,7 @@ defmodule RisiMe.Agent.Prompts do
     - source: the refs (m1, m2, ...) of the lines it comes from, first the line that says it.
     - confidence: 0 to 1.
     - summary: one line (at most 280 characters) in the transcript's main language saying what     it was about, without owners or deadlines#{if source == "call", do: "", else: "; null for a voice note"}.
+    Momentary requests made during the call or note ("turn on the camera", "can you hear me",     "share your screen", "unmute") are not promises or tasks: leave them out.
     Never invent names, amounts or dates: only what the transcript says. When nothing needs     action, return "items": [].
     #{@untrusted}
     """

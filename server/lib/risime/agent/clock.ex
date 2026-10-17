@@ -100,6 +100,41 @@ defmodule RisiMe.Agent.Clock do
   def parse_due(_, _tz), do: {nil, nil}
 
   @doc """
+  A due that is only the word "today" / "tomorrow" (no time of day) is the end of the working day:
+  18:00 in the owner's zone (23:59 when 18:00 has already passed today). Returns the UTC instant,
+  or nil when `due_text` is anything else (the model's own `due_local` then stands).
+  """
+  def bare_day_due(due_text, tz, at \\ nil)
+
+  def bare_day_due(due_text, tz, at) when is_binary(due_text) do
+    words =
+      due_text
+      |> String.downcase()
+      |> String.replace(~r/[^\p{L}\p{M}\s]/u, " ")
+      |> String.split()
+      |> Enum.reject(&(&1 in ~w(by before on the)))
+
+    offset =
+      case words do
+        [w] when w in ~w(today අද இன்று) -> 0
+        [w] when w in ~w(tomorrow හෙට நாளை) -> 1
+        _ -> nil
+      end
+
+    if offset do
+      at = at || now()
+      date = at |> local(tz) |> NaiveDateTime.to_date() |> Date.add(offset)
+      due = to_utc(NaiveDateTime.new!(date, ~T[18:00:00]), tz)
+
+      if offset == 0 and DateTime.compare(due, at) != :gt,
+        do: to_utc(NaiveDateTime.new!(date, ~T[23:59:00]), tz),
+        else: due
+    end
+  end
+
+  def bare_day_due(_, _tz, _at), do: nil
+
+  @doc """
   When to remind (§24.11): `due − 1 h`, or 09:00 local on the due date when only a date is
   known. nil without a due.
   """

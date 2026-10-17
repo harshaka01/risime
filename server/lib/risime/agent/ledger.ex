@@ -646,7 +646,7 @@ defmodule RisiMe.Agent.Ledger do
       owner == nil or not MapSet.member?(member_ids, owner) ->
         nil
 
-      text == "" ->
+      text == "" or RisiMe.Agent.Momentary.request?(text) ->
         nil
 
       (i["confidence"] || 0) < min_confidence() ->
@@ -659,7 +659,11 @@ defmodule RisiMe.Agent.Ledger do
           RisiMe.Agent.CalendarV2.on_for?(owner) and
             RisiMe.Agent.DayPart.all_day?("#{text} #{i["due_text"]}")
 
-        {due, all_day} = due(i["due_local"], tz, whole_day?)
+        {due, all_day} =
+          case Clock.bare_day_due(i["due_text"], tz) do
+            nil -> due(i["due_local"], tz, whole_day?)
+            at -> {at, false}
+          end
 
         %{
           item_id: Ecto.UUID.generate(),

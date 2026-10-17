@@ -531,6 +531,9 @@ defmodule RisiMe.Agent.ActionItems do
       kind not in @kinds or text == "" or line == nil ->
         nil
 
+      kind in ~w(promise task) and RisiMe.Agent.Momentary.request?(text) ->
+        nil
+
       (i["confidence"] || 0) < Application.get_env(:risime, :risi_min_confidence, 0.6) ->
         nil
 
@@ -547,7 +550,10 @@ defmodule RisiMe.Agent.ActionItems do
         dtz = if owner, do: Map.get(tzs, owner, tz), else: tz
 
         {due, all_day} =
-          Ledger.due(i["due_local"], dtz, whole_day_hint(owner, text, i["due_text"]))
+          case Clock.bare_day_due(i["due_text"], dtz) do
+            nil -> Ledger.due(i["due_local"], dtz, whole_day_hint(owner, text, i["due_text"]))
+            at -> {at, false}
+          end
 
         %{
           item_id: Ecto.UUID.generate(),
