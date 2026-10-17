@@ -4,14 +4,12 @@
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "request": "send a message for me",
-        "say": "Who would you like to send it to?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 2011
+      "ms": 1121
     },
     "dictation| >> tell her that i'm running ten minutes late.": {
       "decision": {
@@ -30,7 +28,7 @@
         "to": "Nima Lee",
         "tool": "message_draft"
       },
-      "ms": 1664
+      "ms": 1459
     }
   },
   "para-message-steps-02": {
@@ -39,31 +37,29 @@
         "text": "Say that the car is ready for pickup.",
         "tool": "more"
       },
-      "ms": 736
+      "ms": 742
     },
     "i want to message someone.": {
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "request": "I want to message someone.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1548
+      "ms": 1118
     },
     "ruvan.": {
       "decision": {
-        "action": "ask",
+        "action": "tool",
         "confidence": 1,
-        "say": "Who is Ruvan?",
-        "tab": "private",
+        "tab": "",
         "text": "",
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1461
+      "ms": 1146
     }
   },
   "para-message-steps-03": {
@@ -72,7 +68,7 @@
         "text": "Let her know that the documents are on her desk.",
         "tool": "more"
       },
-      "ms": 781
+      "ms": 775
     },
     "send a text to nimaali.": {
       "decision": {
@@ -83,7 +79,7 @@
         "to": "Nimaali",
         "tool": "message_draft"
       },
-      "ms": 1417
+      "ms": 1240
     }
   },
   "para-message-steps-04": {
@@ -91,19 +87,19 @@
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "Nee Mali",
         "tool": "message_draft"
       },
-      "ms": 1373
+      "ms": 1234
     },
     "dictation| >> hello?": {
       "decision": {
         "text": "Hello?",
         "tool": "more"
       },
-      "ms": 598
+      "ms": 597
     },
     "just say happy birthday and see you tonight.": {
       "decision": {
@@ -114,7 +110,7 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1624
+      "ms": 1399
     }
   },
   "para-message-steps-05": {
@@ -123,7 +119,7 @@
         "text": "Tell him the meeting starts at three.",
         "tool": "more"
       },
-      "ms": 723
+      "ms": 717
     },
     "message kamal please.": {
       "decision": {
@@ -134,7 +130,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1347
+      "ms": 1177
     }
   },
   "para-message-steps-06": {
@@ -143,7 +139,7 @@
         "text": "Tell her I'll call her after lunch.",
         "tool": "more"
       },
-      "ms": 742
+      "ms": 734
     },
     "send a private message.": {
       "decision": {
@@ -154,7 +150,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1324
+      "ms": 1158
     },
     "to n-i-m-a-l-i.": {
       "decision": {
@@ -165,32 +161,37 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1174
+      "ms": 1204
     }
   },
   "para-message-steps-07": {
     "can you send something to nimalee?": {
       "decision": {
-        "action": "ask",
+        "action": "tool",
         "confidence": 0.9,
-        "say": "Who should I send it to?",
-        "tab": "",
+        "tab": "private",
         "text": "",
-        "to": "",
+        "to": "Nimalee",
         "tool": "message_draft"
       },
-      "ms": 1684
+      "ms": 1255
+    },
+    "dictation| >> sorry?": {
+      "decision": {
+        "tool": "instruction"
+      },
+      "ms": 439
     },
     "tell her that i missed her call and i will call back soon.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 1,
         "tab": "private",
         "text": "I missed your call and I will call back soon.",
-        "to": "Nimalee",
+        "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1459
+      "ms": 1479
     }
   },
   "para-message-steps-08": {
@@ -199,18 +200,18 @@
         "text": "Tell him that I paid the electricity bill.",
         "tool": "more"
       },
-      "ms": 743
+      "ms": 735
     },
     "i need to send a message to roo wan.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
-        "tab": "",
+        "confidence": 0.9,
+        "tab": "private",
         "text": "",
         "to": "Roo Wan",
         "tool": "message_draft"
       },
-      "ms": 1344
+      "ms": 1237
     }
   },
   "para-message-steps-09": {
@@ -219,7 +220,7 @@
         "text": "can we meet tomorrow morning?",
         "tool": "more"
       },
-      "ms": 694
+      "ms": 675
     },
     "send a message to nimali.": {
       "decision": {
@@ -230,7 +231,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1078
+      "ms": 1157
     }
   },
   "para-message-steps-10": {
@@ -239,18 +240,18 @@
         "text": "Tell her that she should bring the laptop charger.",
         "tool": "more"
       },
-      "ms": 761
+      "ms": 758
     },
     "please message nimally.": {
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "Nimally",
         "tool": "message_draft"
       },
-      "ms": 1368
+      "ms": 1236
     }
   },
   "para-message-steps-11": {
@@ -258,32 +259,29 @@
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "request": "Can you text Kamal?",
         "tab": "private",
         "text": "",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1637
+      "ms": 1216
     },
     "dictation| >> hello, can you hear me?": {
       "decision": {
         "tool": "instruction"
       },
-      "ms": 437
+      "ms": 438
     },
     "say thanks for the help yesterday.": {
       "decision": {
         "action": "tool",
-        "cancel_open": false,
         "confidence": 1,
-        "request": "Say thanks for the help yesterday.",
         "tab": "private",
         "text": "Thanks for the help yesterday.",
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 2059
+      "ms": 1400
     }
   },
   "para-message-steps-12": {
@@ -292,7 +290,7 @@
         "text": "Tell her I called a couple of times but she didn't pick up.",
         "tool": "more"
       },
-      "ms": 858
+      "ms": 853
     },
     "nimaali.": {
       "decision": {
@@ -303,7 +301,7 @@
         "to": "Nimaali",
         "tool": "message_draft"
       },
-      "ms": 1202
+      "ms": 1246
     },
     "send a message on a private chat.": {
       "decision": {
@@ -314,7 +312,7 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1337
+      "ms": 1156
     }
   },
   "para-message-steps-13": {
@@ -323,7 +321,7 @@
         "text": "Tell her the train is delayed by half an hour.",
         "tool": "more"
       },
-      "ms": 783
+      "ms": 778
     },
     "message nima lee.": {
       "decision": {
@@ -334,7 +332,7 @@
         "to": "Nima Lee",
         "tool": "message_draft"
       },
-      "ms": 1415
+      "ms": 1095
     }
   },
   "para-message-steps-14": {
@@ -343,7 +341,7 @@
         "text": "Tell him to bring the keys.",
         "tool": "more"
       },
-      "ms": 699
+      "ms": 695
     },
     "i want to send a text.": {
       "decision": {
@@ -354,18 +352,19 @@
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1296
+      "ms": 1118
     },
     "it's for ruwan.": {
       "decision": {
-        "action": "tool",
+        "action": "ask",
         "confidence": 1,
-        "tab": "",
+        "say": "What would you like to say to Ruwan?",
+        "tab": "private",
         "text": "",
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1118
+      "ms": 1504
     }
   },
   "para-message-steps-15": {
@@ -374,7 +373,7 @@
         "text": "tell her that dinner is at eight tonight",
         "tool": "more"
       },
-      "ms": 742
+      "ms": 755
     },
     "send nimali a message.": {
       "decision": {
@@ -385,7 +384,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1232
+      "ms": 1199
     }
   },
   "para-message-steps-16": {
@@ -393,30 +392,30 @@
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1298
+      "ms": 1155
     },
     "dictation| >> let her know i'm on my way.": {
       "decision": {
         "text": "Let her know I'm on my way.",
         "tool": "more"
       },
-      "ms": 739
+      "ms": 736
     },
     "nimali perera.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1162
+      "ms": 1252
     }
   },
   "para-message-steps-17": {
@@ -425,7 +424,7 @@
         "text": "",
         "tool": "instruction"
       },
-      "ms": 556
+      "ms": 558
     },
     "tell him the report is finished.": {
       "decision": {
@@ -436,18 +435,18 @@
         "to": "Kamal Jayasuriya",
         "tool": "message_draft"
       },
-      "ms": 1354
+      "ms": 1380
     },
     "text kamal for me.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "tab": "private",
         "text": "",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1352
+      "ms": 1218
     }
   },
   "para-message-steps-18": {
@@ -456,7 +455,7 @@
         "text": "Tell her that I can't make it today, sorry.",
         "tool": "more"
       },
-      "ms": 804
+      "ms": 795
     },
     "send a message to nee mali.": {
       "decision": {
@@ -467,7 +466,7 @@
         "to": "Nee Mali",
         "tool": "message_draft"
       },
-      "ms": 1419
+      "ms": 1244
     }
   },
   "para-message-steps-19": {
@@ -475,19 +474,19 @@
       "decision": {
         "action": "tool",
         "confidence": 0.9,
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1035
+      "ms": 1155
     },
     "dictation| >> say good luck with the exam.": {
       "decision": {
         "text": "Say good luck with the exam.",
         "tool": "more"
       },
-      "ms": 699
+      "ms": 700
     },
     "nimalee.": {
       "decision": {
@@ -499,7 +498,7 @@
         "to": "Nimalee",
         "tool": "message_draft"
       },
-      "ms": 1462
+      "ms": 1507
     }
   },
   "para-message-steps-20": {
@@ -508,7 +507,7 @@
         "text": "Tell him I'll be home by seven.",
         "tool": "more"
       },
-      "ms": 739
+      "ms": 742
     },
     "message ruvan.": {
       "decision": {
@@ -519,7 +518,7 @@
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1345
+      "ms": 1191
     }
   }
 }

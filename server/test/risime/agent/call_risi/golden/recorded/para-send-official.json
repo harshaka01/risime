@@ -5,11 +5,11 @@
         "action": "tool",
         "confidence": 1,
         "tab": "official",
-        "text": "the meeting moved to three",
+        "text": "The meeting moved to three.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1513
+      "ms": 1318
     }
   },
   "para-send-official-02": {
@@ -22,7 +22,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1472
+      "ms": 1282
     }
   },
   "para-send-official-03": {
@@ -35,33 +35,33 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1471
+      "ms": 1283
     }
   },
   "para-send-official-04": {
     "tell nimali in the office chat that i'll be late.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "tab": "official",
         "text": "I'll be late.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1491
+      "ms": 1359
     }
   },
   "para-send-official-05": {
     "send it to work: tell ruwan the report is done.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "tab": "official",
         "text": "The report is done.",
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1466
+      "ms": 1333
     },
     "undo that.": {
       "decision": {
@@ -72,7 +72,7 @@
         "to": "",
         "tool": "undo_send"
       },
-      "ms": 1438
+      "ms": 1191
     }
   },
   "para-send-official-06": {
@@ -85,7 +85,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1546
+      "ms": 1343
     }
   },
   "para-send-official-07": {
@@ -98,7 +98,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1533
+      "ms": 1344
     },
     "yes, send it.": {
       "decision": {
@@ -109,7 +109,7 @@
         "to": "Ruwan Silva",
         "tool": "confirm_open"
       },
-      "ms": 1776
+      "ms": 1539
     }
   },
   "para-send-official-08": {
@@ -118,11 +118,11 @@
         "action": "tool",
         "confidence": 1,
         "tab": "official",
-        "text": "You lied to the client and I'm calling a lawyer.",
+        "text": "you lied to the client and I'm calling a lawyer.",
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1619
+      "ms": 1417
     }
   },
   "para-send-official-09": {
@@ -135,7 +135,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1506
+      "ms": 1313
     }
   },
   "para-send-official-10": {
@@ -148,7 +148,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1487
+      "ms": 1298
     }
   },
   "para-send-official-11": {
@@ -157,22 +157,22 @@
         "action": "tool",
         "confidence": 1,
         "tab": "official",
-        "text": "the meeting moved to three",
+        "text": "The meeting moved to three.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1244
+      "ms": 1325
     },
     "yes, send it.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
         "tab": "official",
-        "text": "The meeting moved to three",
+        "text": "The meeting moved to three.",
         "to": "Nimali Perera",
         "tool": "confirm_open"
       },
-      "ms": 1773
+      "ms": 1549
     }
   },
   "para-send-official-12": {
@@ -185,7 +185,7 @@
         "to": "Ruwan Silva",
         "tool": "confirm_open"
       },
-      "ms": 1702
+      "ms": 1459
     },
     "tell ruwan the keys are on the desk.": {
       "decision": {
@@ -196,7 +196,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1498
+      "ms": 1326
     }
   },
   "para-send-official-13": {
@@ -205,22 +205,22 @@
         "action": "tool",
         "confidence": 1,
         "tab": "official",
-        "text": "the review starts at ten",
+        "text": "The review starts at ten.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1526
+      "ms": 1327
     },
     "wait, make it eleven.": {
       "decision": {
         "action": "tool",
         "confidence": 1,
         "tab": "official",
-        "text": "The review starts at eleven",
+        "text": "The review starts at eleven.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1621
+      "ms": 1388
     }
   },
   "para-send-official-14": {
@@ -233,7 +233,7 @@
         "to": "",
         "tool": "undo_send"
       },
-      "ms": 1428
+      "ms": 1195
     },
     "tell kamal at the office that i'm on my way.": {
       "decision": {
@@ -244,33 +244,33 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1543
+      "ms": 1355
     }
   },
   "para-send-official-15": {
     "send it to work.": {
       "decision": {
-        "action": "ask",
+        "action": "tool",
         "confidence": 0.9,
         "tab": "official",
         "text": "",
         "to": "",
         "tool": "message_draft"
       },
-      "ms": 1323
+      "ms": 1155
     }
   },
   "para-send-official-16": {
     "tell ruvan on official that the shop opens at ten.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 1,
         "tab": "official",
         "text": "The shop opens at ten.",
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1553
+      "ms": 1299
     }
   },
   "para-send-official-17": {
@@ -283,7 +283,7 @@
         "to": "Nima Lee",
         "tool": "message_draft"
       },
-      "ms": 1483
+      "ms": 1310
     }
   },
   "para-send-official-18": {
@@ -292,24 +292,25 @@
         "action": "tool",
         "confidence": 1,
         "tab": "official",
-        "text": "You're fired. Return the laptop.",
+        "text": "You're fired and must return the laptop.",
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1546
+      "ms": 1356
     }
   },
   "para-send-official-19": {
     "hmm, no, don't send it yet.": {
       "decision": {
-        "action": "tool",
+        "action": "reply",
         "confidence": 1,
+        "say": "Okay, I've cancelled that message. What would you like to do instead?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "cancel_open"
       },
-      "ms": 1444
+      "ms": 1677
     },
     "tell kamal on official, the courier will come at five.": {
       "decision": {
@@ -320,7 +321,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1250
+      "ms": 1315
     }
   },
   "para-send-official-20": {
@@ -333,7 +334,7 @@
         "to": "",
         "tool": "undo_send"
       },
-      "ms": 1376
+      "ms": 1216
     }
   }
 }

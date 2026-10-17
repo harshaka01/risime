@@ -10,7 +10,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1373
+      "ms": 1522
     }
   },
   "para-calendar-read-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1611
+      "ms": 1441
     }
   },
   "para-calendar-read-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1668
+      "ms": 1442
     }
   },
   "para-calendar-read-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1636
+      "ms": 1533
     }
   },
   "para-calendar-read-05": {
@@ -66,7 +66,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1663
+      "ms": 1499
     }
   },
   "para-calendar-read-06": {
@@ -80,7 +80,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1630
+      "ms": 1438
     }
   },
   "para-calendar-read-07": {
@@ -94,7 +94,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1635
+      "ms": 1462
     }
   },
   "para-calendar-read-08": {
@@ -108,7 +108,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1786
+      "ms": 1600
     }
   },
   "para-calendar-read-09": {
@@ -122,7 +122,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1633
+      "ms": 1460
     }
   },
   "para-calendar-read-10": {
@@ -136,7 +136,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1662
+      "ms": 1481
     }
   },
   "para-calendar-read-11": {
@@ -150,7 +150,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1673
+      "ms": 1501
     }
   },
   "para-calendar-read-12": {
@@ -164,7 +164,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1356
+      "ms": 1440
     }
   },
   "para-calendar-read-13": {
@@ -178,7 +178,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1635
+      "ms": 1468
     }
   },
   "para-calendar-read-14": {
@@ -186,13 +186,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Is my morning free?",
+        "request": "Is my morning free on Friday 16 October 2026?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1590
+      "ms": 1647
     }
   },
   "para-calendar-read-15": {
@@ -206,7 +206,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1599
+      "ms": 1417
     }
   },
   "para-calendar-read-16": {
@@ -220,7 +220,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1638
+      "ms": 1260
     }
   },
   "para-calendar-read-17": {
@@ -234,7 +234,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1724
+      "ms": 1491
     },
     "what's on my calendar today?": {
       "decision": {
@@ -246,7 +246,7 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1376
+      "ms": 1514
     }
   },
   "para-calendar-read-18": {
@@ -260,19 +260,19 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1669
+      "ms": 1496
     },
     "you should be able to read your own calendar, why can't you?": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 1,
         "request": "Do I have anything today?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1784
+      "ms": 1515
     }
   },
   "para-calendar-read-19": {
@@ -286,21 +286,21 @@
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1635
+      "ms": 1467
     }
   },
   "para-calendar-read-20": {
     "what time do i have to be somewhere today?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "request": "What time do I have to be somewhere today?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_read"
       },
-      "ms": 1696
+      "ms": 1644
     }
   }
 }

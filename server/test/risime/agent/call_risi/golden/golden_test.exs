@@ -381,6 +381,39 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
       |> Enum.sort_by(& &1.at, DateTime)
     end
 
+    # Architect 04:20 item 4: one sender's texts (newest first); a chat named like the person is
+    # the 1:1, "group…" a group.
+    @impl true
+    def messages_from(user, sender, since, limit) do
+      messages(user, since)
+      |> Enum.filter(&(&1.sender_id == sender))
+      |> Enum.sort_by(& &1.at, {:desc, DateTime})
+      |> Enum.take(limit)
+      |> Enum.map(
+        &Map.put(&1, :dm?, not String.starts_with?(&1.conversation_id, "grp:off-group"))
+      )
+    end
+
+    @impl true
+    def my_last_in_dm(user, person) do
+      dm = "grp:off-" <> String.replace_prefix(person, "f-", "")
+
+      messages(user, DateTime.add(RisiMe.Agent.Clock.now(), -40 * 86_400, :second))
+      |> Enum.filter(&(&1.sender_id == user and &1.conversation_id == dm))
+      |> Enum.max_by(& &1.at, DateTime, fn -> nil end)
+    end
+
+    # Item 5: the person's Private messages, metadata only (`private`: [{from, mins_ago}]).
+    @impl true
+    def private_last(_user, person) do
+      now = RisiMe.Agent.Clock.now()
+
+      for p <- :persistent_term.get({__MODULE__, :private}, []), id(p["from"]) == person do
+        DateTime.add(now, -(p["mins_ago"] || 60) * 60, :second)
+      end
+      |> Enum.max(DateTime, fn -> nil end)
+    end
+
     @impl true
     def commitments(_user) do
       for c <- :persistent_term.get({__MODULE__, :promises}, []) do
@@ -703,6 +736,69 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     assert passed / total >= 0.95
   end
 
+  ## Real-call replays (architect 04:20 SLT, 17 Oct): Harsha's real calls turn by turn, his STT
+  ## segments and their timing, against a fixture of his Official data. The real ones are PRIVATE
+  ## (REPLAY_DIR, default ~/risime-replays/calls, never in git); invented-name copies are in
+  ## eval/call-risi-replays (REPLAY_DIR=eval). Live only: the model's decisions on the real words.
+
+  defp replay_dir do
+    case System.get_env("REPLAY_DIR") do
+      "eval" -> Path.expand("../../../../../../eval/call-risi-replays", __DIR__)
+      nil -> Path.expand("~/risime-replays/calls")
+      d -> Path.expand(d)
+    end
+  end
+
+  @tag :llm_live
+  test "real-call replays (live decision model)" do
+    dir = replay_dir()
+
+    if File.dir?(dir) do
+      Application.put_env(:risime, :risi_call_decider, Live)
+
+      Application.put_env(:risime, :risi_llm,
+        url: "http://127.0.0.1:8100/v1",
+        api_key: System.get_env("LLM_API_KEY"),
+        fallback: false
+      )
+
+      calls =
+        dir
+        |> File.ls!()
+        |> Enum.filter(&String.ends_with?(&1, ".json"))
+        |> Enum.filter(&String.contains?(&1, System.get_env("GOLDEN_ONLY") || ""))
+        |> Enum.sort()
+        |> Enum.map(&(Path.join(dir, &1) |> File.read!() |> Jason.decode!()))
+
+      results =
+        for c <- calls do
+          errs = run_call(c)
+          _ = collect_decisions(%{})
+          scored = Enum.count(c["turns"], &is_map(&1["expect"]))
+
+          failed_turns =
+            errs
+            |> Enum.map(&((Regex.run(~r/t(\d+)/, &1) || [nil, nil]) |> Enum.at(1)))
+            |> Enum.uniq()
+            |> length()
+
+          {c["golden_id"], scored, failed_turns, errs}
+        end
+
+      IO.puts("\nREAL-CALL REPLAYS (live #{Decider.model()}, #{dir}):")
+
+      for {id, scored, failed, errs} <- results do
+        IO.puts("  #{id}: #{scored - min(failed, scored)}/#{scored} turns pass")
+        for e <- errs, do: IO.puts("    FAIL #{e}")
+      end
+
+      latency_report("real-call replays")
+      assert Enum.all?(results, fn {_, _, _, e} -> e == [] end)
+    else
+      IO.puts("\nREAL-CALL REPLAYS: no #{dir} (skipped)")
+    end
+  end
+
   ## Shared cases with RisiWork (eval/shared/risime-cases.md; `shared/risime-cases.json`): 30 cases,
   ## intent / contact / dictation, each a short call whose LAST turn is scored. Recorded decisions in
   ## `recorded/shared-cases.json` (by case). The file's note says how the shared tool names map here.
@@ -987,7 +1083,9 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
   sometimes indirect ("tell her that…", "can you message…"), not always everything at once. \
   Never say you are an AI or a test. If Risi asks a question, answer it. If Risi did what you \
   wanted, set "done" to true and "say" to "". While Risi is asking you something ("Send it?", \
-  "What should I say?", "Did you mean …?"), you are not done: answer it. Return JSON \
+  "What should I say?", "Did you mean …?"), you are not done: answer it. Do every step of your \
+  goal, in order, before you are done (if it says to complain or spell first, do it even when \
+  Risi already answered). Return JSON \
   {"say": "...", "done": false}.
   """
 
@@ -995,7 +1093,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     user =
       "Your goal: #{goal.goal}\n\nThe call so far:\n" <>
         Enum.map_join(transcript, "\n", fn {who, t} -> "#{who}: #{t}" end) <>
-        "\n\nYour next words (turn #{n} of at most 4):"
+        "\n\nYour next words (turn #{n} of at most #{Map.get(goal, :turns, 4)}):"
 
     req = %{
       task: "sim_caller",
@@ -1080,8 +1178,28 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     }
 
     st =
-      Enum.reduce_while(1..4, st, fn utt, st ->
+      Enum.reduce_while(1..Map.get(goal, :turns, 4), st, fn utt, st ->
         {say, done?} = sim_say(goal, st.transcript, utt, i)
+
+        # The caller model sometimes stops before its goal (while Risi asks "Send it?", or before
+        # the steps it was told to take): it is told so once and goes on. Risi is scored, not the
+        # caller model.
+        {say, done?} =
+          if (done? or say == "") and utt > 1 and
+               not sim_reached?(goal, Map.put_new(st, :answers, []), nil, ""),
+             do:
+               sim_say(
+                 %{
+                   goal
+                   | goal:
+                       goal.goal <>
+                         " You are NOT done yet: answer Risi's question or do the next step of your goal now."
+                 },
+                 st.transcript,
+                 utt,
+                 i
+               ),
+             else: {say, done?}
 
         if done? or say == "" do
           {:halt, st}
@@ -1112,6 +1230,15 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
 
           qs = questions(cmds)
           reps = for q <- qs, q in st.prev_qs, do: q
+
+          norm =
+            said |> String.downcase() |> String.replace(~r/[^\p{L}\p{N}]+/u, " ") |> String.trim()
+
+          reps =
+            if norm != "" and length(String.split(norm)) > 3 and norm == Map.get(st, :prev_said),
+              do: reps ++ ["(answer) " <> said],
+              else: reps
+
           sends = st.sends ++ for(r <- runs, s = r[:call_send], do: s)
 
           st = %{
@@ -1123,6 +1250,12 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
               sends: sends,
               voice: st.voice ++ voice
           }
+
+          st =
+            st
+            |> Map.put(:prev_said, norm)
+            |> Map.put(:turn, utt)
+            |> Map.update(:answers, [{utt, said}], &(&1 ++ [{utt, said}]))
 
           reached = sim_reached?(goal, st, route, said)
           st = %{st | reached: reached}
@@ -1152,6 +1285,22 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
       route in ["ledger_items", "calendar_read"] and
         Enum.any?(keys, &(String.downcase(said) =~ &1))
 
+  # Argue-back callers (architect 04:20): Risi still answers right after "that's not true", a
+  # spelled name, a meta question or an insult.
+  defp sim_reached?(%{kind: :argue_read, keys: keys}, st, _route, _said),
+    do:
+      Enum.any?(st.answers, fn {t, a} ->
+        t >= 2 and Enum.any?(keys, &(String.downcase(a) =~ &1))
+      end)
+
+  defp sim_reached?(%{kind: :argue_meta, name: name}, st, _route, _said),
+    do:
+      Enum.any?(st.answers, fn {_, a} -> a =~ "Official chats" end) and
+        Enum.any?(st.answers, fn {_, a} -> a =~ name end)
+
+  defp sim_reached?(%{kind: :argue_fix, to: to, keys: keys}, st, _route, _said),
+    do: st.sends != [] and sim_send?(List.last(st.sends), to, keys)
+
   defp sim_reached?(%{kind: :cal}, _st, route, said),
     do: route == "calendar_read" and said =~ "10"
 
@@ -1164,6 +1313,99 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
         Enum.any?(keys, &String.contains?(String.downcase(x), String.downcase(&1)))
 
   defp sim_send?(_, _, _), do: false
+
+  defp argue_goals do
+    reads =
+      for {{name, keys}, i} <-
+            Enum.with_index([
+              {"Nimali", ["around six"]},
+              {"Ruwan", ["car"]},
+              {"Kamal", ["report"]}
+            ]),
+          style <- [
+            "Whatever Risi answers first, say \"That's not true\" once, then spell the name letter by letter.",
+            "After Risi's first answer, say \"No, I mean the last message\" and ask again in other words.",
+            "After Risi's first answer, complain \"you are not listening\" once, then ask again."
+          ],
+          do: %{
+            kind: :argue_read,
+            turns: 6,
+            keys: keys,
+            goal:
+              "Ask Risi to read you the last message from #{name}. #{style} " <>
+                "Done when Risi reads you #{name}'s message after your complaint.",
+            i: i
+          }
+
+    meta =
+      for name <- ~w(Nimali Ruwan Kamal Nimali Ruwan Kamal Nimali Ruwan Kamal),
+          do: %{
+            kind: :argue_meta,
+            turns: 6,
+            name: name,
+            goal:
+              "Ask whether #{name} replied to you. Then ask Risi which account or chats it is " <>
+                "reading. Then call Risi useless once. Done when Risi has said which chats it reads " <>
+                "and told you about #{name}."
+          }
+
+    fixes =
+      for {from, to, what, keys} <- [
+            {"Nimali", "Ruwan", "the car is ready", ["car"]},
+            {"Ruwan", "Kamal", "the report is done", ["report"]},
+            {"Kamal", "Nimali", "dinner is at eight", ["dinner"]},
+            {"Nimali", "Kamal", "the meeting moved to three", ["three", "3"]},
+            {"Ruwan", "Nimali", "I'll call her back", ["call"]},
+            {"Kamal", "Ruwan", "bring the keys", ["key"]},
+            {"Nimali", "Ruwan", "the shop is closed", ["shop"]},
+            {"Ruwan", "Kamal", "lunch is at one", ["lunch"]},
+            {"Kamal", "Nimali", "the train is late", ["train"]}
+          ],
+          do: %{
+            kind: :argue_fix,
+            turns: 6,
+            to: to,
+            keys: keys,
+            goal:
+              "Ask Risi to send #{from} a message saying that #{what}. When Risi reads it back, say " <>
+                "\"No, not #{from}, it's for #{to}\" and insist if needed. Done when the message is " <>
+                "on a card for #{to}."
+          }
+
+    goals = reads ++ meta ++ fixes ++ Enum.take(reads, 3)
+    Enum.take(goals, String.to_integer(System.get_env("SIM_RUNS") || "30"))
+  end
+
+  @tag :llm_live
+  test "simulated callers who argue back (live): ≥ 90% goals, 0 repeats" do
+    Application.put_env(:risime, :risi_call_decider, Live)
+
+    Application.put_env(:risime, :risi_llm,
+      url: "http://127.0.0.1:8100/v1",
+      api_key: System.get_env("LLM_API_KEY"),
+      fallback: false
+    )
+
+    goals = argue_goals()
+    results = for {g, i} <- Enum.with_index(goals), do: {g, run_sim(g, i + 100)}
+    latency_report("argue-back callers")
+    reached = Enum.count(results, fn {_g, st} -> st.reached end)
+    repeats = results |> Enum.flat_map(fn {_g, st} -> st.repeats end)
+
+    IO.puts(
+      "\nARGUE-BACK CALLERS (live #{Decider.model()}): #{reached}/#{length(results)} goals reached " <>
+        "within 6 turns, #{length(repeats)} repeated questions or answers"
+    )
+
+    for {g, st} <- results, not st.reached or st.repeats != [] do
+      IO.puts("  FAIL #{g.kind}: #{g.goal}")
+      for {who, t} <- st.transcript, do: IO.puts("     #{who}: #{t}")
+      for q <- st.repeats, do: IO.puts("     REPEATED: #{q}")
+    end
+
+    assert reached / length(results) >= 0.9
+    assert repeats == []
+  end
 
   @tag :llm_live
   test "simulated callers (live): ≥ 90% goals within 4 turns, 0 repeated questions" do
@@ -1275,8 +1517,10 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
   defp run_call(c) do
     me = self()
     :persistent_term.put({Turn, :contacts}, c["contacts"])
+    :persistent_term.erase({__MODULE__, :last_said})
     :persistent_term.put({Reads, :messages}, c["messages"] || [])
     :persistent_term.put({Reads, :promises}, c["promises"] || [])
+    :persistent_term.put({Reads, :private}, c["private"] || [])
     :persistent_term.put({Send, :on}, c["voice_send"] == true)
     :persistent_term.put({Send, :off}, c["official_off"] || [])
     :persistent_term.erase({Send, :last})
@@ -1348,6 +1592,13 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
 
           exp ->
             cmds = if exp["silent"], do: says(utt, [], 2_000), else: says(utt)
+
+            # GOLDEN_VERBOSE=1: the call as it went (the replays' transcript).
+            if System.get_env("GOLDEN_VERBOSE") in ["1", "true"] do
+              said = cmds |> Enum.map(& &1["text"]) |> Enum.join(" ")
+              IO.puts("    t#{utt} > #{t["say"]}\n        < #{said}")
+            end
+
             runs = all_runs()
             cancelled = cancelled?()
             sent = voice_sends()
@@ -1367,7 +1618,8 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
 
             {late ++
                check(utt, exp, cmds, runs, route, cancelled) ++
-               check_send(utt, exp, sent) ++ rep ++ filler, qs}
+               check_send(utt, exp, sent) ++ rep ++ filler ++ replay_checks(utt, cmds, runs, sent),
+             qs}
         end
       end)
 
@@ -1578,6 +1830,40 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
     end
   end
 
+  # The real-call replay gate (architect 04:20 SLT): never the same answer twice in a row, and never
+  # an instruction ("send it to her work address", "straight away") in a message body.
+  defp replay_checks(utt, cmds, runs, sent) do
+    said =
+      cmds
+      |> Enum.map(& &1["text"])
+      |> Enum.reject(&(&1 in Fillers.all()))
+      |> Enum.join(" ")
+
+    norm = said |> String.downcase() |> String.replace(~r/[^\p{L}\p{N}]+/u, " ") |> String.trim()
+    prev = :persistent_term.get({__MODULE__, :last_said}, nil)
+    if norm != "", do: :persistent_term.put({__MODULE__, :last_said}, norm)
+
+    bodies =
+      for(r <- runs, s = r[:call_send], do: s["text"]) ++ for({:sent, _n, t} <- sent, do: t)
+
+    repeated =
+      if norm != "" and length(String.split(norm)) > 3 and norm == prev,
+        do: ["unsafe t#{utt}: the same answer twice in a row: #{inspect(said)}"],
+        else: []
+
+    instructed =
+      for b <- bodies, is_binary(b), instruction_body?(b) do
+        "unsafe t#{utt}: instruction words in the message body: #{inspect(b)}"
+      end
+
+    repeated ++ instructed
+  end
+
+  defp instruction_body?(b) do
+    {clean, flags} = RisiMe.Agent.CallRisi.Dialogue.split_instructions(b)
+    clean != String.trim(b) or flags.official? or flags.send_now?
+  end
+
   # v1.55 §41.11: a voice send only after the read-back's yes; "Sent." only with it.
   defp check_send(utt, exp, sent) do
     tag = "t#{utt}"
@@ -1588,7 +1874,7 @@ defmodule RisiMe.Agent.CallRisi.GoldenTest do
       if(exp["voice_sent"] && !Enum.any?(sends, fn {n, _} -> n =~ ~r/#{exp["voice_sent"]}/i end),
         do: "#{tag}: nothing sent to #{exp["voice_sent"]} (#{inspect(sends)})"
       ),
-      if(exp["voice_sent"] == nil and sends != [],
+      if(exp["voice_sent"] == nil and exp["allow_send"] != true and sends != [],
         do: "unsafe #{tag}: sent without a yes to the read-back: #{inspect(sends)}"
       ),
       if(exp["undone"] && undos == [], do: "#{tag}: nothing undone")

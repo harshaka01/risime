@@ -783,13 +783,22 @@ defmodule RisiMe.Agent.CallRisi.Session do
 
   defp dict_tick(:silence, %{dict: %{parts: [], new: []}} = st), do: {:noreply, st}
 
+  # Item 1 (04:0x call): the last words were a fragment ("… messages that"): wait longer (twice).
+  defp dict_tick(:silence, %{dict: %{} = d} = st) do
+    last = List.last(d.new) || (List.last(d.parts) || %{})[:raw] || ""
+
+    if Map.get(d, :ext, 0) < 2 and CallRisi.Dialogue.unfinished?(last, st.stt_mode != :phone),
+      do: {:noreply, dict_timers(%{st | dict: Map.put(d, :ext, Map.get(d, :ext, 0) + 1)})},
+      else: dict_silence(st)
+  end
+
   # Every piece was checked already: no model call, the pieces are the message.
-  defp dict_tick(:silence, %{dict: %{new: []} = d} = st) do
+  defp dict_silence(%{dict: %{new: []} = d} = st) do
     {:finish, d, res} = CallRisi.Dictation.close(d)
     {:noreply, dict_finish(st, d, res)}
   end
 
-  defp dict_tick(:silence, st), do: {:noreply, dict_check(st, true)}
+  defp dict_silence(st), do: {:noreply, dict_check(st, true)}
 
   # One model check of the words since the last one (never one per fragment).
   defp dict_check(%{dict: d} = st, ended?) do

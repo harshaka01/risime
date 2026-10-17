@@ -4,7 +4,7 @@
       "text": "Hi Kamal, the delivery is moved to Friday morning, please be at the office by nine.",
       "tool": "end"
     },
-    "ms": 964
+    "ms": 955
   },
   "listen to my message properly and then send it to kamal.": {
     "decision": {
@@ -15,17 +15,17 @@
       "to": "Kamal",
       "tool": "dictate"
     },
-    "ms": 1365
+    "ms": 1173
   },
   "send it to work.": {
     "decision": {
       "action": "tool",
-      "confidence": 1,
+      "confidence": 0.9,
       "tab": "official",
       "text": "Hi Kamal, the delivery is moved to Friday morning, please be at the office by nine.",
       "to": "Kamal Jayasuriya",
       "tool": "message_draft"
     },
-    "ms": 1980
+    "ms": 1773
   }
 }

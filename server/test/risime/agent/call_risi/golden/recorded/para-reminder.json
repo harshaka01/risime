@@ -10,7 +10,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1744
+      "ms": 1558
     }
   },
   "para-reminder-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1810
+      "ms": 1597
     }
   },
   "para-reminder-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1736
+      "ms": 1540
     }
   },
   "para-reminder-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1750
+      "ms": 1563
     }
   },
   "para-reminder-05": {
@@ -60,13 +60,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Put a reminder tomorrow at noon, buy flowers.",
+        "request": "buy flowers",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1701
+      "ms": 1365
     }
   },
   "para-reminder-06": {
@@ -80,7 +80,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1770
+      "ms": 1579
     }
   },
   "para-reminder-07": {
@@ -88,13 +88,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "check the server backups, tomorrow 10 am",
+        "request": "check the server backups, tomorrow 10 am.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1724
+      "ms": 1545
     }
   },
   "para-reminder-08": {
@@ -108,7 +108,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1753
+      "ms": 1568
     }
   },
   "para-reminder-09": {
@@ -122,7 +122,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1893
+      "ms": 1687
     }
   },
   "para-reminder-10": {
@@ -136,7 +136,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1743
+      "ms": 1560
     }
   },
   "para-reminder-11": {
@@ -150,7 +150,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1696
+      "ms": 1496
     }
   },
   "para-reminder-12": {
@@ -164,7 +164,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1812
+      "ms": 1581
     }
   },
   "para-reminder-13": {
@@ -178,7 +178,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1818
+      "ms": 1622
     }
   },
   "para-reminder-14": {
@@ -192,7 +192,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1750
+      "ms": 1557
     }
   },
   "para-reminder-15": {
@@ -206,7 +206,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1795
+      "ms": 1598
     }
   },
   "para-reminder-16": {
@@ -220,7 +220,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1770
+      "ms": 1577
     }
   },
   "para-reminder-17": {
@@ -234,7 +234,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1725
+      "ms": 1555
     }
   },
   "para-reminder-18": {
@@ -248,7 +248,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1677
+      "ms": 1494
     }
   },
   "para-reminder-19": {
@@ -262,7 +262,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1800
+      "ms": 1601
     }
   },
   "para-reminder-20": {
@@ -276,7 +276,7 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1850
+      "ms": 1637
     }
   }
 }

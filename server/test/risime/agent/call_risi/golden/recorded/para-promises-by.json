@@ -3,14 +3,14 @@
     "has kamal followed up on the computer delivery?": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 0.9,
         "request": "Has Kamal followed up on the computer delivery?",
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1725
+      "ms": 1560
     }
   },
   "para-promises-by-02": {
@@ -24,7 +24,7 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1592
+      "ms": 1414
     }
   },
   "para-promises-by-03": {
@@ -38,21 +38,21 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1570
+      "ms": 1396
     }
   },
   "para-promises-by-04": {
     "what has ruvan promised to do for me?": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 1,
         "request": "What has Ruvan promised to do for me?",
         "tab": "",
         "text": "",
         "to": "Ruvan",
         "tool": "promises_by"
       },
-      "ms": 1724
+      "ms": 1477
     }
   },
   "para-promises-by-05": {
@@ -61,12 +61,12 @@
         "action": "tool",
         "confidence": 0.9,
         "request": "Is Kamel going to deliver the new computer?",
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "Kamel",
         "tool": "promises_by"
       },
-      "ms": 1704
+      "ms": 1557
     }
   },
   "para-promises-by-06": {
@@ -80,7 +80,7 @@
         "to": "Nimali",
         "tool": "promises_by"
       },
-      "ms": 1638
+      "ms": 1463
     }
   },
   "para-promises-by-07": {
@@ -94,7 +94,7 @@
         "to": "Kasun",
         "tool": "promises_by"
       },
-      "ms": 1598
+      "ms": 1424
     }
   },
   "para-promises-by-08": {
@@ -108,7 +108,7 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1595
+      "ms": 1413
     }
   },
   "para-promises-by-09": {
@@ -117,12 +117,12 @@
         "action": "tool",
         "confidence": 0.9,
         "request": "has Kamal followed up on the computer delivery",
-        "tab": "",
+        "tab": "private",
         "text": "",
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1721
+      "ms": 1561
     }
   },
   "para-promises-by-10": {
@@ -136,7 +136,7 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1591
+      "ms": 1417
     }
   },
   "para-promises-by-11": {
@@ -150,7 +150,7 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1662
+      "ms": 1474
     }
   },
   "para-promises-by-12": {
@@ -164,21 +164,21 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1640
+      "ms": 1455
     }
   },
   "para-promises-by-13": {
     "what did kamal say he would do?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "request": "What did Kamal say he would do?",
         "tab": "",
         "text": "",
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1646
+      "ms": 1498
     }
   },
   "para-promises-by-14": {
@@ -192,7 +192,7 @@
         "to": "Nima Lee",
         "tool": "promises_by"
       },
-      "ms": 1663
+      "ms": 1477
     }
   },
   "para-promises-by-15": {
@@ -206,7 +206,7 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1601
+      "ms": 1414
     }
   },
   "para-promises-by-16": {
@@ -220,7 +220,7 @@
         "to": "Kamal",
         "tool": "promises_by"
       },
-      "ms": 1591
+      "ms": 1393
     }
   },
   "para-promises-by-17": {
@@ -233,7 +233,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1395
+      "ms": 1211
     }
   },
   "para-promises-by-18": {
@@ -247,21 +247,21 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1595
+      "ms": 1418
     }
   },
   "para-promises-by-19": {
     "and has he followed up on the computer?": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.9,
         "request": "has Kamal followed up on the computer?",
         "tab": "private",
         "text": "",
         "to": "Kamal Jayasuriya",
         "tool": "promises_by"
       },
-      "ms": 1840
+      "ms": 1639
     },
     "tell kamal the meeting is at two.": {
       "decision": {
@@ -272,7 +272,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1475
+      "ms": 1163
     }
   },
   "para-promises-by-20": {
@@ -286,7 +286,7 @@
         "to": "Ruwan",
         "tool": "promises_by"
       },
-      "ms": 1618
+      "ms": 1439
     }
   }
 }

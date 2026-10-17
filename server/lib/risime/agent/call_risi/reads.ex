@@ -23,8 +23,21 @@ defmodule RisiMe.Agent.CallRisi.Reads do
 
   @callback messages(user :: binary, since :: DateTime.t()) :: [map]
   @callback commitments(user :: binary) :: [map]
+  # Architect 04:20 item 4 / Q-014 d: one person's Official texts, filtered by sender in the query
+  # (never cut by a row limit across all chats), newest first: `[%{conversation_id, at, text, dm?}]`.
+  @callback messages_from(
+              user :: binary,
+              sender :: binary,
+              since :: DateTime.t(),
+              limit :: pos_integer
+            ) ::
+              [map]
+  # The caller's own last text in the Official 1:1 with `person` (Q-014 c), or nil.
+  @callback my_last_in_dm(user :: binary, person :: binary) :: map | nil
+  # 04:25 / item 5: when `person` last wrote to the caller in a Private chat (metadata only:
+  # sender, conversation and time; Risi never reads it), or nil.
+  @callback private_last(user :: binary, person :: binary) :: DateTime.t() | nil
 
-  @reply_window_s 3 * 86_400
   @new_window_s 12 * 3600
 
   @doc false
@@ -55,7 +68,180 @@ defmodule RisiMe.Agent.CallRisi.Reads do
     _ -> []
   end
 
+  @doc false
+  def messages_from(user, sender, since, limit) do
+    import Ecto.Query
+    alias RisiMe.Agent.Memory
+    convs = Memory.scope(user)
+    dms = dm_convs(convs)
+
+    ids =
+      RisiMe.Repo.all(
+        from m in Memory.Message,
+          where:
+            m.conversation_id in ^convs and m.sender_id == ^sender and m.from_risi == false and
+              m.at >= ^since,
+          order_by: [desc: m.at],
+          limit: ^limit,
+          select: m.id
+      )
+
+    ids
+    |> Memory.by_ids()
+    |> Enum.map(&Map.put(&1, :dm?, MapSet.member?(dms, &1.conversation_id)))
+    |> Enum.sort_by(& &1.at, {:desc, DateTime})
+  rescue
+    _ -> []
+  end
+
+  @doc false
+  def my_last_in_dm(user, person) do
+    import Ecto.Query
+    alias RisiMe.Agent.Memory
+    convs = Memory.scope(user)
+    dms = dm_convs(convs) |> MapSet.to_list()
+
+    shared =
+      RisiMe.Repo.all(
+        from m in RisiMe.Groups.Member,
+          where: m.group_id in ^dms and m.user_id == ^person and m.state == "active",
+          select: m.group_id
+      )
+
+    RisiMe.Repo.one(
+      from m in Memory.Message,
+        where: m.conversation_id in ^shared and m.sender_id == ^user,
+        order_by: [desc: m.at],
+        limit: 1,
+        select: %{at: m.at, conversation_id: m.conversation_id}
+    )
+  rescue
+    _ -> nil
+  end
+
+  @doc false
+  def private_last(user, person) do
+    since = RisiMe.TimeUUID.at(DateTime.add(Clock.now(), -7 * 86_400, :second))
+    official = MapSet.new(RisiMe.Agent.Memory.scope(user))
+
+    RisiMe.Messaging.Store.impl().list_events(user, since, 5000, false)
+    |> Enum.flat_map(fn
+      %{kind: "message", data: %{"from" => ^person, "conversation_id" => conv} = d} ->
+        if MapSet.member?(official, conv) or not private_conv?(conv),
+          do: [],
+          else: [elem(DateTime.from_iso8601(to_string(d["server_ts"])), 1)]
+
+      _ ->
+        []
+    end)
+    |> Enum.filter(&match?(%DateTime{}, &1))
+    |> Enum.max(DateTime, fn -> nil end)
+  rescue
+    _ -> nil
+  catch
+    _, _ -> nil
+  end
+
+  defp private_conv?("dm:" <> _), do: true
+
+  defp private_conv?("grp:" <> _ = conv) do
+    case RisiMe.Repo.get(RisiMe.Groups.Group, conv) do
+      %{tab: "official"} -> false
+      %{} -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp private_conv?(_), do: false
+
+  defp dm_convs(convs) do
+    import Ecto.Query
+
+    RisiMe.Repo.all(
+      from g in RisiMe.Groups.Group, where: g.id in ^convs and g.chat_kind == "dm", select: g.id
+    )
+    |> MapSet.new()
+  rescue
+    _ -> MapSet.new()
+  end
+
   ## The tools
+
+  @doc """
+  "Read me Shakya's last message", "what did Shenika say?" (architect 04:20 item 4): the person's
+  latest Official texts whatever the order, up to 3 with their times; nothing in 3 days → the
+  real latest of 30 days (item 5); their newer Private messages are named, never read.
+  """
+  def last_from(user, %{user_id: pid, name: name}, opts \\ []) do
+    now = Keyword.get(opts, :now, Clock.now())
+    tz = Keyword.get(opts, :tz, "UTC")
+    who = display(name)
+    recent = data().messages_from(user, pid, DateTime.add(now, -3 * 86_400, :second), 3)
+
+    older =
+      if recent == [],
+        do: data().messages_from(user, pid, DateTime.add(now, -30 * 86_400, :second), 1),
+        else: []
+
+    last = List.first(recent) || List.first(older)
+    private = private_note(user, pid, who, last, now, tz)
+
+    cond do
+      recent != [] ->
+        private <> "#{who}'s last Official messages: " <> quotes(recent, now, tz)
+
+      last != nil ->
+        private <>
+          "Nothing from #{who} in your Official chats in the last 3 days. #{who}'s last Official " <>
+          "message was #{when_said(last.at, now, tz)}#{where(last)}: #{quoted(last.text)}"
+
+      true ->
+        private <>
+          "I don't see any Official messages from #{who} in the last 30 days, in your Official " <>
+          "chats with them (1:1 and groups) on your work account."
+    end
+  end
+
+  @doc """
+  "Did Shenika reply?" (architect 04:20 item 4): their Official texts after the caller's own last
+  one in their **1:1** Official chat (Q-014 c: never a group post of the caller's).
+  """
+  def replied_since(user, %{user_id: pid, name: name} = person, opts \\ []) do
+    now = Keyword.get(opts, :now, Clock.now())
+    tz = Keyword.get(opts, :tz, "UTC")
+    who = display(name)
+
+    case data().my_last_in_dm(user, pid) do
+      %{at: mine} ->
+        theirs =
+          data().messages_from(user, pid, mine, 5)
+          |> Enum.filter(&(DateTime.compare(&1.at, mine) == :gt))
+
+        private = private_note(user, pid, who, List.first(theirs), now, tz)
+
+        case theirs do
+          [last | _] = all ->
+            more =
+              if length(all) > 1,
+                do: " That's the latest of #{length(all)} since your message.",
+                else: ""
+
+            private <>
+              "Yes, #{who} replied #{when_said(last.at, now, tz)}#{where(last)}: #{quoted(last.text)}" <>
+              more
+
+          [] ->
+            private <>
+              "Not yet in Official. Your last Official message to #{who} was #{when_said(mine, now, tz)}, " <>
+              "and #{who} hasn't written in Official since."
+        end
+
+      nil ->
+        last_from(user, person, opts)
+    end
+  end
 
   @doc """
   The spoken answer to a messages question. `person`: `%{user_id, name}` or nil (anyone).
@@ -66,42 +252,9 @@ defmodule RisiMe.Agent.CallRisi.Reads do
 
     if Keyword.get(opts, :private?) == true do
       "I can't see your Private chats, only your Official ones. " <>
-        if(person, do: official_line(user, person, now, tz), else: new_line(user, now, tz))
+        if(person, do: last_from(user, person, opts), else: new_line(user, now, tz))
     else
-      if person, do: official_line(user, person, now, tz), else: new_line(user, now, tz)
-    end
-  end
-
-  defp official_line(user, %{user_id: pid, name: name}, now, tz) do
-    msgs = data().messages(user, DateTime.add(now, -@reply_window_s, :second))
-    theirs = Enum.filter(msgs, &(&1.sender_id == pid and Map.get(&1, :from_risi) != true))
-    convs = MapSet.new(theirs, & &1.conversation_id)
-
-    mine =
-      Enum.filter(
-        msgs,
-        &(&1.sender_id == user and MapSet.member?(convs, &1.conversation_id))
-      )
-
-    first = first_name(name)
-
-    case {List.last(theirs), List.last(mine)} do
-      {nil, _} ->
-        "I don't see any Official messages from #{first} in the last 3 days."
-
-      {last, nil} ->
-        "#{first}'s last Official message, #{when_said(last.at, now, tz)}: #{quoted(last.text)}"
-
-      {last, my} ->
-        if DateTime.compare(last.at, my.at) == :gt do
-          n = Enum.count(theirs, &(DateTime.compare(&1.at, my.at) == :gt))
-          more = if n > 1, do: " That's the latest of #{n} since your message.", else: ""
-
-          "Yes, #{first} replied #{when_said(last.at, now, tz)}: #{quoted(last.text)}" <> more
-        else
-          "Not yet. Your last Official message to #{first} was #{when_said(my.at, now, tz)}, " <>
-            "and #{first} hasn't written since."
-        end
+      if person, do: last_from(user, person, opts), else: new_line(user, now, tz)
     end
   end
 
@@ -192,7 +345,41 @@ defmodule RisiMe.Agent.CallRisi.Reads do
   defp and_list([one]), do: one
   defp and_list(l), do: Enum.join(Enum.drop(l, -1), ", ") <> " and " <> List.last(l)
 
-  defp first_name(name), do: name |> to_string() |> String.split() |> List.first() || "them"
+  defp first_name(name) do
+    # Architect 04:20 item 10: never a one-letter name ("M N M Shirazi" is said in full).
+    case name |> to_string() |> String.split() do
+      [f | _] = all ->
+        if String.length(String.trim(f, ".")) <= 1, do: Enum.join(all, " "), else: f
+
+      [] ->
+        "them"
+    end
+  end
+
+  defp display(name), do: first_name(name)
+
+  defp quotes(msgs, now, tz) do
+    msgs
+    |> Enum.map(fn m -> "#{when_said(m.at, now, tz)}#{where(m)}: #{quoted(m.text)}" end)
+    |> Enum.join(" Before that, ")
+  end
+
+  defp where(%{dm?: false}), do: " in an Official group chat"
+  defp where(_), do: ""
+
+  # Item 5: their newer Private messages are named (never read).
+  defp private_note(user, pid, who, last_official, now, tz) do
+    case data().private_last(user, pid) do
+      %DateTime{} = p ->
+        if last_official == nil or DateTime.compare(p, last_official.at) == :gt,
+          do:
+            "#{who} wrote to you in your Private chat #{when_said(p, now, tz)}, which I can't read. ",
+          else: ""
+
+      _ ->
+        ""
+    end
+  end
 
   defp quoted(text) do
     w = text |> to_string() |> String.split()

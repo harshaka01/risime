@@ -10,7 +10,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1840
+      "ms": 1642
     }
   },
   "para-chat-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1733
+      "ms": 1541
     }
   },
   "para-chat-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1776
+      "ms": 1575
     }
   },
   "para-chat-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1782
+      "ms": 1592
     }
   },
   "para-chat-05": {
@@ -66,7 +66,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 2144
+      "ms": 1947
     }
   },
   "para-chat-06": {
@@ -80,7 +80,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1927
+      "ms": 1759
     }
   },
   "para-chat-07": {
@@ -94,20 +94,21 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1713
+      "ms": 1520
     }
   },
   "para-chat-08": {
     "who wrote romeo and juliet?": {
       "decision": {
-        "action": "tool",
+        "action": "reply",
         "confidence": 1,
+        "say": "William Shakespeare wrote Romeo and Juliet.",
         "tab": "",
         "text": "",
         "to": "",
-        "tool": "unsupported"
+        "tool": "none"
       },
-      "ms": 1386
+      "ms": 1536
     }
   },
   "para-chat-09": {
@@ -121,7 +122,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1852
+      "ms": 1646
     }
   },
   "para-chat-10": {
@@ -129,13 +130,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "Yes, I hear you perfectly.",
+        "say": "Yes, I can hear you perfectly.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1743
+      "ms": 1590
     }
   },
   "para-chat-11": {
@@ -149,7 +150,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1858
+      "ms": 1665
     }
   },
   "para-chat-12": {
@@ -163,7 +164,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 2165
+      "ms": 1984
     }
   },
   "para-chat-13": {
@@ -177,7 +178,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1672
+      "ms": 1498
     }
   },
   "para-chat-14": {
@@ -191,7 +192,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 2042
+      "ms": 1840
     }
   },
   "para-chat-15": {
@@ -205,7 +206,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1995
+      "ms": 1802
     }
   },
   "para-chat-16": {
@@ -218,7 +219,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1230
+      "ms": 1044
     }
   },
   "para-chat-17": {
@@ -231,7 +232,7 @@
         "to": "",
         "tool": "unsupported"
       },
-      "ms": 1391
+      "ms": 1207
     }
   },
   "para-chat-18": {
@@ -239,13 +240,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "Thank you! I'm glad to hear that. How can I help you today?",
+        "say": "Thank you. I'm here to help, so what can I do for you?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 1937
+      "ms": 1766
     }
   },
   "para-chat-19": {
@@ -253,13 +254,13 @@
       "decision": {
         "action": "reply",
         "confidence": 1,
-        "say": "Keep it simple and focus on one clear message. Use visuals to support your points, not replace them.",
+        "say": "Focus on your audience. Know who they are and what they need, and tailor your content to speak directly to their interests.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "none"
       },
-      "ms": 2028
+      "ms": 1933
     }
   },
   "para-chat-20": {
@@ -273,7 +274,7 @@
         "to": "",
         "tool": "none"
       },
-      "ms": 1720
+      "ms": 1544
     }
   }
 }

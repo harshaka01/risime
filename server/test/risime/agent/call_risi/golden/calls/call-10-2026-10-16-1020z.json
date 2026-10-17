@@ -19,7 +19,7 @@
  ],
  "now": "2026-10-16T10:20:00Z",
  "src": "synthetic",
- "note": "Harsha's call 22e016e0 (16 Oct 10:20Z, 5:17, srv6; he tapped Problems; architect 16:05 SLT, golden #10), his words from the Risi chat transcript. Anonymised: his friend Shenika is Nimali Perera, the other near name (Bhanu Senanayake) is Kasun Senaratne; Whisper's spellings of Shenika (Seneca, Sineka, Shinneka, Srinikar) are 'Senamali', 'Senarali', 'Nimaly', 'Neemara' here, chosen to score against the two names as the real ones do. Was: 'send it to work' → 'I couldn't find work in your contacts'; 'Sineka' silently drafted to the other person although Shenika was this call's recipient; 'that is the message I want sent' at the end of a long dictation → 'I can't send it from the call'; 'I'm listening. Please go ahead.' twice; every pause-split utterance restarted the turn. Turns 13–14 add the v1.55 §41.11 flow he asked for (send it on Official by voice, undo); the speech-fix question is covered by its unit test (dictation_test.exs).",
+ "note": "Harsha's call 22e016e0 (16 Oct 10:20Z, 5:17, srv6; he tapped Problems; architect 16:05 SLT, golden #10), his words from the Risi chat transcript. Anonymised: his friend Shenika is Nimali Perera, the other near name (Bhanu Senanayake) is Kasun Senaratne; Whisper's spellings of Shenika (Seneca, Sineka, Shinneka, Srinikar) are 'Senamali', 'Senarali', 'Nimaly', 'Neemara' here, chosen to score against the two names as the real ones do. Was: 'send it to work' → 'I couldn't find work in your contacts'; 'Sineka' silently drafted to the other person although Shenika was this call's recipient; 'that is the message I want sent' at the end of a long dictation → 'I can't send it from the call'; 'I'm listening. Please go ahead.' twice; every pause-split utterance restarted the turn. Turns 13–14 add the v1.55 §41.11 flow he asked for (send it on Official by voice, undo); the speech-fix question is covered by its unit test (dictation_test.exs). 17 Oct (architect 04:20 item 3): turn 1 said \"you can send directly\", so turn 3 sends after one read-back.",
  "voice_send": true,
  "turns": [
   {
@@ -55,8 +55,9 @@
      "test message"
     ],
     "send_tab": "official",
+    "voice_sent": "Nimali",
     "must": [
-     "Send it?"
+     "Sent"
     ],
     "must_not": [
      "What should I say",

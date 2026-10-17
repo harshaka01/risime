@@ -928,6 +928,7 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   # Speaks `text` piece by piece; with `stored`, the transcript keeps `stored` instead (once).
   @doc false
   def say_text(ctx, text, stored \\ nil) do
+    text = no_repeat(ctx, text)
     {pieces, rest} = Sentences.feed("", Sentences.clean(text) <> " ", true)
     pieces = pieces ++ Sentences.flush(rest)
 
@@ -946,6 +947,8 @@ defmodule RisiMe.Agent.CallRisi.Brain do
   def say_line(_ctx, nil), do: :ok
 
   def say_line(ctx, text) do
+    text = no_repeat(ctx, text)
+
     case Regex.run(
            ~r/^(.*?"[^"]*"\.?(?: And \d+ more words\.)?)\s+(.+)$/su,
            Sentences.clean(text)
@@ -957,6 +960,57 @@ defmodule RisiMe.Agent.CallRisi.Brain do
       _ ->
         say_text(ctx, text)
     end
+  end
+
+  @repeat_a "I'm getting that wrong. Tell me the name again, or say \"Official chats\" to hear who wrote recently."
+  @repeat_b "Let me try it another way: say the person's full name, or spell it, or ask me something else."
+
+  @doc false
+  # Architect 04:20 item 6 (Harsha's 04:0x call: "I don't see …" five times in a row): brain v3
+  # never says the same answer twice in a row. The second time it says it is getting it wrong
+  # and offers a way out (two such lines, alternating).
+  def no_repeat(ctx, text) when is_binary(text) do
+    last =
+      for(%{"role" => "assistant", "content" => c} <- Map.get(ctx, :history) || [], do: c)
+      |> List.last()
+
+    reads? =
+      Regex.match?(
+        ~r/\bOfficial (?:message|chats)\b|\bNot yet\b|hasn'?t written|don'?t see any/u,
+        text
+      )
+
+    cond do
+      Map.get(ctx, :v3?) != true or not is_binary(last) -> text
+      # A short acknowledgement may come again ("Okay.").
+      length(String.split(text)) <= 3 -> text
+      not same?(text, last) -> text
+      reads? and same?(last, @repeat_a) -> @repeat_b
+      reads? -> @repeat_a
+      true -> "As I said, " <> lower_first(text)
+    end
+  end
+
+  def no_repeat(_ctx, text), do: text
+
+  defp lower_first(t) do
+    {f, rest} = String.split_at(t, 1)
+    if String.match?(rest, ~r/^[a-z ]/u), do: String.downcase(f) <> rest, else: f <> rest
+  end
+
+  defp same?(a, b) do
+    n = fn s ->
+      s
+      |> String.split(~r/(?<=[.!?…])\s+/u, trim: true)
+      |> Enum.reject(&(&1 in Fillers.all()))
+      |> Enum.join(" ")
+      |> String.downcase()
+      |> String.replace(~r/[^\p{L}\p{N}]+/u, " ")
+      |> String.trim()
+    end
+
+    na = n.(a)
+    na != "" and na == n.(b)
   end
 
   # Runs `f` and reports `key` unless the call said it already. True when it ran.

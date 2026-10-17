@@ -38,8 +38,8 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   @callback decide(input :: map, ctx :: map) :: {:ok, map} | {:error, term}
 
   @tools ~w(none calendar_read calendar_add reminder_add my_promises promises_by read_messages
-            message_draft dictate cancel_open confirm_open card_status undo_send capabilities
-            list_contacts unsupported)
+            replied_since message_draft dictate cancel_open confirm_open card_status undo_send
+            capabilities sources list_contacts unsupported)
 
   # Older names (recorded decisions): the same tool.
   @aliases %{"promises_read" => "my_promises"}
@@ -86,13 +86,14 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   - "promises_by": promises other people made to the user ("did Kamal promise anything", "has \
   Kamal followed up on the delivery", "any promises by Ruwan", "what does Nimali owe me"). "to" \
   = that person.
-  - "read_messages" (before message_draft: check this first): the user asks about messages \
-  they got: "did Nimali reply?", "has she \
-  answered?", "any new messages?", "what did Ruwan say?", "read me Kamal's last message", "you \
-  should be able to tell me if somebody sent me a message". "to" = the person, or "" for anyone. \
-  A question about a reply is never a message to send, even when the same words also say \
-  "send a message to Nimali": "You sent a message to Nimali. Did she reply to me?" = \
-  read_messages, "to" = "Nimali" (the message went before; the question is her reply). "tab" = \
+  - "read_messages" (check these first): the user wants to hear messages they got: "read me \
+  Kamal's last message", "what did Ruwan say?", "check the messages from Shakya", "the last \
+  three days of messages sent by Nimali", "any new messages?", "you should be able to tell me if \
+  somebody sent me a message". "to" = the person, or "" for anyone.
+  - "replied_since": the user asks whether a person answered THEIR message: "did Nimali reply?", \
+  "has she answered?", "did he write back?". "to" = the person. A question about a reply is \
+  never a message to send, even when the same words also say "send a message to Nimali": "You \
+  sent a message to Nimali. Did she reply to me?" = replied_since, "to" = "Nimali". "tab" = \
   "private" only when the user says private or personal.
   - "message_draft": send a message to a person ("tell Ruwan …", "let Nimali know that …", \
   "message Kamal"). Never for a question about messages the user got ("did she reply?": \
@@ -123,6 +124,8 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   - "capabilities": the user asks what Risi can do. Asked whether Risi can do one thing it has \
   a tool for, use that tool now ("can you tell me if somebody sent me a message?": \
   read_messages).
+  - "sources": the user asks which account, chats or data Risi reads ("to which account are \
+  you reading?", "where are you looking?").
   - "list_contacts": the user asks Risi to tell them names from their contacts ("who is in my \
   contacts?", "tell me ten names").
   - "unsupported": the user asks for something none of these tools does (never for a question \
@@ -135,8 +138,9 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   With action "reply" or "ask": "tool" = "none".
 
   Rules:
-  0. A question whether someone replied, answered or wrote to the user is "read_messages", \
-  never "message_draft", even when the same words also say "send a message to …".
+  0. A question whether someone replied, answered or wrote to the user is "replied_since"; a \
+  request to read or check someone's messages is "read_messages"; never "message_draft", even \
+  when the same words also say "send a message to …".
   1. When Risi's last line asked a question, the user's words answer it unless they clearly start \
   something else. When Risi waits for the text of a message, words that are the message are \
   tool "message_draft" with that text and the same "to"; words that are an instruction to Risi \
@@ -145,7 +149,8 @@ defmodule RisiMe.Agent.CallRisi.Decider do
   When the user rejects the open message ("no, no", "that's wrong") or wants Risi to ask them \
   for the text, and gives no text yet: tool "message_draft" with the same "to" and no text.
   2. Inside a message request, greetings and times ("good morning", "at 5") are message words, \
-  never a calendar question. A greeting alone ("good morning", "hello", "how are you?") is a \
+  never a calendar question; "tell Tharindi about the schedule" is a message to Tharindi (a \
+  person named to tell, message or let know), not a calendar question. A greeting alone ("good morning", "hello", "how are you?") is a \
   "reply".
   3. A correction of the open card or task ("no, say … instead", "it's for Nimali, not Kamal", \
   "the message has to go to Nimali, not Kamal": only "to" changes, the text stays; \

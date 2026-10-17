@@ -10,7 +10,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1865
+      "ms": 1636
     }
   },
   "para-calendar-add-02": {
@@ -24,7 +24,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1747
+      "ms": 1559
     }
   },
   "para-calendar-add-03": {
@@ -38,7 +38,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1848
+      "ms": 1600
     }
   },
   "para-calendar-add-04": {
@@ -52,7 +52,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1718
+      "ms": 1536
     }
   },
   "para-calendar-add-05": {
@@ -66,7 +66,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1783
+      "ms": 1599
     }
   },
   "para-calendar-add-06": {
@@ -74,13 +74,13 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Add a meeting with the auditors from 2 to 3 on Friday 16 October 2026.",
+        "request": "Add a meeting with the auditors from 2 to 3.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 2004
+      "ms": 1597
     },
     "tomorrow.": {
       "decision": {
@@ -92,7 +92,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 2064
+      "ms": 1832
     }
   },
   "para-calendar-add-07": {
@@ -106,7 +106,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1787
+      "ms": 1564
     },
     "put a team lunch on my calendar at one.": {
       "decision": {
@@ -118,7 +118,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1699
+      "ms": 1525
     }
   },
   "para-calendar-add-08": {
@@ -132,7 +132,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1762
+      "ms": 1600
     }
   },
   "para-calendar-add-09": {
@@ -146,7 +146,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1824
+      "ms": 1644
     }
   },
   "para-calendar-add-10": {
@@ -160,7 +160,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1817
+      "ms": 1621
     }
   },
   "para-calendar-add-11": {
@@ -174,7 +174,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1721
+      "ms": 1541
     }
   },
   "para-calendar-add-12": {
@@ -188,7 +188,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1942
+      "ms": 1679
     }
   },
   "para-calendar-add-13": {
@@ -202,7 +202,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1810
+      "ms": 1617
     }
   },
   "para-calendar-add-14": {
@@ -216,7 +216,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1722
+      "ms": 1536
     },
     "make it 5 to 6 instead.": {
       "decision": {
@@ -228,7 +228,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1791
+      "ms": 1574
     }
   },
   "para-calendar-add-15": {
@@ -242,21 +242,21 @@
         "to": "",
         "tool": "reminder_add"
       },
-      "ms": 1658
+      "ms": 1477
     }
   },
   "para-calendar-add-16": {
     "block my whole day on the 18th.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.9,
+        "confidence": 1,
         "request": "Block my whole day on the 18th.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1821
+      "ms": 1539
     }
   },
   "para-calendar-add-17": {
@@ -270,7 +270,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1735
+      "ms": 1641
     },
     "monday.": {
       "decision": {
@@ -282,21 +282,21 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1786
+      "ms": 1567
     }
   },
   "para-calendar-add-18": {
     "set up a meeting, um, for tomorrow at ten, for the risd review.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 1,
         "request": "Set up a meeting for tomorrow at ten for the RISD review.",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1917
+      "ms": 1606
     }
   },
   "para-calendar-add-19": {
@@ -310,7 +310,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1723
+      "ms": 1539
     }
   },
   "para-calendar-add-20": {
@@ -324,7 +324,7 @@
         "to": "",
         "tool": "calendar_add"
       },
-      "ms": 1847
+      "ms": 1649
     }
   }
 }

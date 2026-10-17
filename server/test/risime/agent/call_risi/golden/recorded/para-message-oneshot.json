@@ -9,7 +9,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1525
+      "ms": 1339
     }
   },
   "para-message-oneshot-02": {
@@ -22,7 +22,7 @@
         "to": "Nima Lee",
         "tool": "message_draft"
       },
-      "ms": 1468
+      "ms": 1277
     }
   },
   "para-message-oneshot-03": {
@@ -35,7 +35,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1460
+      "ms": 1277
     }
   },
   "para-message-oneshot-04": {
@@ -48,7 +48,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1458
+      "ms": 1277
     }
   },
   "para-message-oneshot-05": {
@@ -56,13 +56,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Tell Nimali good evening instead.",
         "tab": "private",
         "text": "Good evening",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1825
+      "ms": 1326
     },
     "tell nimali good morning.": {
       "decision": {
@@ -73,13 +72,14 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1432
+      "ms": 1265
     }
   },
   "para-message-oneshot-06": {
     "actually, say i'll call at six.": {
       "decision": {
         "action": "tool",
+        "cancel_open": false,
         "confidence": 1,
         "request": "Send Nimaali a message saying I'll call at six.",
         "tab": "private",
@@ -87,18 +87,18 @@
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 1995
+      "ms": 1913
     },
     "send nimaali a message saying i'll call at five.": {
       "decision": {
         "action": "tool",
-        "confidence": 1,
+        "confidence": 0.95,
         "tab": "private",
         "text": "I'll call at five.",
         "to": "Nimaali",
         "tool": "message_draft"
       },
-      "ms": 1506
+      "ms": 1378
     }
   },
   "para-message-oneshot-07": {
@@ -106,27 +106,25 @@
       "decision": {
         "action": "tool",
         "confidence": 0.95,
-        "request": "Tell Ruvan that I left the keys with the guard.",
         "tab": "private",
         "text": "I left the keys with the guard.",
         "to": "Ruvan",
         "tool": "message_draft"
       },
-      "ms": 1945
+      "ms": 1398
     }
   },
   "para-message-oneshot-08": {
     "let nimali know that the doctor's appointment is on monday.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
-        "request": "Let Nimali know that the doctor's appointment is on Monday.",
+        "confidence": 1,
         "tab": "private",
         "text": "The doctor's appointment is on Monday.",
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 2029
+      "ms": 1362
     }
   },
   "para-message-oneshot-09": {
@@ -139,20 +137,20 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1481
+      "ms": 1297
     }
   },
   "para-message-oneshot-10": {
     "tell nee mali that i called her a couple of times and she did not answer.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 0.9,
         "tab": "private",
         "text": "I called you a couple of times and you did not answer.",
         "to": "Nee Mali",
         "tool": "message_draft"
       },
-      "ms": 1714
+      "ms": 1499
     }
   },
   "para-message-oneshot-11": {
@@ -165,7 +163,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1534
+      "ms": 1336
     }
   },
   "para-message-oneshot-12": {
@@ -178,35 +176,23 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1509
+      "ms": 1321
     }
   },
   "para-message-oneshot-13": {
     "message nimalee, tell her the cake is in the fridge.": {
       "decision": {
         "action": "tool",
-        "confidence": 0.95,
+        "confidence": 1,
         "tab": "private",
         "text": "The cake is in the fridge.",
         "to": "Nimalee",
         "tool": "message_draft"
       },
-      "ms": 1619
+      "ms": 1360
     }
   },
   "para-message-oneshot-14": {
-    "hello?": {
-      "decision": {
-        "action": "reply",
-        "confidence": 0.9,
-        "say": "I'm here. The message to Kamal is ready for you to send.",
-        "tab": "",
-        "text": "",
-        "to": "",
-        "tool": "none"
-      },
-      "ms": 2014
-    },
     "tell kamal that the printer is fixed.": {
       "decision": {
         "action": "tool",
@@ -216,7 +202,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1462
+      "ms": 1290
     }
   },
   "para-message-oneshot-15": {
@@ -224,13 +210,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "Change it to: I'm stuck in traffic, start without me.",
         "tab": "private",
         "text": "I'm stuck in traffic, start without me.",
         "to": "Nimali Perera",
         "tool": "message_draft"
       },
-      "ms": 2109
+      "ms": 1460
     },
     "tell nimali i'm stuck in traffic.": {
       "decision": {
@@ -241,7 +226,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1502
+      "ms": 1321
     }
   },
   "para-message-oneshot-16": {
@@ -254,7 +239,7 @@
         "to": "Ruwan",
         "tool": "message_draft"
       },
-      "ms": 1533
+      "ms": 1337
     }
   },
   "para-message-oneshot-17": {
@@ -267,7 +252,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1528
+      "ms": 1337
     }
   },
   "para-message-oneshot-18": {
@@ -280,7 +265,7 @@
         "to": "Kamal",
         "tool": "message_draft"
       },
-      "ms": 1529
+      "ms": 1340
     }
   },
   "para-message-oneshot-19": {
@@ -293,7 +278,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1485
+      "ms": 1301
     }
   },
   "para-message-oneshot-20": {
@@ -306,7 +291,7 @@
         "to": "Nimali",
         "tool": "message_draft"
       },
-      "ms": 1182
+      "ms": 1260
     },
     "send it.": {
       "decision": {
@@ -317,7 +302,7 @@
         "to": "",
         "tool": "confirm_open"
       },
-      "ms": 1423
+      "ms": 1254
     }
   }
 }

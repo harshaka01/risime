@@ -213,6 +213,25 @@ defmodule RisiMe.Agent.CallRisi.DictationTest do
       def messages(_user, _since), do: :persistent_term.get({__MODULE__, :m}, [])
       @impl true
       def commitments(_user), do: :persistent_term.get({__MODULE__, :c}, [])
+
+      @impl true
+      def messages_from(_user, sender, since, limit) do
+        :persistent_term.get({__MODULE__, :m}, [])
+        |> Enum.filter(&(&1.sender_id == sender and DateTime.compare(&1.at, since) != :lt))
+        |> Enum.sort_by(& &1.at, {:desc, DateTime})
+        |> Enum.take(limit)
+        |> Enum.map(&Map.put(&1, :dm?, &1.conversation_id == "c1"))
+      end
+
+      @impl true
+      def my_last_in_dm(_user, _person) do
+        :persistent_term.get({__MODULE__, :m}, [])
+        |> Enum.filter(&(&1.sender_id == "me" and &1.conversation_id == "c1"))
+        |> Enum.max_by(& &1.at, DateTime, fn -> nil end)
+      end
+
+      @impl true
+      def private_last(_user, _person), do: :persistent_term.get({__MODULE__, :p}, nil)
     end
 
     setup do
@@ -246,28 +265,84 @@ defmodule RisiMe.Agent.CallRisi.DictationTest do
         from_risi: false
       }
 
-    test "did she reply: yes, not yet, nothing; Private is never read" do
+    test "did she reply (replied_since): yes, not yet; only the 1:1 counts as his message" do
       n = %{user_id: "f-nimali", name: "Nimali Perera"}
+      :persistent_term.put({Data, :p}, nil)
 
       :persistent_term.put({Data, :m}, [
         msg("me", 30, "Home time?"),
         msg("f-nimali", 8, "Around six.")
       ])
 
-      line = Reads.read_messages("me", n, now: @now, tz: "UTC")
+      line = Reads.replied_since("me", n, now: @now, tz: "UTC")
       assert line =~ "Yes, Nimali replied"
       assert line =~ "\"Around six.\""
 
+      # Q-014 c: his group post after hers is no "your last message to her".
+      :persistent_term.put({Data, :m}, [
+        msg("me", 90, "Home time?"),
+        msg("f-nimali", 60, "Around six."),
+        msg("me", 30, "Group note", "g1")
+      ])
+
+      assert Reads.replied_since("me", n, now: @now, tz: "UTC") =~ "Yes, Nimali replied"
+
       :persistent_term.put({Data, :m}, [msg("f-nimali", 60, "Ok."), msg("me", 30, "Home time?")])
-      assert Reads.read_messages("me", n, now: @now, tz: "UTC") =~ "Not yet."
+      assert Reads.replied_since("me", n, now: @now, tz: "UTC") =~ "Not yet"
+    end
+
+    test "read her last messages (last_from): whatever the order, up to 3 with times" do
+      n = %{user_id: "f-nimali", name: "Nimali Perera"}
+      :persistent_term.put({Data, :p}, nil)
+
+      :persistent_term.put({Data, :m}, [
+        msg("f-nimali", 200, "One."),
+        msg("f-nimali", 120, "Two."),
+        msg("f-nimali", 100, "Three, in the team.", "g1"),
+        msg("f-nimali", 90, "Four."),
+        msg("me", 30, "Thanks.")
+      ])
+
+      line = Reads.last_from("me", n, now: @now, tz: "UTC")
+      assert line =~ "Nimali's last Official messages"
+      assert line =~ "\"Four.\""
+      assert line =~ "\"Three, in the team.\""
+      assert line =~ "in an Official group chat"
+      refute line =~ "One."
+      refute line =~ "Not yet"
+    end
+
+    test "nothing in 3 days: the real latest of 30 days; Private messages named, never read" do
+      n = %{user_id: "f-nimali", name: "Nimali Perera"}
+      :persistent_term.put({Data, :m}, [msg("f-nimali", 5 * 1440, "Old news.")])
+      :persistent_term.put({Data, :p}, DateTime.add(@now, -3600))
+      line = Reads.last_from("me", n, now: @now, tz: "UTC")
+      assert line =~ "wrote to you in your Private chat"
+      assert line =~ "which I can't read"
+      assert line =~ "Nimali's last Official message was"
+      assert line =~ "\"Old news.\""
 
       :persistent_term.put({Data, :m}, [])
-
-      assert Reads.read_messages("me", n, now: @now, tz: "UTC") =~
-               "I don't see any Official messages from Nimali"
+      :persistent_term.put({Data, :p}, nil)
+      line = Reads.last_from("me", n, now: @now, tz: "UTC")
+      assert line =~ "in the last 30 days"
+      refute line =~ "3 days"
 
       assert Reads.read_messages("me", n, now: @now, tz: "UTC", private?: true) =~
                "can't see your Private chats"
+    end
+
+    test "never a one-letter name" do
+      m = %{user_id: "f-m", name: "M N M Shirazi"}
+      :persistent_term.put({Data, :p}, nil)
+
+      :persistent_term.put({Data, :m}, [
+        %{msg("f-m", 60, "Delivery on Monday.") | sender_id: "f-m"}
+      ])
+
+      line = Reads.last_from("me", m, now: @now, tz: "UTC")
+      assert line =~ "M N M Shirazi's last Official messages"
+      refute line =~ ~r/\bM replied\b/
     end
 
     test "any new messages: by sender, the latest quoted" do

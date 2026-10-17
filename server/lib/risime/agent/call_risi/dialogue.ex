@@ -206,7 +206,7 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
 
     pats =
       [
-        ~r/\b(?:saying|that says|to say|and say|and tell (?:her|him|them)(?: that)?)[,:]?\s+(.{2,})$/iu
+        ~r/^\W*(?:(?:can|could) you\s+|please\s+|just\s+)*(?:send|message|text|write|tell)\b.*?\b(?:saying|that says|to say|and say|and tell (?:her|him|them)(?: that)?)[,:]?\s+(.{2,})$/iu
       ] ++
         if(first != "",
           do: [
@@ -242,7 +242,8 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
           text: nil,
           said: nil,
           tab: nil,
-          fixed: nil
+          fixed: nil,
+          send_now: false
         },
         fields
       )
@@ -537,6 +538,110 @@ defmodule RisiMe.Agent.CallRisi.Dialogue do
   def end_signal?(_), do: false
 
   ## Lines
+
+  @doc """
+  A correction of what Risi did or asked (architect 04:20 item 7): "No…", "That's not true",
+  "I mean…", "Wrong", or a name spelled letter by letter.
+  """
+  def correction?(text) when is_binary(text) do
+    Regex.match?(
+      ~r/^\W*(?:no\b|nope\b|that'?s not (?:true|right|it|what i)|that is not (?:true|right)|not true\b|wrong\b|i mean\b|i said\b|i'?m asking\b|i am asking\b)/iu,
+      text
+    ) or spelled_name(text) != nil
+  end
+
+  def correction?(_), do: false
+
+  @doc ~S|A name spelled letter by letter in the words ("… sent by. S-H-A-K-Y-A."), joined; else nil.|
+  def spelled_name(text) when is_binary(text) do
+    case Regex.run(~r/(?<![\p{L}])((?:\p{L}[\s.\-]+){2,}\p{L})(?![\p{L}])/u, text) do
+      [_, letters] ->
+        parts = String.split(letters, ~r/[\s.\-]+/u, trim: true)
+
+        if length(parts) >= 3 and Enum.all?(parts, &(String.length(&1) == 1)),
+          do: parts |> Enum.join() |> String.capitalize()
+
+      _ ->
+        nil
+    end
+  end
+
+  def spelled_name(_), do: nil
+
+  @doc """
+  The answer to "Did you mean A or B?" matched against only those options (architect 04:20 item
+  9: "Not shocked yet" for Shakya): each word and its stem, the best clear match, or nil.
+  """
+  def pick_option(text, options) when is_binary(text) and is_list(options) do
+    people = Enum.map(options, &{&1.user_id, &1.name})
+
+    words =
+      text
+      |> String.split(~r/[^\p{L}'-]+/u, trim: true)
+      |> Enum.reject(&(String.downcase(&1) in ~w(no not yes yeah the a check mean i it is)))
+
+    tries = [text | words ++ Enum.map(words, &stem_word/1)] ++ [spelled_name(text)]
+
+    scored =
+      for w <- tries, is_binary(w), w != "", m <- RisiMe.Agent.FindContact.find(w, people), do: m
+
+    case Enum.sort_by(scored, &(-&1.score)) do
+      [best | rest] ->
+        second = Enum.find(rest, &(&1.name != best.name))
+
+        if best.score >= 0.6 and (second == nil or best.score - second.score >= 0.1),
+          do: Enum.find(options, &(&1.name == best.name))
+
+      [] ->
+        nil
+    end
+  end
+
+  def pick_option(_, _), do: nil
+
+  defp stem_word(w) do
+    cond do
+      String.length(w) > 5 and String.ends_with?(w, "ed") -> String.slice(w, 0..-3//1)
+      String.length(w) > 5 and String.ends_with?(w, "ing") -> String.slice(w, 0..-4//1)
+      true -> w
+    end
+  end
+
+  # A sentence of the caller's that is about sending, not message text (architect 04:20 item 2,
+  # Harsha's 04:0x call: "type the messages. and send it to Shanika's work address. and not to the
+  # private. So the work address, you can send it straight away." went into the body).
+  @instruction ~r/^\W*(?:(?:and|so|then|please|just|okay|ok|now|also)[,]?\s+)*(?:you\s+can\s+)?(?:type|send|post|forward)\s+(?:it|this|that|the\s+messages?|them)\b|\b(?:work|office|official)\s+(?:address|number|account|chat|tab|side)\b|\bnot\s+(?:to\s+|for\s+)?the\s+private\b|\bprivate\s+one\b|\bstraight\s+away\b|\bright\s+away\b|\bsend\s+it\s+directly\b|\bwithout\s+me\s+(?:getting|being|doing|having|tapping|touching)\b|\bget(?:ting)?\s+involved\b|\bon\s+(?:the\s+)?(?:work|official)\s+chat\b|^\W*i(?:'ve|\s+have)?\s+(?:just\s+|already\s+)?(?:said|told)\s+(?:it|you|that)\b/iu
+  @to_official ~r/\b(?:work|office|official)\b/iu
+  @send_now ~r/\b(?:(?:send|post)\s+(?:it\s+)?(?:straight\s+away|right\s+away|right\s+now|directly)|can\s+send\s+(?:it\s+)?(?:straight\s+away|directly|right\s+away)|without\s+me\s+(?:getting\s+involved|tapping|having\s+to))\b/iu
+
+  @doc """
+  The message words without the caller's sending instructions, and what those said:
+  `{body, %{official?: bool, send_now?: bool}}`. A sentence that is about sending ("send it to her
+  work address", "not to the private", "you can send it straight away") is never message text.
+  """
+  def split_instructions(text) when is_binary(text) do
+    sentences = String.split(String.trim(text), ~r/(?<=[.!?])\s+/u, trim: true)
+    {instr, body} = Enum.split_with(sentences, &Regex.match?(@instruction, &1))
+    said = Enum.join(instr, " ")
+
+    {Enum.join(body, " ") |> String.trim(),
+     %{
+       official?: instr != [] and Regex.match?(@to_official, said),
+       send_now?: instr != [] and Regex.match?(@send_now, said)
+     }}
+  end
+
+  def split_instructions(_), do: {"", %{official?: false, send_now?: false}}
+
+  @doc "True when `text` asks Risi to send without asking again (\"send it straight away\")."
+  def send_now?(text) when is_binary(text), do: Regex.match?(@send_now, text)
+  def send_now?(_), do: false
+
+  @doc "Which data Risi reads (architect 04:20 item 8)."
+  def sources_line,
+    do:
+      "I read your Official chats on your work account: the 1:1s and groups I'm in, plus your " <>
+        "Risi Calendar and your promises. I can't see Private chats."
 
   @doc "What Risi says for a request no tool covers (architect 16:05 item 6)."
   def unsupported_line,

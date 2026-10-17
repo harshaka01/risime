@@ -31,7 +31,10 @@ defmodule RisiMe.Agent.CallRisi.Dictation do
   @doc "A dictation for `to` (nil: not said yet), with the words already given."
   def new(%{} = m) do
     parts =
-      for t <- m[:parts] || [], is_binary(t), t != "", do: %{text: t, fixed: "", raw: t}
+      for t <- m[:parts] || [], is_binary(t), t != "" do
+        {body, flags} = Dialogue.split_instructions(t)
+        %{text: body, fixed: "", raw: t, flags: flags}
+      end
 
     %{
       to: m[:to],
@@ -72,10 +75,13 @@ defmodule RisiMe.Agent.CallRisi.Dictation do
     d = %{d | checking: nil, new: rest}
 
     # "Hello?", "Can you hear me?" when Risi asked what to say: no text; Risi answers it.
+    # … and "No, …" / "That's not true" / a spelled name (architect 04:20 item 7) is a correction
+    # of the task, never the answer's text.
     result =
-      if d.asked? and d.parts == [] and Dialogue.non_answer?(words),
-        do: {:ok, %{kind: "instruction", text: "", fixed: ""}},
-        else: result
+      if d.asked? and d.parts == [] and
+           (Dialogue.non_answer?(words) or Dialogue.correction?(words)),
+         do: {:ok, %{kind: "instruction", text: "", fixed: ""}},
+         else: result
 
     case result do
       {:ok, %{kind: "instruction"}} ->
@@ -96,15 +102,18 @@ defmodule RisiMe.Agent.CallRisi.Dictation do
 
         # A dictation the caller announced ends on an end signal (or silence), never because
         # the model took a pause for the end (22e016e0: a noise piece "ended" it).
+        # Item 1 (04:0x call): never end on a fragment ("… the quality of messages that").
         end? =
           kind == "end" and rest == [] and
-            (ended? or d.asked? or Dialogue.end_signal?(words))
+            (ended? or d.asked? or Dialogue.end_signal?(words)) and
+            (Dialogue.end_signal?(words) or not Dialogue.unfinished?(words))
 
         if end? or (ended? and rest == []), do: finish(d), else: {:more, d}
 
       _ ->
         # The model failed: the words are kept as said; silence still ends it.
-        d = add_piece(d, %{text: Dialogue.strip_lead(words), fixed: "", raw: words})
+        {t, flags} = Dialogue.split_instructions(Dialogue.strip_lead(words))
+        d = add_piece(d, %{text: t, fixed: "", raw: words, flags: flags})
         if ended? and rest == [], do: finish(d), else: {:more, d}
     end
   end
@@ -120,7 +129,10 @@ defmodule RisiMe.Agent.CallRisi.Dictation do
       end
 
     text = if last?, do: Dialogue.strip_end(text), else: text
-    %{text: text, fixed: r.fixed, raw: words}
+    # Item 2: the caller's sending instructions are never message text (they set the route).
+    {text, flags} = Dialogue.split_instructions(text)
+    {fixed, _} = Dialogue.split_instructions(r.fixed || "")
+    %{text: text, fixed: fixed, raw: words, flags: flags}
   end
 
   # A piece with no message words (only an end signal) keeps its words for the transcript.
@@ -140,7 +152,17 @@ defmodule RisiMe.Agent.CallRisi.Dictation do
         do: kept |> Enum.map(&if(&1.fixed != "", do: &1.fixed, else: &1.text)) |> Enum.join(" "),
         else: ""
 
-    {:finish, d, %{text: text, fixed: fixed, raw: raw(d), to: d.to, tab: d.tab}}
+    flags = Enum.map(d.parts, &Map.get(&1, :flags, %{}))
+
+    {:finish, d,
+     %{
+       text: text,
+       fixed: fixed,
+       raw: raw(d),
+       to: d.to,
+       tab: if(Enum.any?(flags, &(&1[:official?] == true)), do: "official", else: d.tab),
+       send_now: Enum.any?(flags, &(&1[:send_now?] == true))
+     }}
   end
 
   defp norm(s),

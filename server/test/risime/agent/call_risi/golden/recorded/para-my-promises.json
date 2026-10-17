@@ -10,7 +10,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1706
+      "ms": 1530
     }
   },
   "para-my-promises-02": {
@@ -18,13 +18,12 @@
       "decision": {
         "action": "tool",
         "confidence": 1,
-        "request": "What are my open promises?",
         "tab": "",
         "text": "",
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1725
+      "ms": 1195
     }
   },
   "para-my-promises-03": {
@@ -38,7 +37,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1859
+      "ms": 1676
     }
   },
   "para-my-promises-04": {
@@ -52,7 +51,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1734
+      "ms": 1552
     }
   },
   "para-my-promises-05": {
@@ -66,7 +65,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1622
+      "ms": 1451
     }
   },
   "para-my-promises-06": {
@@ -77,10 +76,10 @@
         "request": "Did I promise anything to Kamal?",
         "tab": "",
         "text": "",
-        "to": "Kamal",
-        "tool": "promises_by"
+        "to": "",
+        "tool": "my_promises"
       },
-      "ms": 1614
+      "ms": 1593
     }
   },
   "para-my-promises-07": {
@@ -94,7 +93,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1727
+      "ms": 1552
     }
   },
   "para-my-promises-08": {
@@ -108,7 +107,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1822
+      "ms": 1655
     }
   },
   "para-my-promises-09": {
@@ -122,7 +121,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1767
+      "ms": 1574
     }
   },
   "para-my-promises-10": {
@@ -136,7 +135,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1444
+      "ms": 1539
     }
   },
   "para-my-promises-11": {
@@ -150,7 +149,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1756
+      "ms": 1576
     }
   },
   "para-my-promises-12": {
@@ -164,7 +163,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1770
+      "ms": 1593
     }
   },
   "para-my-promises-13": {
@@ -178,7 +177,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1731
+      "ms": 1552
     }
   },
   "para-my-promises-14": {
@@ -192,7 +191,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1779
+      "ms": 1595
     }
   },
   "para-my-promises-15": {
@@ -205,7 +204,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1364
+      "ms": 1194
     }
   },
   "para-my-promises-16": {
@@ -219,7 +218,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1533
+      "ms": 1510
     }
   },
   "para-my-promises-17": {
@@ -233,7 +232,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1658
+      "ms": 1491
     }
   },
   "para-my-promises-18": {
@@ -247,7 +246,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1717
+      "ms": 1551
     }
   },
   "para-my-promises-19": {
@@ -261,7 +260,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1851
+      "ms": 1618
     }
   },
   "para-my-promises-20": {
@@ -275,7 +274,7 @@
         "to": "",
         "tool": "my_promises"
       },
-      "ms": 1471
+      "ms": 1573
     }
   }
 }

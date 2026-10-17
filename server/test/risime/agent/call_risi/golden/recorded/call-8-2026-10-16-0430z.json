@@ -4,11 +4,11 @@
       "action": "tool",
       "confidence": 0.9,
       "tab": "private",
-      "text": "",
+      "text": "Hello, how are you, this is a text message that's given by Harsha.",
       "to": "",
       "tool": "message_draft"
     },
-    "ms": 1380
+    "ms": 1523
   },
   "just tell me 10 names in my contacts.": {
     "decision": {
@@ -19,19 +19,18 @@
       "to": "",
       "tool": "list_contacts"
     },
-    "ms": 1453
+    "ms": 1214
   },
   "n-i-m-a-l-i.": {
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "request": "send a message to Nimali",
       "tab": "private",
       "text": "Hello, how are you, this is a text message that's given by Harsha.",
       "to": "Nimali",
       "tool": "message_draft"
     },
-    "ms": 2081
+    "ms": 1571
   },
   "what time is my next meeting?": {
     "decision": {
@@ -43,6 +42,6 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1484
+    "ms": 1500
   }
 }

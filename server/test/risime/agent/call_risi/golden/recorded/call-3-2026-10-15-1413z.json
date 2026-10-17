@@ -9,7 +9,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1769
+    "ms": 1584
   },
   "i don't know. from 9 to 10. discuss about racing": {
     "decision": {
@@ -21,7 +21,7 @@
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 2229
+    "ms": 1946
   },
   "rishi, i can't see that you have added something.": {
     "decision": {
@@ -32,7 +32,7 @@
       "to": "",
       "tool": "card_status"
     },
-    "ms": 1234
+    "ms": 1249
   },
   "so what's on my calendar on the 18th of october?": {
     "decision": {
@@ -44,7 +44,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1669
+    "ms": 1447
   },
   "that's correct": {
     "decision": {
@@ -55,7 +55,7 @@
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1510
+    "ms": 1257
   },
   "the 16th?": {
     "decision": {
@@ -67,7 +67,7 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 1481
+    "ms": 1635
   },
   "yeah, but do i have anything from, say, 2 a.m. until... until maybe like, you know, 10 p.m.": {
     "decision": {
@@ -79,19 +79,19 @@
       "to": "",
       "tool": "calendar_read"
     },
-    "ms": 2149
+    "ms": 1916
   },
   "yeah, can you add an appointment tomorrow? just add an entry on my calendar and block it out from 10 to 12. discuss about risd.": {
     "decision": {
       "action": "tool",
       "confidence": 1,
-      "request": "add an appointment tomorrow from 10 to 12 to discuss about RISD",
+      "request": "add an entry on my calendar and block it out from 10 to 12. discuss about RISD",
       "tab": "",
       "text": "",
       "to": "",
       "tool": "calendar_add"
     },
-    "ms": 1726
+    "ms": 1854
   },
   "yeah, yeah, that's for you, just to add that particular entry.": {
     "decision": {
@@ -102,6 +102,6 @@
       "to": "",
       "tool": "confirm_open"
     },
-    "ms": 1251
+    "ms": 1255
   }
 }
