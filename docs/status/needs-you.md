@@ -79,7 +79,11 @@ Private real-call replay (~/risime-replays/calls, outside git), live risi-l1, pe
   30 argue-back callers 30/30 (0 repeated questions or answers).
 - Item 2 on the 04:0x call: the replay's final draft keeps only the message ("Hi, Shanika, good morning. How are you doing? …");
   the instruction sentences are dropped.
-- **Item 11 not fixed yet** (latency, 04:0x call): first audio p50 2.57 s, p95 4.51 s, max 7.0 s (n=26); 9 turns "replaced".
+- **Item 11, after 4 cuts (srv3-srv6: compact JSON decisions, decide during the hold, streamed calendar filler, model-free
+  certain reads):** device test calls 7-10 on srv6: first audio p50 **1.92 s**, p95 3.23 s, max 3.88 s (n=15; was p50 2.57,
+  p95 4.51, max 7.0 on the 04:0x call). Split p50: end of turn 0.34, STT 0.44, decision 0.88, TTS first chunk 0.10 s.
+  Left: STT on long utterances (up to 2.1 s), message-draft decisions 1.2-1.3 s.
+- Was: **Item 11 not fixed yet** (latency, 04:0x call): first audio p50 2.57 s, p95 4.51 s, max 7.0 s (n=26); 9 turns "replaced".
 - **Gemma-4-26B, same build and replay (07:39 SLT run, scores kept from the 50-min watchdog stop):** replays **59/66**
   (0358z 5/8, 0430z 7/7, 0605z 5/5, 0951z 12/12, 1027z 11/12, 2234z 19/22; it misses the 04:0x straight send), paraphrases
   323/340 (cancel 15/20, card-cancel 14/20: it drafts "Cancel that" as a message), shared 8/10/8, simulated 30/30, argue-back
