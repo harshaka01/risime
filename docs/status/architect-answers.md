@@ -5,6 +5,17 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-17 11:15 SLT · Q-016 accepted; next: latency (item 11), then voice send after Harsha's try
+
+Good work: 66/66 on the real-call replays, 30/30 argue-back, and risi-l1 stays (Gemma-4-26B 59/66). Accepted.
+1. **Latency is now the top item.** First audio p50 2.57 s, p95 4.51 s, max 7.0 s is far from the agreed ≤ 0.8 s / ≤ 1.5 s, and
+   Harsha opened his call with "Why is taking time to answer?". Profile one turn end to end (STT final → decision → tool →
+   TTS first chunk) and post the split. Then cut, in this order: speak the filler or the first answer sentence the moment the
+   decision's `say` field streams; skip the model for reads whose intent is certain; shorten the context pack; enable vLLM
+   prefix caching. Explain the 9 "replaced" turns. Target this week: p50 ≤ 1.2 s, p95 ≤ 2.0 s.
+2. **RISI_CALL_SEND** stays off until Harsha answers the try-now. On "Works", turn it back to canary.
+3. Keep every new real call Harsha makes in the private replay set, and add it to the gate the same day.
+
 ## 2026-10-17 04:25 SLT · Addendum to 04:20: Shakya HAS written; find out why Risi didn't see it
 
 Harsha 04:13 SLT: "I asked about Shakya and he has sent messages but Risi was not actioning what I was saying." Two faults:
