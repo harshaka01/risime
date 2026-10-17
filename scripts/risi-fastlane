@@ -53,6 +53,11 @@ if [ -n "${RISI_FASTLANE_EXTRA_GATE:-}" ]; then
   fi
 fi
 
+# Never switch the server under a live Call Risi call (root 2026-10-17). RISI_FASTLANE_IGNORE_CALLS=1 skips it (P0 only).
+if [ "${RISI_FASTLANE_IGNORE_CALLS:-0}" != 1 ]; then
+  say "2c/4 waiting for no live Call Risi call"
+  scripts/risi-no-live-call >> "$LOG" 2>&1 || die "a Call Risi call stayed live for 30 min; nothing deployed"
+fi
 BASE="v$(cat "$WT/VERSION")"; N=1
 while git rev-parse -q --verify "refs/tags/$BASE-srv$N" >/dev/null; do N=$((N + 1)); done
 TAG="$BASE-srv$N"

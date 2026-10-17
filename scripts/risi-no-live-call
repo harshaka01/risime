@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Wait until no Call Risi session is live on the pilot (a server switch drops a call in progress; 2026-10-17).
+# Read-only: counts RisiMe.Agent.CallRisi.Sessions children via scripts/risi-rpc. Checks every 2 min, up to 30 min.
+#   scripts/risi-no-live-call    exit 0 = no live call; 1 = still live (or unreadable) after 30 min
+cd "$(dirname "$0")/.."
+for i in $(seq 0 15); do
+  n=$(scripts/risi-rpc 'IO.puts(DynamicSupervisor.count_children(RisiMe.Agent.CallRisi.Sessions).active)' 2>/dev/null | tail -1)
+  echo "no-live-call check $i: live sessions=${n:-?} at $(date -u +%H:%M:%SZ)"
+  [ "$n" = 0 ] && exit 0
+  [ "$i" -lt 15 ] && sleep 120
+done
+echo "NO-LIVE-CALL: still live (or unreadable) after 30 min"; exit 1
