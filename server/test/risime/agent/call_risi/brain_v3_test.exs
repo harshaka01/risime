@@ -501,7 +501,7 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     assert said(pid, 2) =~ "\"Good evening\""
   end
 
-  test "a cut-off utterance is held and merged: the model never decides the fragment alone" do
+  test "a cut-off utterance is held and merged: the fragment's decision is never acted on" do
     pid = call!()
 
     script(%{
@@ -516,10 +516,31 @@ defmodule RisiMe.Agent.CallRisi.BrainV3Test do
     Process.sleep(150)
     utter(pid, 2, "on the 18th?", 600)
     assert_receive {:decided, "Do you have anything on the 18th?", _}, 3_000
-    refute_received {:decided, "Do you have anything", _}
+    # Item 11: the fragment's decision may start during the hold (it is dropped with the turn);
+    # only the merged question runs a tool, and nothing is said for the fragment.
     assert_receive {:turn_run, %{"__schedule" => %{from: from}}}, 2_000
     assert from.day == 18
+    refute_received {:turn_run, _}
     said(pid, 2)
+  end
+
+  test "a held utterance with no more words uses the decision made during the hold (once)" do
+    pid = call!()
+
+    script(%{
+      "Do you have anything on the 18th," => %{
+        "tool" => "calendar_read",
+        "action" => "tool",
+        "request" => "Do you have anything on the 18th?"
+      }
+    })
+
+    utter(pid, 1, "Do you have anything on the 18th,", 800)
+    assert_receive {:decided, "Do you have anything on the 18th,", _}, 3_000
+    assert_receive {:turn_run, %{"__schedule" => %{from: from}}}, 3_000
+    assert from.day == 18
+    refute_received {:decided, "Do you have anything on the 18th,", _}
+    said(pid, 1)
   end
 
   test "unclear words in Risi's echo window: v3 is silent, the legacy brain says Sorry" do

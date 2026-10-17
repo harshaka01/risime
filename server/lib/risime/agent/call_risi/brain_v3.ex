@@ -56,8 +56,8 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
         dictated(Map.put(ctx, :heard, text), d, dict, lang)
 
       nil ->
-        hold(ctx, text)
-        ctx = Map.put(ctx, :heard, text)
+        ctx =
+          ctx |> Map.put(:heard, text) |> Map.put(:t_brain, System.monotonic_time(:millisecond))
 
         # Item 7 (Harsha's 04:0x call): "No", "That's not true", "I mean…", a spelled name: what Risi
         # waited for is dropped and the model decides again from the whole utterance (a person
@@ -71,9 +71,18 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
              do: %{d | awaiting: nil, dictation: nil},
              else: d
 
+        # Item 11: a cut-off utterance waits hold_ms for more words; the decision starts at once
+        # and runs during that wait (a turn restarted with more words drops it with the turn).
+        pre = if held?(ctx, text), do: {d, text, Task.async(fn -> decide_now(ctx, d, text) end)}
+        hold(ctx, text)
+
         case answer_pending_or_here(ctx, d, text, lang) do
-          :model -> answer_model(ctx, d, text, lang)
-          :done -> :ok
+          :model ->
+            answer_model(Map.put(ctx, :prefetch, pre), d, text, lang)
+
+          :done ->
+            if pre, do: Task.shutdown(elem(pre, 2), :brutal_kill)
+            :ok
         end
     end
   end
@@ -372,16 +381,29 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
 
   def said_tab(dec, _text), do: dec
 
-  defp answer_model(ctx, d, text, lang) do
-    input = %{
+  defp model_input(ctx, d, text) do
+    %{
       now: now_text(ctx),
       tz: tz(ctx),
       dialogue: d,
       history: Map.get(ctx, :history) || [],
       text: text
     }
+  end
 
-    case decide(ctx, input) do
+  defp decide_now(ctx, d, text), do: Decider.run(model_input(ctx, d, text), ctx)
+
+  defp answer_model(ctx, d, text, lang) do
+    input = model_input(ctx, d, text)
+    result = decide(ctx, input)
+    ctx = Map.delete(ctx, :prefetch)
+
+    # Item 11 profile: the turn log's "tok" is the decision ready, ms after the brain got the words
+    # (hold included).
+    if is_integer(ctx[:t_brain]),
+      do: report(ctx, {:first_token, System.monotonic_time(:millisecond) - ctx.t_brain})
+
+    case result do
       {{:ok, dec}, neutral?} ->
         dec = dec |> insisted(ctx, input, text) |> said_tab(text) |> in_task(d, text)
         report(ctx, {:decided, {:v3, dec.tool, dec.action}})
@@ -418,10 +440,12 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   # C: a cut-off utterance waits for the words that follow (the session restarts the turn with
   # both). A turn that already merged a prefix isn't held again.
   defp hold(ctx, text) do
-    punctuated? = Map.get(ctx, :stt_model) != "phone"
+    if held?(ctx, text), do: Process.sleep(hold_ms())
+  end
 
-    if Map.get(ctx, :held?) != true and Dialogue.unfinished?(text, punctuated?),
-      do: Process.sleep(hold_ms())
+  defp held?(ctx, text) do
+    punctuated? = Map.get(ctx, :stt_model) != "phone"
+    Map.get(ctx, :held?) != true and Dialogue.unfinished?(text, punctuated?)
   end
 
   # The open card only while its row is still pending (a newer request supersedes it, a tap
@@ -436,7 +460,19 @@ defmodule RisiMe.Agent.CallRisi.BrainV3 do
   defp fresh_card(d), do: d
 
   defp decide(ctx, input) do
-    task = Task.async(fn -> Decider.run(input, ctx) end)
+    task =
+      case ctx[:prefetch] do
+        # Started during the hold, for these same words and state.
+        {d, text, t} when d == input.dialogue and text == input.text ->
+          t
+
+        {_, _, t} ->
+          Task.shutdown(t, :brutal_kill)
+          Task.async(fn -> Decider.run(input, ctx) end)
+
+        _ ->
+          Task.async(fn -> Decider.run(input, ctx) end)
+      end
 
     case Task.yield(task, neutral_ms()) do
       {:ok, r} ->
