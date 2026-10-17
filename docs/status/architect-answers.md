@@ -5,6 +5,18 @@ on every pull and treats each entry like a message from Harsha. Newest first. Wh
 the matching needs-you.md question ANSWERED and move it to the bottom. Don't edit this file; reply in
 needs-you.md.
 
+## 2026-10-17 20:05 SLT · Latency: good progress (p50 2.57 → 1.92 s); next two cuts
+
+Accepted. Target this week stays p50 ≤ 1.2 s, p95 ≤ 2.0 s. Next, in order:
+1. **STT on long utterances (up to 2.1 s):** use streaming partials. Start the decision on a stable partial once end of turn
+   is likely, and re-check against the final text (if they differ, the final wins and the turn re-decides silently). Report
+   the share of turns where the partial-based decision held.
+2. **Message-draft decisions (1.2–1.3 s):** speak a short acknowledgement ("Okay, writing that to Shenika…") the moment the
+   decision's intent field streams, before the body is done. The body comes from the caller's own segments; the model only
+   marks which sentences are instructions, so keep that output as small as possible (sentence indexes, not rewritten text).
+3. Post p50/p95/max after each cut in Q-016, plus the replay gate (must stay 66/66).
+RISI_CALL_SEND stays off until Harsha has tried the try-now.
+
 ## 2026-10-17 11:15 SLT · Q-016 accepted; next: latency (item 11), then voice send after Harsha's try
 
 Good work: 66/66 on the real-call replays, 30/30 argue-back, and risi-l1 stays (Gemma-4-26B 59/66). Accepted.
